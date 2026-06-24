@@ -96,6 +96,14 @@ export abstract class BaseRepository<T, TModel> {
   }
 
   /**
+   * Count entities
+   * WHY: Get total count for pagination and statistics
+   */
+  async count(): Promise<number> {
+    return (this.model as any).count() as Promise<number>;
+  }
+
+  /**
    * Execute operations in a transaction
    * WHY: Ensures data consistency for multi-step operations
    * Used for operations like assign + audit log in single transaction

@@ -12,6 +12,9 @@ import floorRoutes from './floor.routes';
 import roomRoutes from './room.routes';
 import attendeeRoutes from './attendee.routes';
 import assignmentRoutes from './assignment.routes';
+import auditLogRoutes from './auditLog.routes';
+import dashboardRoutes from './dashboard.routes';
+import excelRoutes from './excel.routes';
 
 const router = Router();
 
@@ -26,6 +29,11 @@ router.use('/rooms', roomRoutes);
 // Phase 3: Attendee & Assignment Routes
 router.use('/attendees', attendeeRoutes);
 router.use('/assignments', assignmentRoutes);
+
+// Phase 4: Audit, Monitoring & Excel Routes
+router.use('/audit-logs', auditLogRoutes);
+router.use('/dashboard', dashboardRoutes);
+router.use('/excel', excelRoutes);
 
 // API info endpoint
 router.get('/', (req, res) => {
@@ -42,6 +50,10 @@ router.get('/', (req, res) => {
       // Phase 3: Attendee Management
       attendees: '/api/attendees',
       assignments: '/api/assignments',
+      // Phase 4: Audit, Monitoring & Excel
+      auditLogs: '/api/audit-logs',
+      dashboard: '/api/dashboard',
+      excel: '/api/excel',
     },
     documentation: 'See README.md for API documentation',
   });

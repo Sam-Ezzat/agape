@@ -97,4 +97,30 @@ export class ConferenceHouseRepository extends BaseRepository<
       },
     });
   }
+
+  /**
+   * Find all conference houses with full hierarchy
+   * WHY: For dashboard occupancy breakdown
+   */
+  async findAllWithHierarchy() {
+    return this.model.findMany({
+      include: {
+        buildings: {
+          orderBy: { name: 'asc' },
+          include: {
+            floors: {
+              orderBy: { floorNumber: 'asc' },
+              include: {
+                rooms: {
+                  orderBy: { roomNumber: 'asc' },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
 }
+

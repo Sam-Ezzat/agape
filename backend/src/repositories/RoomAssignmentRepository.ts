@@ -234,4 +234,18 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
       skipDuplicates: true, // Skip if attendee already assigned
     });
   }
+
+  /**
+   * Count assignments created since a date
+   * WHY: Track assignment activity over time
+   */
+  async countCreatedSince(date: Date): Promise<number> {
+    return this.prisma.roomAssignment.count({
+      where: {
+        createdAt: {
+          gte: date,
+        },
+      },
+    });
+  }
 }
