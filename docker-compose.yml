@@ -1,0 +1,88 @@
+# WHY: Docker Compose orchestrates the entire development stack
+# Includes frontend, backend, and PostgreSQL database
+# Run with: docker-compose up
+
+services:
+  # PostgreSQL Database
+  # WHY: Persistent database for development with volume mount
+  postgres:
+    image: postgres:16-alpine
+    container_name: agape-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_DB: agape_conference
+    ports:
+      - '5432:5432'
+    volumes:
+      # WHY: Persist database data between container restarts
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agape-network
+
+  # Backend API
+  # WHY: Node.js Express server with Prisma ORM
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agape-backend
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/agape_conference?schema=public
+      DIRECT_URL: postgresql://postgres:postgres123@postgres:5432/agape_conference?schema=public
+      PORT: 3000
+      FRONTEND_URL: http://localhost:5173
+      LOG_LEVEL: debug
+    ports:
+      - '3000:3000'
+    volumes:
+      # WHY: Mount source code for hot reload during development
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
+      # WHY: Exclude node_modules to prevent conflicts
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: npm run dev
+    networks:
+      - agape-network
+
+  # Frontend React App
+  # WHY: Vite dev server for frontend with hot reload
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: agape-frontend
+    environment:
+      VITE_API_URL: http://localhost:3000/api
+      VITE_WS_URL: http://localhost:3000
+    ports:
+      - '5173:5173'
+    volumes:
+      # WHY: Mount source code for hot reload during development
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      # WHY: Exclude node_modules to prevent conflicts
+      - /app/node_modules
+    depends_on:
+      - backend
+    command: npm run dev -- --host
+    networks:
+      - agape-network
+
+networks:
+  agape-network:
+    driver: bridge
+
+volumes:
+  # WHY: Named volume for PostgreSQL data persistence
+  postgres_data:
