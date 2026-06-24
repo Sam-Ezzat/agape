@@ -8,9 +8,13 @@
  * SOLID Principle: Single Responsibility - Only handles routing and layout
  */
 
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { useSocket } from '@/hooks/useSocket';
+import DashboardPage from '@/pages/DashboardPage';
+import AttendeesPage from '@/pages/AttendeesPage';
+import CheckInPage from '@/pages/CheckInPage';
+import AssignmentsPage from '@/pages/AssignmentsPage';
 
 function App() {
   // WHY: Initialize Socket.io connection for real-time notifications
@@ -49,26 +53,48 @@ function App() {
         {/* Header Navigation */}
         <header className="bg-white shadow-sm">
           <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
-            <h1 className="text-2xl font-bold text-primary-600">
-              Agape Conference Management
-            </h1>
+            <div className="flex items-center justify-between">
+              <h1 className="text-2xl font-bold text-primary-600">
+                Agape Conference Management
+              </h1>
+              <nav className="flex items-center gap-4">
+                <Link to="/dashboard" className="text-gray-700 hover:text-primary-600 font-medium">
+                  Dashboard
+                </Link>
+                <Link to="/attendees" className="text-gray-700 hover:text-primary-600 font-medium">
+                  Attendees
+                </Link>
+                <Link to="/check-in" className="text-gray-700 hover:text-primary-600 font-medium">
+                  Check-in
+                </Link>
+                <Link to="/assignments" className="text-gray-700 hover:text-primary-600 font-medium">
+                  Assignments
+                </Link>
+              </nav>
+            </div>
           </div>
         </header>
 
         {/* Main Content */}
         <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
           <Routes>
-            {/* WHY: Default route shows welcome page */}
-            <Route path="/" element={<HomePage />} />
+            {/* WHY: Default route redirects to dashboard */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
             
-            {/* TODO: Add routes as we build pages */}
-            {/* <Route path="/attendees" element={<AttendeesPage />} /> */}
-            {/* <Route path="/rooms" element={<RoomsPage />} /> */}
-            {/* <Route path="/assignments" element={<AssignmentsPage />} /> */}
-            {/* <Route path="/dashboard" element={<DashboardPage />} /> */}
+            {/* Dashboard - Overview page */}
+            <Route path="/dashboard" element={<DashboardPage />} />
             
-            {/* WHY: Catch-all route redirects to home */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Attendees Management */}
+            <Route path="/attendees" element={<AttendeesPage />} />
+            
+            {/* Check-in/Check-out Interface */}
+            <Route path="/check-in" element={<CheckInPage />} />
+            
+            {/* Room Assignments */}
+            <Route path="/assignments" element={<AssignmentsPage />} />
+            
+            {/* WHY: Catch-all route redirects to dashboard */}
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
 
@@ -82,62 +108,6 @@ function App() {
         </footer>
       </div>
     </BrowserRouter>
-  );
-}
-
-/**
- * Home Page Component
- * WHY: Temporary landing page until we build the full dashboard
- */
-function HomePage() {
-  return (
-    <div className="card max-w-2xl mx-auto">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold text-gray-900 mb-4">
-          Welcome to Agape Conference Management
-        </h2>
-        <p className="text-gray-600 mb-6">
-          Comprehensive accommodation management system for large conferences (1000-5000 attendees)
-          across multiple buildings, floors, and rooms.
-        </p>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
-          <div className="p-4 bg-primary-50 rounded-lg">
-            <h3 className="font-semibold text-primary-900 mb-2">🏢 Hierarchical Structure</h3>
-            <p className="text-sm text-primary-700">
-              Manage conference house → buildings → floors → rooms
-            </p>
-          </div>
-          
-          <div className="p-4 bg-primary-50 rounded-lg">
-            <h3 className="font-semibold text-primary-900 mb-2">👥 Attendee Management</h3>
-            <p className="text-sm text-primary-700">
-              Import from Excel, manage profiles, assign roles
-            </p>
-          </div>
-          
-          <div className="p-4 bg-primary-50 rounded-lg">
-            <h3 className="font-semibold text-primary-900 mb-2">🎯 Drag & Drop</h3>
-            <p className="text-sm text-primary-700">
-              Intuitive room assignment with real-time validation
-            </p>
-          </div>
-          
-          <div className="p-4 bg-primary-50 rounded-lg">
-            <h3 className="font-semibold text-primary-900 mb-2">✅ Check-in Tracking</h3>
-            <p className="text-sm text-primary-700">
-              Monitor arrivals and occupancy in real-time
-            </p>
-          </div>
-        </div>
-        
-        <div className="mt-8 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <p className="text-sm text-yellow-800">
-            <strong>⚠️ Under Development:</strong> The system is being built. Features will be added progressively.
-          </p>
-        </div>
-      </div>
-    </div>
   );
 }
 
