@@ -13,6 +13,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { errorHandler, notFoundHandler } from '@/middleware/errorHandler';
 import logger from '@/utils/logger';
+import routes from '@/routes';
 
 /**
  * Create and configure Express application
@@ -62,11 +63,9 @@ export function createApp(): Application {
     });
   });
 
-  // API Routes will be added here
-  // TODO: Add route imports as we build them
-  // app.use('/api/attendees', attendeeRoutes);
-  // app.use('/api/rooms', roomRoutes);
-  // app.use('/api/assignments', assignmentRoutes);
+  // API Routes
+  // WHY: Mount all API routes under /api prefix
+  app.use('/api', routes);
 
   // WHY: Handle 404 errors for undefined routes
   app.use(notFoundHandler);

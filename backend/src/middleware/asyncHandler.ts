@@ -13,13 +13,7 @@
  * }));
  */
 
-import { Request, Response, NextFunction } from 'express';
-
-type AsyncRequestHandler = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => Promise<void | Response>;
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 
 /**
  * Wraps async route handlers to catch errors automatically
@@ -27,7 +21,7 @@ type AsyncRequestHandler = (
  * WHY: Prevents unhandled promise rejections that crash the server
  * All errors are forwarded to Express error handler middleware
  */
-export const asyncHandler = (fn: AsyncRequestHandler) => {
+export const asyncHandler = (fn: Function): RequestHandler => {
   return (req: Request, res: Response, next: NextFunction): void => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
