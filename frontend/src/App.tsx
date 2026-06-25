@@ -17,6 +17,9 @@ import AttendeesPage from '@/pages/AttendeesPage';
 import CheckInPage from '@/pages/CheckInPage';
 import AssignmentsPage from '@/pages/AssignmentsPage';
 import HousesPage from '@/pages/HousesPage';
+import BuildingsPage from '@/pages/BuildingsPage';
+import FloorsPage from '@/pages/FloorsPage';
+import RoomsPage from '@/pages/RoomsPage';
 
 function App() {
   // WHY: Initialize Socket.io connection for real-time notifications
@@ -75,9 +78,9 @@ function App() {
             
             {/* Infrastructure Management */}
             <Route path="/houses" element={<HousesPage />} />
-            <Route path="/buildings" element={<div>Buildings Page - Coming Soon</div>} />
-            <Route path="/floors" element={<div>Floors Page - Coming Soon</div>} />
-            <Route path="/rooms" element={<div>Rooms Page - Coming Soon</div>} />
+            <Route path="/buildings" element={<BuildingsPage />} />
+            <Route path="/floors" element={<FloorsPage />} />
+            <Route path="/rooms" element={<RoomsPage />} />
             
             {/* WHY: Catch-all route redirects to dashboard */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

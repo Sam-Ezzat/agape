@@ -28,9 +28,20 @@ export function createApp(): Application {
 
   // WHY: Enable CORS for frontend to communicate with backend
   // In production, restrict to specific frontend URL from env variable
+  const corsOrigin = process.env.FRONTEND_URL
+    ? process.env.FRONTEND_URL
+    : (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        // Allow any localhost port in development
+        if (!origin || origin.match(/^http:\/\/localhost:\d+$/)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      };
+
   app.use(
     cors({
-      origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+      origin: corsOrigin,
       credentials: true,
     })
   );

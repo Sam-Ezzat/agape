@@ -30,9 +30,20 @@ async function startServer(): Promise<void> {
     const httpServer = createServer(app);
 
     // WHY: Setup Socket.io for real-time updates (assignment changes, check-ins)
+    const socketCorsOrigin = process.env.SOCKET_CORS_ORIGIN
+      ? process.env.SOCKET_CORS_ORIGIN
+      : (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+          // Allow any localhost port in development
+          if (!origin || origin.match(/^http:\/\/localhost:\d+$/)) {
+            callback(null, true);
+          } else {
+            callback(null, false);
+          }
+        };
+
     const io = new SocketServer(httpServer, {
       cors: {
-        origin: process.env.SOCKET_CORS_ORIGIN || 'http://localhost:5173',
+        origin: socketCorsOrigin,
         methods: ['GET', 'POST'],
         credentials: true,
       },
