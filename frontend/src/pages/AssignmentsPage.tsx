@@ -13,7 +13,10 @@ import type { RoomAssignment, Attendee, AssignmentFilters } from '@/types/api';
 export default function AssignmentsPage() {
   const [assignments, setAssignments] = useState<RoomAssignment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, pages: 0 });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [limit] = useState(20);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const [unassignedCount, setUnassignedCount] = useState(0);
 
@@ -24,14 +27,14 @@ export default function AssignmentsPage() {
   useEffect(() => {
     loadAssignments();
     loadUnassignedCount();
-  }, [pagination.page, buildingFilter, floorFilter]);
+  }, [currentPage, buildingFilter, floorFilter]);
 
   const loadAssignments = async () => {
     try {
       setLoading(true);
       const filters: AssignmentFilters = {
-        page: String(pagination.page),
-        limit: String(pagination.limit),
+        page: String(currentPage),
+        limit: String(limit),
       };
       
       if (buildingFilter) filters.buildingId = buildingFilter;
@@ -39,7 +42,8 @@ export default function AssignmentsPage() {
 
       const response = await assignmentApi.list(filters);
       setAssignments(response.data);
-      setPagination(response.pagination);
+      setTotalPages(response.pagination.pages);
+      setTotalCount(response.pagination.total);
     } catch (error) {
       toastError('Failed to load assignments');
     } finally {
@@ -149,7 +153,7 @@ export default function AssignmentsPage() {
               value={buildingFilter}
               onChange={(e) => {
                 setBuildingFilter(e.target.value);
-                setPagination((p) => ({ ...p, page: 1 }));
+                setCurrentPage(1);
               }}
               className="input w-full"
             />
@@ -162,7 +166,7 @@ export default function AssignmentsPage() {
               value={floorFilter}
               onChange={(e) => {
                 setFloorFilter(e.target.value);
-                setPagination((p) => ({ ...p, page: 1 }));
+                setCurrentPage(1);
               }}
               className="input w-full"
             />
@@ -172,7 +176,7 @@ export default function AssignmentsPage() {
               onClick={() => {
                 setBuildingFilter('');
                 setFloorFilter('');
-                setPagination((p) => ({ ...p, page: 1 }));
+                setCurrentPage(1);
               }}
               className="btn-secondary w-full"
             >
@@ -266,15 +270,15 @@ export default function AssignmentsPage() {
             <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200">
               <div className="flex-1 flex justify-between sm:hidden">
                 <button
-                  onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
-                  disabled={pagination.page === 1}
+                  onClick={() => setCurrentPage((p) => p - 1)}
+                  disabled={currentPage === 1}
                   className="btn-secondary"
                 >
                   Previous
                 </button>
                 <button
-                  onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
-                  disabled={pagination.page === pagination.pages}
+                  onClick={() => setCurrentPage((p) => p + 1)}
+                  disabled={currentPage === totalPages}
                   className="btn-secondary ml-3"
                 >
                   Next
@@ -283,23 +287,23 @@ export default function AssignmentsPage() {
               <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm text-gray-700">
-                    Showing <span className="font-medium">{(pagination.page - 1) * pagination.limit + 1}</span> to{' '}
-                    <span className="font-medium">{Math.min(pagination.page * pagination.limit, pagination.total)}</span> of{' '}
-                    <span className="font-medium">{pagination.total}</span> results
+                    Showing <span className="font-medium">{(currentPage - 1) * limit + 1}</span> to{' '}
+                    <span className="font-medium">{Math.min(currentPage * limit, totalCount)}</span> of{' '}
+                    <span className="font-medium">{totalCount}</span> results
                   </p>
                 </div>
                 <div>
                   <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
                     <button
-                      onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
-                      disabled={pagination.page === 1}
+                      onClick={() => setCurrentPage((p) => p - 1)}
+                      disabled={currentPage === 1}
                       className="btn-secondary rounded-l-md"
                     >
                       Previous
                     </button>
                     <button
-                      onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
-                      disabled={pagination.page === pagination.pages}
+                      onClick={() => setCurrentPage((p) => p + 1)}
+                      disabled={currentPage === totalPages}
                       className="btn-secondary rounded-r-md"
                     >
                       Next

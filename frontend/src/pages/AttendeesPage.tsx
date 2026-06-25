@@ -13,7 +13,10 @@ import type { Attendee, AttendeeFilters, ConferenceRole, Gender } from '@/types/
 export default function AttendeesPage() {
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, pages: 0 });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [limit] = useState(10);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const [editingAttendee, setEditingAttendee] = useState<Attendee | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -25,14 +28,14 @@ export default function AttendeesPage() {
 
   useEffect(() => {
     loadAttendees();
-  }, [pagination.page, search, roleFilter, genderFilter]);
+  }, [currentPage, search, roleFilter, genderFilter]);
 
   const loadAttendees = async () => {
     try {
       setLoading(true);
       const filters: AttendeeFilters = {
-        page: String(pagination.page),
-        limit: String(pagination.limit),
+        page: String(currentPage),
+        limit: String(limit),
       };
       
       if (search) filters.search = search;
@@ -41,7 +44,8 @@ export default function AttendeesPage() {
 
       const response = await attendeeApi.list(filters);
       setAttendees(response.data);
-      setPagination(response.pagination);
+      setTotalPages(response.pagination.pages);
+      setTotalCount(response.pagination.total);
     } catch (error) {
       toastError('Failed to load attendees');
     } finally {
@@ -175,7 +179,7 @@ export default function AttendeesPage() {
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
-                setPagination((p) => ({ ...p, page: 1 }));
+                setCurrentPage(1);
               }}
               className="input w-full"
             />
@@ -186,7 +190,7 @@ export default function AttendeesPage() {
               value={roleFilter}
               onChange={(e) => {
                 setRoleFilter(e.target.value as ConferenceRole | '');
-                setPagination((p) => ({ ...p, page: 1 }));
+                setCurrentPage(1);
               }}
               className="input w-full"
             >
@@ -206,7 +210,7 @@ export default function AttendeesPage() {
               value={genderFilter}
               onChange={(e) => {
                 setGenderFilter(e.target.value as Gender | '');
-                setPagination((p) => ({ ...p, page: 1 }));
+                setCurrentPage(1);
               }}
               className="input w-full"
             >
@@ -304,15 +308,15 @@ export default function AttendeesPage() {
             <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200">
               <div className="flex-1 flex justify-between sm:hidden">
                 <button
-                  onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
-                  disabled={pagination.page === 1}
+                  onClick={() => setCurrentPage((p) => p - 1)}
+                  disabled={currentPage === 1}
                   className="btn-secondary"
                 >
                   Previous
                 </button>
                 <button
-                  onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
-                  disabled={pagination.page === pagination.pages}
+                  onClick={() => setCurrentPage((p) => p + 1)}
+                  disabled={currentPage === totalPages}
                   className="btn-secondary ml-3"
                 >
                   Next
@@ -321,23 +325,23 @@ export default function AttendeesPage() {
               <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm text-gray-700">
-                    Showing <span className="font-medium">{(pagination.page - 1) * pagination.limit + 1}</span> to{' '}
-                    <span className="font-medium">{Math.min(pagination.page * pagination.limit, pagination.total)}</span> of{' '}
-                    <span className="font-medium">{pagination.total}</span> results
+                    Showing <span className="font-medium">{(currentPage - 1) * limit + 1}</span> to{' '}
+                    <span className="font-medium">{Math.min(currentPage * limit, totalCount)}</span> of{' '}
+                    <span className="font-medium">{totalCount}</span> results
                   </p>
                 </div>
                 <div>
                   <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
                     <button
-                      onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
-                      disabled={pagination.page === 1}
+                      onClick={() => setCurrentPage((p) => p - 1)}
+                      disabled={currentPage === 1}
                       className="btn-secondary rounded-l-md"
                     >
                       Previous
                     </button>
                     <button
-                      onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
-                      disabled={pagination.page === pagination.pages}
+                      onClick={() => setCurrentPage((p) => p + 1)}
+                      disabled={currentPage === totalPages}
                       className="btn-secondary rounded-r-md"
                     >
                       Next

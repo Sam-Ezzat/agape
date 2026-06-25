@@ -8,13 +8,15 @@
  * SOLID Principle: Single Responsibility - Only handles routing and layout
  */
 
-import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { useSocket } from '@/hooks/useSocket';
+import Sidebar from '@/components/Sidebar';
 import DashboardPage from '@/pages/DashboardPage';
 import AttendeesPage from '@/pages/AttendeesPage';
 import CheckInPage from '@/pages/CheckInPage';
 import AssignmentsPage from '@/pages/AssignmentsPage';
+import HousesPage from '@/pages/HousesPage';
 
 function App() {
   // WHY: Initialize Socket.io connection for real-time notifications
@@ -49,34 +51,12 @@ function App() {
         }}
       />
       
-      <div className="min-h-screen bg-gray-50">
-        {/* Header Navigation */}
-        <header className="bg-white shadow-sm">
-          <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-bold text-primary-600">
-                Agape Conference Management
-              </h1>
-              <nav className="flex items-center gap-4">
-                <Link to="/dashboard" className="text-gray-700 hover:text-primary-600 font-medium">
-                  Dashboard
-                </Link>
-                <Link to="/attendees" className="text-gray-700 hover:text-primary-600 font-medium">
-                  Attendees
-                </Link>
-                <Link to="/check-in" className="text-gray-700 hover:text-primary-600 font-medium">
-                  Check-in
-                </Link>
-                <Link to="/assignments" className="text-gray-700 hover:text-primary-600 font-medium">
-                  Assignments
-                </Link>
-              </nav>
-            </div>
-          </div>
-        </header>
-
-        {/* Main Content */}
-        <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="flex min-h-screen bg-gray-50">
+        {/* Sidebar Navigation */}
+        <Sidebar />
+        
+        {/* Main Content with left margin for sidebar */}
+        <main className="flex-1 ml-64 p-8">
           <Routes>
             {/* WHY: Default route redirects to dashboard */}
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -93,19 +73,16 @@ function App() {
             {/* Room Assignments */}
             <Route path="/assignments" element={<AssignmentsPage />} />
             
+            {/* Infrastructure Management */}
+            <Route path="/houses" element={<HousesPage />} />
+            <Route path="/buildings" element={<div>Buildings Page - Coming Soon</div>} />
+            <Route path="/floors" element={<div>Floors Page - Coming Soon</div>} />
+            <Route path="/rooms" element={<div>Rooms Page - Coming Soon</div>} />
+            
             {/* WHY: Catch-all route redirects to dashboard */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
-
-        {/* Footer */}
-        <footer className="bg-white border-t mt-auto">
-          <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
-            <p className="text-center text-sm text-gray-500">
-              © {new Date().getFullYear()} Agape Conference Management. Built with ❤️ for efficient conference management.
-            </p>
-          </div>
-        </footer>
       </div>
     </BrowserRouter>
   );
