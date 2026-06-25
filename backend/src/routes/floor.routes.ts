@@ -25,6 +25,7 @@ import {
   updateFloorSchema,
   floorIdSchema,
   buildingIdSchema,
+  searchSchema,
 } from '@/validators/schemas';
 import prisma from '@/utils/prisma-client';
 
@@ -35,6 +36,9 @@ const floorService = new FloorService(floorRepository, buildingRepository);
 const floorController = new FloorController(floorService);
 
 const router = Router();
+
+// List all floors
+router.get('/', validate(searchSchema, 'query'), asyncHandler(floorController.list));
 
 // Create floor
 router.post('/', validate(createFloorSchema, 'body'), asyncHandler(floorController.create));

@@ -17,6 +17,26 @@ export class FloorController {
   constructor(private floorService: FloorService) {}
 
   /**
+   * List all floors
+   * GET /api/floors
+   */
+  list = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const floors = await this.floorService.listAll();
+      res.json({
+        success: true,
+        data: floors,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
    * Create floor
    * POST /api/floors
    */

@@ -94,6 +94,14 @@ export class BuildingService {
   }
 
   /**
+   * List all buildings
+   * WHY: Get all buildings for admin dashboard
+   */
+  async listAll(): Promise<Building[]> {
+    return this.buildingRepository.findAll();
+  }
+
+  /**
    * Search buildings
    */
   async search(

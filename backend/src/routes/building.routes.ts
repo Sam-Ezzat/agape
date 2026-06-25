@@ -37,6 +37,13 @@ const buildingController = new BuildingController(buildingService);
 
 const router = Router();
 
+// List all buildings
+router.get(
+  '/',
+  validate(searchSchema, 'query'),
+  asyncHandler(buildingController.list)
+);
+
 // Create building
 router.post(
   '/',

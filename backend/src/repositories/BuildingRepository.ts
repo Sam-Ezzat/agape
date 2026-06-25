@@ -29,6 +29,16 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
   }
 
   /**
+   * Find all buildings
+   * WHY: List all buildings across all conference houses
+   */
+  async findAll(): Promise<Building[]> {
+    return this.model.findMany({
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  /**
    * Find building with floors
    * WHY: Often need building with its floors
    */

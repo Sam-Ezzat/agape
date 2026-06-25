@@ -93,6 +93,14 @@ export class RoomService {
   }
 
   /**
+   * List all rooms
+   * WHY: Get all rooms for admin dashboard
+   */
+  async listAll(): Promise<Room[]> {
+    return this.roomRepository.findAll();
+  }
+
+  /**
    * List available rooms
    * WHY: For room assignment workflow
    */

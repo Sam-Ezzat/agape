@@ -106,6 +106,14 @@ export class FloorService {
   }
 
   /**
+   * List all floors
+   * WHY: Get all floors for admin dashboard
+   */
+  async listAll(): Promise<Floor[]> {
+    return this.floorRepository.findAll();
+  }
+
+  /**
    * Update floor
    */
   async update(id: string, data: UpdateFloorDTO): Promise<Floor> {

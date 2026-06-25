@@ -29,6 +29,16 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
   }
 
   /**
+   * Find all rooms
+   * WHY: List all rooms across all floors
+   */
+  async findAll(): Promise<Room[]> {
+    return this.model.findMany({
+      orderBy: { roomNumber: 'asc' },
+    });
+  }
+
+  /**
    * Find room with assignment
    * WHY: Often need to check if room is occupied
    */

@@ -17,6 +17,26 @@ export class BuildingController {
   constructor(private buildingService: BuildingService) {}
 
   /**
+   * List all buildings
+   * GET /api/buildings
+   */
+  list = async (
+    req: Request<{}, {}, {}, SearchParams>,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const buildings = await this.buildingService.listAll();
+      res.json({
+        success: true,
+        data: buildings,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
    * Create building
    * POST /api/buildings
    */

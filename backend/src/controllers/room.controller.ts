@@ -17,6 +17,26 @@ export class RoomController {
   constructor(private roomService: RoomService) {}
 
   /**
+   * List all rooms
+   * GET /api/rooms
+   */
+  list = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const rooms = await this.roomService.listAll();
+      res.json({
+        success: true,
+        data: rooms,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
    * Create room
    * POST /api/rooms
    */

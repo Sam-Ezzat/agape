@@ -28,6 +28,7 @@ import {
   roomIdSchema,
   floorIdSchema,
   roomFilterSchema,
+  searchSchema,
 } from '@/validators/schemas';
 import prisma from '@/utils/prisma-client';
 
@@ -38,6 +39,9 @@ const roomService = new RoomService(roomRepository, floorRepository);
 const roomController = new RoomController(roomService);
 
 const router = Router();
+
+// List all rooms
+router.get('/', validate(searchSchema, 'query'), asyncHandler(roomController.list));
 
 // Get available rooms (must be before /:id to avoid route conflict)
 router.get(

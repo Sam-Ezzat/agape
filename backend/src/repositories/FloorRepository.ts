@@ -29,6 +29,16 @@ export class FloorRepository extends BaseRepository<Floor, Prisma.FloorDelegate>
   }
 
   /**
+   * Find all floors
+   * WHY: List all floors across all buildings
+   */
+  async findAll(): Promise<Floor[]> {
+    return this.model.findMany({
+      orderBy: { floorNumber: 'asc' },
+    });
+  }
+
+  /**
    * Find floor with rooms
    * WHY: Often need floor with its rooms
    */
