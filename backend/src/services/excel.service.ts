@@ -3,20 +3,32 @@
  * 
  * WHY: Handles Excel import/export for bulk operations
  * Uses SheetJS (xlsx) library for reading and writing Excel files
+ * Updated to match conference registration Excel structure
  */
 
 import * as XLSX from 'xlsx';
 import { Gender, ConferenceRole } from '@prisma/client';
 
 export interface AttendeeExcelRow {
+  ticketId?: string;
   fullName: string;
   phone?: string;
   email?: string;
   age?: number;
   gender?: Gender;
-  churchOrg?: string;
+  church?: string;
+  area?: string;
+  governorate?: string;
+  arrivalMethod?: string;
+  busPickupPoint?: string;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  transactionNumber?: string;
   conferenceRole?: ConferenceRole;
   notes?: string;
+  roomingNotes?: string;
+  internalNotes?: string;
+  checkedInBy?: string;
 }
 
 export interface AssignmentExcelRow {
@@ -36,10 +48,11 @@ export interface ValidationError {
 export class ExcelService {
   /**
    * Parse attendees from Excel buffer
-   * WHY: Import attendees in bulk
+   * WHY: Import attendees in bulk from conference registration Excel format
    */
   parseAttendeesFromExcel(buffer: Buffer): { data: AttendeeExcelRow[]; errors: ValidationError[] } {
     const workbook = XLSX.read(buffer, { type: 'buffer' });
+    // Use first sheet (typically "Registrations")
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
     
@@ -65,14 +78,25 @@ export class ExcelService {
 
       // Map Excel columns to our schema
       const attendee: AttendeeExcelRow = {
+        ticketId: row['Ticket ID'] || row['ticketId'] || undefined,
         fullName: row['Full Name'] || row['fullName'],
-        phone: row['Phone'] || row['phone'],
-        email: row['Email'] || row['email'],
+        phone: this.normalizePhone(row['Phone'] || row['phone']),
+        email: row['Email'] || row['email'] || undefined,
         age: row['Age'] || row['age'] ? parseInt(row['Age'] || row['age']) : undefined,
         gender: this.parseGender(row['Gender'] || row['gender']),
-        churchOrg: row['Church/Organization'] || row['churchOrg'] || row['Church'] || row['Organization'],
+        church: row['Church'] || row['church'] || undefined,
+        area: row['Area'] || row['area'] || undefined,
+        governorate: row['Governorate'] || row['governorate'] || undefined,
+        arrivalMethod: row['Arrival Method'] || row['arrivalMethod'] || undefined,
+        busPickupPoint: row['Bus Pickup Point'] || row['busPickupPoint'] || undefined,
+        paymentMethod: row['Payment Method'] || row['paymentMethod'] || undefined,
+        paymentStatus: this.parsePaymentStatus(row['Payment Review Status'] || row['paymentStatus']),
+        transactionNumber: row['Transaction Number'] || row['transactionNumber'] || undefined,
         conferenceRole: this.parseRole(row['Role'] || row['conferenceRole']),
-        notes: row['Notes'] || row['notes'],
+        notes: row['Notes'] || row['notes'] || undefined,
+        roomingNotes: row['Rooming Notes'] || row['roomingNotes'] || undefined,
+        internalNotes: row['Internal Notes'] || row['internalNotes'] || undefined,
+        checkedInBy: row['Checked-in By'] || row['checkedInBy'] || undefined,
       };
 
       // Validate email format if provided
@@ -103,21 +127,32 @@ export class ExcelService {
 
   /**
    * Generate Excel file from attendees data
-   * WHY: Export attendees for external use
+   * WHY: Export attendees in conference registration format
    */
   generateAttendeesExcel(attendees: any[]): Buffer {
     // Map attendees to Excel-friendly format
     const excelData = attendees.map(attendee => ({
-      'Full Name': attendee.fullName,
-      'Phone': attendee.phone || '',
+      'Ticket ID': attendee.ticketId || '',
       'Email': attendee.email || '',
+      'Full Name': attendee.fullName,
+      'Gender': this.formatGender(attendee.gender),
+      'Phone': attendee.phone || '',
       'Age': attendee.age || '',
-      'Gender': attendee.gender || '',
-      'Church/Organization': attendee.churchOrg || '',
-      'Role': attendee.conferenceRole || 'ATTENDEE',
+      'Church': attendee.church || '',
+      'Area': attendee.area || '',
+      'Governorate': attendee.governorate || '',
+      'Arrival Method': attendee.arrivalMethod || '',
+      'Bus Pickup Point': attendee.busPickupPoint || '',
+      'Payment Method': attendee.paymentMethod || '',
+      'Payment Review Status': attendee.paymentStatus || 'PENDING',
+      'Transaction Number': attendee.transactionNumber || '',
+      'Checked In': attendee.checkedInAt ? 'YES' : 'NO',
+      'Check-in Time': attendee.checkedInAt ? new Date(attendee.checkedInAt).toLocaleString() : '',
+      'Checked-in By': attendee.checkedInBy || '',
       'Notes': attendee.notes || '',
-      'Checked In': attendee.checkedInAt ? 'Yes' : 'No',
-      'Checked In At': attendee.checkedInAt ? new Date(attendee.checkedInAt).toLocaleString() : '',
+      'Rooming Notes': attendee.roomingNotes || '',
+      'Internal Notes': attendee.internalNotes || '',
+      'Role': attendee.conferenceRole || 'ATTENDEE',
       'Room Number': attendee.assignment?.room?.roomNumber || '',
       'Building': attendee.assignment?.room?.floor?.building?.name || '',
       'Floor': attendee.assignment?.room?.floor?.floorNumber || '',
@@ -130,16 +165,27 @@ export class ExcelService {
 
     // Set column widths
     worksheet['!cols'] = [
-      { wch: 25 }, // Full Name
-      { wch: 15 }, // Phone
+      { wch: 20 }, // Ticket ID
       { wch: 25 }, // Email
-      { wch: 5 },  // Age
+      { wch: 25 }, // Full Name
       { wch: 10 }, // Gender
-      { wch: 25 }, // Church/Organization
-      { wch: 12 }, // Role
-      { wch: 30 }, // Notes
+      { wch: 15 }, // Phone
+      { wch: 5 },  // Age
+      { wch: 20 }, // Church
+      { wch: 15 }, // Area
+      { wch: 15 }, // Governorate
+      { wch: 15 }, // Arrival Method
+      { wch: 20 }, // Bus Pickup Point
+      { wch: 15 }, // Payment Method
+      { wch: 18 }, // Payment Review Status
+      { wch: 18 }, // Transaction Number
       { wch: 10 }, // Checked In
-      { wch: 20 }, // Checked In At
+      { wch: 20 }, // Check-in Time
+      { wch: 15 }, // Checked-in By
+      { wch: 30 }, // Notes
+      { wch: 30 }, // Rooming Notes
+      { wch: 30 }, // Internal Notes
+      { wch: 12 }, // Role
       { wch: 12 }, // Room Number
       { wch: 25 }, // Building
       { wch: 8 },  // Floor
@@ -196,19 +242,49 @@ export class ExcelService {
 
   /**
    * Generate Excel template for attendee import
-   * WHY: Provide users with a template to fill
+   * WHY: Provide users with a template matching conference registration format
    */
   generateAttendeeTemplate(): Buffer {
     const templateData = [
       {
+        'Ticket ID': 'TO-20260607-123456',
+        'Email': 'john.doe@example.com',
         'Full Name': 'John Doe',
-        'Phone': '01234567890',
-        'Email': 'john@example.com',
-        'Age': 30,
         'Gender': 'MALE',
-        'Church/Organization': 'Sample Church',
+        'Phone': '01234567890',
+        'Age': 30,
+        'Church': 'Sample Church',
+        'Area': 'Sample Area',
+        'Governorate': 'Cairo',
+        'Arrival Method': 'Conference Bus',
+        'Bus Pickup Point': 'Main Square',
+        'Payment Method': 'InstaPay',
+        'Payment Review Status': 'PENDING',
+        'Transaction Number': 'TXN-123456',
+        'Notes': 'Sample registration notes',
+        'Rooming Notes': 'Prefer ground floor',
+        'Internal Notes': 'Admin notes here',
         'Role': 'ATTENDEE',
-        'Notes': 'Sample notes',
+      },
+      {
+        'Ticket ID': '',
+        'Email': 'jane.smith@example.com',
+        'Full Name': 'Jane Smith',
+        'Gender': 'FEMALE',
+        'Phone': '01098765432',
+        'Age': 28,
+        'Church': 'Another Church',
+        'Area': 'Downtown',
+        'Governorate': 'Alexandria',
+        'Arrival Method': 'Private Transport',
+        'Bus Pickup Point': '',
+        'Payment Method': 'Orange Cash',
+        'Payment Review Status': 'CONFIRMED',
+        'Transaction Number': 'TXN-789012',
+        'Notes': '',
+        'Rooming Notes': '',
+        'Internal Notes': '',
+        'Role': 'STAFF',
       },
     ];
 
@@ -217,33 +293,88 @@ export class ExcelService {
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Attendees');
 
     worksheet['!cols'] = [
-      { wch: 25 },
-      { wch: 15 },
-      { wch: 25 },
-      { wch: 5 },
-      { wch: 10 },
-      { wch: 25 },
-      { wch: 12 },
-      { wch: 30 },
+      { wch: 20 }, // Ticket ID
+      { wch: 25 }, // Email
+      { wch: 25 }, // Full Name
+      { wch: 10 }, // Gender
+      { wch: 15 }, // Phone
+      { wch: 5 },  // Age
+      { wch: 20 }, // Church
+      { wch: 15 }, // Area
+      { wch: 15 }, // Governorate
+      { wch: 18 }, // Arrival Method
+      { wch: 20 }, // Bus Pickup Point
+      { wch: 15 }, // Payment Method
+      { wch: 18 }, // Payment Review Status
+      { wch: 18 }, // Transaction Number
+      { wch: 30 }, // Notes
+      { wch: 30 }, // Rooming Notes
+      { wch: 30 }, // Internal Notes
+      { wch: 12 }, // Role
     ];
 
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
   /**
-   * Parse gender from string
-   * WHY: Handle various formats (MALE, Male, male, M)
+   * Parse gender from string (supports Arabic and English)
+   * WHY: Handle various formats (MALE, Male, male, M, ذكر, أنثى)
    */
   private parseGender(value: any): Gender | undefined {
     if (!value) return undefined;
     
-    const normalized = String(value).toUpperCase().trim();
+    const normalized = String(value).trim();
     
-    if (normalized === 'MALE' || normalized === 'M') return 'MALE';
-    if (normalized === 'FEMALE' || normalized === 'F') return 'FEMALE';
-    if (normalized === 'OTHER' || normalized === 'O') return 'OTHER';
+    // English
+    if (normalized.toUpperCase() === 'MALE' || normalized.toUpperCase() === 'M') return 'MALE';
+    if (normalized.toUpperCase() === 'FEMALE' || normalized.toUpperCase() === 'F') return 'FEMALE';
+    if (normalized.toUpperCase() === 'OTHER' || normalized.toUpperCase() === 'O') return 'OTHER';
+    
+    // Arabic
+    if (normalized === 'ذكر') return 'MALE';
+    if (normalized === 'أنثى' || normalized === 'انثى') return 'FEMALE';
     
     return undefined;
+  }
+
+  /**
+   * Format gender for display (English)
+   * WHY: Consistent output format
+   */
+  private formatGender(value: any): string {
+    if (!value) return '';
+    if (value === 'MALE') return 'Male';
+    if (value === 'FEMALE') return 'Female';
+    if (value === 'OTHER') return 'Other';
+    return value;
+  }
+
+  /**
+   * Parse payment status from Excel
+   * WHY: Map various status formats to our enum
+   */
+  private parsePaymentStatus(value: any): string {
+    if (!value) return 'PENDING';
+    
+    const normalized = String(value).toUpperCase().trim();
+    
+    if (normalized === 'CONFIRMED' || normalized === 'APPROVED') return 'CONFIRMED';
+    if (normalized === 'REJECTED' || normalized === 'DECLINED') return 'REJECTED';
+    
+    return 'PENDING';
+  }
+
+  /**
+   * Normalize phone number
+   * WHY: Handle phone numbers stored as numbers in Excel
+   */
+  private normalizePhone(value: any): string | undefined {
+    if (!value) return undefined;
+    
+    // Convert to string and remove any spaces or special characters
+    const phone = String(value).replace(/\s+/g, '').replace(/[^\d+]/g, '');
+    
+    return phone || undefined;
   }
 
   /**

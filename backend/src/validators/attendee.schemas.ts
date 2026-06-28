@@ -3,24 +3,36 @@
  * 
  * WHY: Type-safe input validation for all attendee operations
  * Uses Zod for runtime validation + TypeScript type inference
+ * Updated to match conference registration Excel structure
  */
 
 import { z } from 'zod';
-import { Gender, ConferenceRole } from '@prisma/client';
+import { Gender, ConferenceRole, PaymentStatus } from '@prisma/client';
 
 /**
  * Create Attendee Schema
- * WHY: Validates attendee registration data
+ * WHY: Validates attendee registration data with all conference fields
  */
 export const createAttendeeSchema = z.object({
+  ticketId: z.string().max(50).optional(),
   fullName: z.string().min(2, 'Full name must be at least 2 characters').max(200),
-  phone: z.string().optional(),
+  phone: z.string().max(20).optional(),
   email: z.string().email('Invalid email format').optional(),
   age: z.number().int().positive().max(150).optional(),
   gender: z.nativeEnum(Gender).optional(),
-  churchOrg: z.string().max(200).optional(),
+  church: z.string().max(200).optional(),
+  area: z.string().max(200).optional(),
+  governorate: z.string().max(100).optional(),
+  arrivalMethod: z.string().max(100).optional(),
+  busPickupPoint: z.string().max(200).optional(),
+  paymentMethod: z.string().max(100).optional(),
+  paymentStatus: z.nativeEnum(PaymentStatus).default('PENDING'),
+  transactionNumber: z.string().max(100).optional(),
   conferenceRole: z.nativeEnum(ConferenceRole).default('ATTENDEE'),
   notes: z.string().optional(),
+  roomingNotes: z.string().optional(),
+  internalNotes: z.string().optional(),
+  checkedInBy: z.string().max(100).optional(),
 });
 
 /**

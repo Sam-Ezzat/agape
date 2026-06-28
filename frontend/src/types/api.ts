@@ -22,6 +22,12 @@ export enum ConferenceRole {
   OTHER = 'OTHER',
 }
 
+export enum PaymentStatus {
+  PENDING = 'PENDING',
+  CONFIRMED = 'CONFIRMED',
+  REJECTED = 'REJECTED',
+}
+
 export enum RoomType {
   SINGLE = 'SINGLE',
   DOUBLE = 'DOUBLE',
@@ -76,15 +82,26 @@ export interface Room {
 
 export interface Attendee {
   id: string;
+  ticketId?: string;
   fullName: string;
   phone?: string;
   email?: string;
   age?: number;
   gender?: Gender;
-  churchOrg?: string;
+  church?: string;
+  area?: string;
+  governorate?: string;
+  arrivalMethod?: string;
+  busPickupPoint?: string;
+  paymentMethod?: string;
+  paymentStatus?: PaymentStatus;
+  transactionNumber?: string;
   conferenceRole: ConferenceRole;
   notes?: string;
+  roomingNotes?: string;
+  internalNotes?: string;
   checkedInAt?: string;
+  checkedInBy?: string;
   checkedOutAt?: string;
   createdAt: string;
   updatedAt: string;

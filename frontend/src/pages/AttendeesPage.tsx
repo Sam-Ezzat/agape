@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import { attendeeApi, excelApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
-import type { Attendee, AttendeeFilters, ConferenceRole, Gender } from '@/types/api';
+import type { Attendee, AttendeeFilters, ConferenceRole, Gender, PaymentStatus } from '@/types/api';
 
 export default function AttendeesPage() {
   const [attendees, setAttendees] = useState<Attendee[]>([]);
@@ -382,14 +382,24 @@ interface AttendeeModalProps {
 
 function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
   const [formData, setFormData] = useState({
+    ticketId: attendee?.ticketId || '',
     fullName: attendee?.fullName || '',
     phone: attendee?.phone || '',
     email: attendee?.email || '',
     age: attendee?.age?.toString() || '',
     gender: attendee?.gender || '' as Gender | '',
-    churchOrg: attendee?.churchOrg || '',
+    church: attendee?.church || '',
+    area: attendee?.area || '',
+    governorate: attendee?.governorate || '',
+    arrivalMethod: attendee?.arrivalMethod || '',
+    busPickupPoint: attendee?.busPickupPoint || '',
+    paymentMethod: attendee?.paymentMethod || '',
+    paymentStatus: attendee?.paymentStatus || 'PENDING',
+    transactionNumber: attendee?.transactionNumber || '',
     conferenceRole: attendee?.conferenceRole || 'ATTENDEE' as ConferenceRole,
     notes: attendee?.notes || '',
+    roomingNotes: attendee?.roomingNotes || '',
+    internalNotes: attendee?.internalNotes || '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -404,14 +414,24 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
     try {
       setSaving(true);
       const data = {
+        ticketId: formData.ticketId.trim() || undefined,
         fullName: formData.fullName.trim(),
         phone: formData.phone.trim() || undefined,
         email: formData.email.trim() || undefined,
         age: formData.age ? parseInt(formData.age) : undefined,
         gender: formData.gender || undefined,
-        churchOrg: formData.churchOrg.trim() || undefined,
+        church: formData.church.trim() || undefined,
+        area: formData.area.trim() || undefined,
+        governorate: formData.governorate.trim() || undefined,
+        arrivalMethod: formData.arrivalMethod.trim() || undefined,
+        busPickupPoint: formData.busPickupPoint.trim() || undefined,
+        paymentMethod: formData.paymentMethod.trim() || undefined,
+        paymentStatus: formData.paymentStatus,
+        transactionNumber: formData.transactionNumber.trim() || undefined,
         conferenceRole: formData.conferenceRole,
         notes: formData.notes.trim() || undefined,
+        roomingNotes: formData.roomingNotes.trim() || undefined,
+        internalNotes: formData.internalNotes.trim() || undefined,
       };
 
       if (attendee) {
@@ -444,99 +464,236 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Full Name <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={formData.fullName}
-                onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                className="input w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-              <input
-                type="tel"
-                value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                className="input w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input
-                type="email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="input w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Age</label>
-              <input
-                type="number"
-                min="1"
-                max="150"
-                value={formData.age}
-                onChange={(e) => setFormData({ ...formData, age: e.target.value })}
-                className="input w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
-              <select
-                value={formData.gender}
-                onChange={(e) => setFormData({ ...formData, gender: e.target.value as Gender | '' })}
-                className="input w-full"
-              >
-                <option value="">Select Gender</option>
-                <option value="MALE">Male</option>
-                <option value="FEMALE">Female</option>
-                <option value="OTHER">Other</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-              <select
-                value={formData.conferenceRole}
-                onChange={(e) => setFormData({ ...formData, conferenceRole: e.target.value as ConferenceRole })}
-                className="input w-full"
-              >
-                <option value="ATTENDEE">Attendee</option>
-                <option value="LEADER">Leader</option>
-                <option value="PASTOR">Pastor</option>
-                <option value="VIP">VIP</option>
-                <option value="STAFF">Staff</option>
-                <option value="VOLUNTEER">Volunteer</option>
-                <option value="OTHER">Other</option>
-              </select>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Basic Information */}
+          <div>
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Basic Information</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Ticket ID</label>
+                <input
+                  type="text"
+                  value={formData.ticketId}
+                  onChange={(e) => setFormData({ ...formData, ticketId: e.target.value })}
+                  className="input w-full"
+                  placeholder="TO-20260607-123456"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Full Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={formData.fullName}
+                  onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                <input
+                  type="tel"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Age</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="150"
+                  value={formData.age}
+                  onChange={(e) => setFormData({ ...formData, age: e.target.value })}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+                <select
+                  value={formData.gender}
+                  onChange={(e) => setFormData({ ...formData, gender: e.target.value as Gender | '' })}
+                  className="input w-full"
+                >
+                  <option value="">Select Gender</option>
+                  <option value="MALE">Male</option>
+                  <option value="FEMALE">Female</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </div>
             </div>
           </div>
 
+          {/* Church & Location */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Church/Organization</label>
-            <input
-              type="text"
-              value={formData.churchOrg}
-              onChange={(e) => setFormData({ ...formData, churchOrg: e.target.value })}
-              className="input w-full"
-            />
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Church & Location</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Church</label>
+                <input
+                  type="text"
+                  value={formData.church}
+                  onChange={(e) => setFormData({ ...formData, church: e.target.value })}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Area</label>
+                <input
+                  type="text"
+                  value={formData.area}
+                  onChange={(e) => setFormData({ ...formData, area: e.target.value })}
+                  className="input w-full"
+                  placeholder="Neighborhood"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Governorate</label>
+                <input
+                  type="text"
+                  value={formData.governorate}
+                  onChange={(e) => setFormData({ ...formData, governorate: e.target.value })}
+                  className="input w-full"
+                  placeholder="Province/State"
+                />
+              </div>
+            </div>
           </div>
 
+          {/* Travel & Transportation */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-            <textarea
-              rows={3}
-              value={formData.notes}
-              onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-              className="input w-full"
-              placeholder="Special needs, medical info, preferences..."
-            />
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Travel & Transportation</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Method</label>
+                <input
+                  type="text"
+                  value={formData.arrivalMethod}
+                  onChange={(e) => setFormData({ ...formData, arrivalMethod: e.target.value })}
+                  className="input w-full"
+                  placeholder="Conference Bus, Private Transport, etc."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bus Pickup Point</label>
+                <input
+                  type="text"
+                  value={formData.busPickupPoint}
+                  onChange={(e) => setFormData({ ...formData, busPickupPoint: e.target.value })}
+                  className="input w-full"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Payment Information */}
+          <div>
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Payment Information</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                <input
+                  type="text"
+                  value={formData.paymentMethod}
+                  onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
+                  className="input w-full"
+                  placeholder="InstaPay, Orange Cash, etc."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Status</label>
+                <select
+                  value={formData.paymentStatus}
+                  onChange={(e) => setFormData({ ...formData, paymentStatus: e.target.value })}
+                  className="input w-full"
+                >
+                  <option value="PENDING">Pending</option>
+                  <option value="CONFIRMED">Confirmed</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Transaction Number</label>
+                <input
+                  type="text"
+                  value={formData.transactionNumber}
+                  onChange={(e) => setFormData({ ...formData, transactionNumber: e.target.value })}
+                  className="input w-full"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Conference Details */}
+          <div>
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Conference Details</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <select
+                  value={formData.conferenceRole}
+                  onChange={(e) => setFormData({ ...formData, conferenceRole: e.target.value as ConferenceRole })}
+                  className="input w-full"
+                >
+                  <option value="ATTENDEE">Attendee</option>
+                  <option value="LEADER">Leader</option>
+                  <option value="PASTOR">Pastor</option>
+                  <option value="VIP">VIP</option>
+                  <option value="STAFF">Staff</option>
+                  <option value="VOLUNTEER">Volunteer</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Notes</h4>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">General Notes</label>
+                <textarea
+                  rows={2}
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  className="input w-full"
+                  placeholder="Special needs, medical info, preferences..."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Rooming Notes</label>
+                <textarea
+                  rows={2}
+                  value={formData.roomingNotes}
+                  onChange={(e) => setFormData({ ...formData, roomingNotes: e.target.value })}
+                  className="input w-full"
+                  placeholder="Room assignment preferences..."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes (Admin Only)</label>
+                <textarea
+                  rows={2}
+                  value={formData.internalNotes}
+                  onChange={(e) => setFormData({ ...formData, internalNotes: e.target.value })}
+                  className="input w-full"
+                  placeholder="Admin notes..."
+                />
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t">

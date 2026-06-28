@@ -99,18 +99,40 @@ enum RoomType {
 
 // WHY: Conference attendees with complete profile information
 // Supports Arabic names and special needs tracking
+// Updated to match conference registration Excel structure
 model Attendee {
   id                String          @id @default(uuid())
+  ticketId          String?         @unique @map("ticket_id") // Conference ticket ID (e.g., TO-20260607-578181)
   fullName          String          @map("full_name")
   phone             String?
   email             String?
   age               Int?
   gender            Gender?
-  churchOrg         String?         @map("church_organization") // Church or organization name
+  church            String?         // Church name (renamed from churchOrg)
+  area              String?         // Area/neighborhood (e.g., "ain shams")
+  governorate       String?         // Governorate/province (e.g., "القاهرة")
+  
+  // Travel & Transportation
+  arrivalMethod     String?         @map("arrival_method") // e.g., "باص المؤتمر", "ملاكي"
+  busPickupPoint    String?         @map("bus_pickup_point") // Bus pickup location
+  
+  // Payment Information
+  paymentMethod     String?         @map("payment_method") // e.g., "Orange Cash", "InstaPay"
+  paymentStatus     PaymentStatus?  @default(PENDING) @map("payment_status")
+  transactionNumber String?         @map("transaction_number") // Payment transaction reference
+  
+  // Conference Management
   conferenceRole    ConferenceRole  @default(ATTENDEE) @map("conference_role")
   notes             String?         @db.Text // Special needs, preferences, medical info
+  roomingNotes      String?         @db.Text @map("rooming_notes") // Room assignment preferences
+  internalNotes     String?         @db.Text @map("internal_notes") // Admin-only notes
+  
+  // Check-in Tracking
   checkedInAt       DateTime?       @map("checked_in_at")
   checkedOutAt      DateTime?       @map("checked_out_at")
+  checkedInBy       String?         @map("checked_in_by") // Staff member who checked in
+  
+  // Timestamps
   createdAt         DateTime        @default(now()) @map("created_at")
   updatedAt         DateTime        @updatedAt @map("updated_at")
   deletedAt         DateTime?       @map("deleted_at") // Soft delete
@@ -118,10 +140,13 @@ model Attendee {
   // Relations
   assignment        RoomAssignment?
   
-  // WHY: Index for fast name searches (supports Arabic text with trigram similarity)
+  // WHY: Indexes for fast searches (supports Arabic text with trigram similarity)
   @@index([fullName])
+  @@index([ticketId])
   @@index([conferenceRole])
   @@index([checkedInAt])
+  @@index([paymentStatus])
+  @@index([email])
   @@map("attendees")
 }
 
@@ -141,6 +166,13 @@ enum ConferenceRole {
   STAFF
   VOLUNTEER
   OTHER
+}
+
+// WHY: Payment status tracking for conference registration
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
 }
 
 // WHY: Maps attendees to rooms (one attendee per room, enforced by unique constraint)
