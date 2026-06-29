@@ -8,7 +8,8 @@
 import { useEffect, useState } from 'react';
 import { attendeeApi, excelApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
-import type { Attendee, AttendeeFilters, ConferenceRole, Gender, PaymentStatus } from '@/types/api';
+import { useSocket } from '@/hooks/useSocket';
+import type { Attendee, AttendeeFilters, ConferenceRole, Gender } from '@/types/api';
 
 export default function AttendeesPage() {
   const [attendees, setAttendees] = useState<Attendee[]>([]);
@@ -20,6 +21,9 @@ export default function AttendeesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingAttendee, setEditingAttendee] = useState<Attendee | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
+  const socket = useSocket();
   
   // Filters
   const [search, setSearch] = useState('');
@@ -29,6 +33,60 @@ export default function AttendeesPage() {
   useEffect(() => {
     loadAttendees();
   }, [currentPage, search, roleFilter, genderFilter]);
+
+  // Listen for real-time updates via socket
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleAttendeeUpdate = async (payload: any) => {
+      const attendeeId = payload?.data?.attendeeId || payload?.attendeeId;
+      
+      // If details modal is open for this attendee, refresh it
+      if (selectedAttendee && attendeeId === selectedAttendee.id) {
+        try {
+          const response = await attendeeApi.getById(selectedAttendee.id);
+          setSelectedAttendee(response.data);
+        } catch (error) {
+          console.error('Failed to refresh selected attendee:', error);
+        }
+      }
+      
+      // Update attendee in the current list if present
+      if (attendeeId && attendees.length > 0) {
+        const attendeeInList = attendees.find(a => a.id === attendeeId);
+        if (attendeeInList) {
+          try {
+            const response = await attendeeApi.getById(attendeeId);
+            setAttendees((prev) =>
+              prev.map((a) => (a.id === attendeeId ? response.data : a))
+            );
+          } catch (error) {
+            console.error('Failed to refresh attendee in list:', error);
+          }
+        }
+      }
+    };
+
+    const handleAttendeeCreatedOrDeleted = () => {
+      // Reload the entire list when attendees are added or removed
+      loadAttendees();
+    };
+
+    // Listen for various attendee events
+    socket.on('attendee:created', handleAttendeeCreatedOrDeleted);
+    socket.on('attendee:updated', handleAttendeeUpdate);
+    socket.on('attendee:deleted', handleAttendeeCreatedOrDeleted);
+    socket.on('attendee:checked-in', handleAttendeeUpdate);
+    socket.on('attendee:checked-out', handleAttendeeUpdate);
+
+    return () => {
+      socket.off('attendee:created', handleAttendeeCreatedOrDeleted);
+      socket.off('attendee:updated', handleAttendeeUpdate);
+      socket.off('attendee:deleted', handleAttendeeCreatedOrDeleted);
+      socket.off('attendee:checked-in', handleAttendeeUpdate);
+      socket.off('attendee:checked-out', handleAttendeeUpdate);
+    };
+  }, [socket, selectedAttendee, attendees]);
 
   const loadAttendees = async () => {
     try {
@@ -65,6 +123,16 @@ export default function AttendeesPage() {
     }
   };
 
+  const openDetailsModal = (attendee: Attendee) => {
+    setSelectedAttendee(attendee);
+    setShowDetailsModal(true);
+  };
+
+  const closeDetailsModal = () => {
+    setShowDetailsModal(false);
+    setSelectedAttendee(null);
+  };
+
   const openCreateModal = () => {
     setEditingAttendee(null);
     setShowModal(true);
@@ -73,6 +141,20 @@ export default function AttendeesPage() {
   const openEditModal = (attendee: Attendee) => {
     setEditingAttendee(attendee);
     setShowModal(true);
+  };
+
+  const openEditFromDetails = () => {
+    if (selectedAttendee) {
+      openEditModal(selectedAttendee);
+      closeDetailsModal();
+    }
+  };
+
+  const handleDeleteFromDetails = async () => {
+    if (selectedAttendee) {
+      await handleDelete(selectedAttendee.id, selectedAttendee.fullName);
+      closeDetailsModal();
+    }
   };
 
   const closeModal = () => {
@@ -199,6 +281,7 @@ export default function AttendeesPage() {
               <option value="PASTOR">Pastor</option>
               <option value="VIP">VIP</option>
               <option value="ATTENDEE">Attendee</option>
+              <option value="EXCEPTION">Exception</option>
               <option value="STAFF">Staff</option>
               <option value="VOLUNTEER">Volunteer</option>
               <option value="OTHER">Other</option>
@@ -257,10 +340,13 @@ export default function AttendeesPage() {
                   {attendees.map((attendee) => (
                     <tr key={attendee.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div>
+                        <div 
+                          onClick={() => openDetailsModal(attendee)}
+                          className="cursor-pointer hover:text-primary-600"
+                        >
                           <div className="text-sm font-medium text-gray-900">{attendee.fullName}</div>
-                          {attendee.churchOrg && (
-                            <div className="text-sm text-gray-500">{attendee.churchOrg}</div>
+                          {attendee.church && (
+                            <div className="text-sm text-gray-500">{attendee.church}</div>
                           )}
                         </div>
                       </td>
@@ -274,7 +360,11 @@ export default function AttendeesPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {attendee.checkedInAt ? (
+                        {attendee.checkedOutAt ? (
+                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-orange-100 text-orange-800">
+                            Checked Out
+                          </span>
+                        ) : attendee.checkedInAt ? (
                           <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                             Checked In
                           </span>
@@ -367,6 +457,16 @@ export default function AttendeesPage() {
       {showImportModal && (
         <ImportModal onClose={closeImportModal} onSuccess={handleImportSuccess} />
       )}
+
+      {/* Attendee Details Modal */}
+      {showDetailsModal && selectedAttendee && (
+        <AttendeeDetailsModal 
+          attendee={selectedAttendee}
+          onClose={closeDetailsModal}
+          onEdit={openEditFromDetails}
+          onDelete={handleDeleteFromDetails}
+        />
+      )}
     </div>
   );
 }
@@ -391,6 +491,7 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
     church: attendee?.church || '',
     area: attendee?.area || '',
     governorate: attendee?.governorate || '',
+    isServant: attendee?.isServant !== undefined ? String(attendee.isServant) : '',
     arrivalMethod: attendee?.arrivalMethod || '',
     busPickupPoint: attendee?.busPickupPoint || '',
     paymentMethod: attendee?.paymentMethod || '',
@@ -403,12 +504,37 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
   });
   const [saving, setSaving] = useState(false);
 
+  // Get age range based on role
+  const getAgeRange = (role: ConferenceRole) => {
+    switch (role) {
+      case 'ATTENDEE':
+        return { min: 18, max: 35 };
+      case 'EXCEPTION':
+        return { min: 13, max: 45 };
+      default:
+        return { min: 18, max: 65 };
+    }
+  };
+
+  const ageRange = getAgeRange(formData.conferenceRole);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.fullName.trim()) {
       toastError('Full name is required');
       return;
+    }
+
+    // Validate age based on role
+    if (formData.age) {
+      const age = parseInt(formData.age);
+      const { min, max } = getAgeRange(formData.conferenceRole);
+      
+      if (age < min || age > max) {
+        toastError(`Age must be between ${min} and ${max} for ${formData.conferenceRole} role`);
+        return;
+      }
     }
 
     try {
@@ -423,6 +549,7 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
         church: formData.church.trim() || undefined,
         area: formData.area.trim() || undefined,
         governorate: formData.governorate.trim() || undefined,
+        isServant: formData.isServant === 'true' ? true : formData.isServant === 'false' ? false : undefined,
         arrivalMethod: formData.arrivalMethod.trim() || undefined,
         busPickupPoint: formData.busPickupPoint.trim() || undefined,
         paymentMethod: formData.paymentMethod.trim() || undefined,
@@ -513,12 +640,14 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Age</label>
                 <input
                   type="number"
-                  min="1"
-                  max="150"
+                  min={ageRange.min}
+                  max={ageRange.max}
                   value={formData.age}
                   onChange={(e) => setFormData({ ...formData, age: e.target.value })}
                   className="input w-full"
+                  placeholder={`${ageRange.min}-${ageRange.max} for ${formData.conferenceRole}`}
                 />
+                <p className="text-xs text-gray-500 mt-1">Required: {ageRange.min}-{ageRange.max} years</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
@@ -561,13 +690,28 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Governorate</label>
-                <input
-                  type="text"
+                <select
                   value={formData.governorate}
                   onChange={(e) => setFormData({ ...formData, governorate: e.target.value })}
                   className="input w-full"
-                  placeholder="Province/State"
-                />
+                >
+                  <option value="">Choose a governorate</option>
+                  <option value="Cairo">Cairo</option>
+                  <option value="Alexandria">Alexandria</option>
+                  <option value="10th Ramadan">10th Ramadan</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Are you a servant in your church?</label>
+                <select
+                  value={formData.isServant}
+                  onChange={(e) => setFormData({ ...formData, isServant: e.target.value })}
+                  className="input w-full"
+                >
+                  <option value="">No selection</option>
+                  <option value="false">No</option>
+                  <option value="true">Yes</option>
+                </select>
               </div>
             </div>
           </div>
@@ -578,22 +722,54 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Method</label>
-                <input
-                  type="text"
+                <select
                   value={formData.arrivalMethod}
-                  onChange={(e) => setFormData({ ...formData, arrivalMethod: e.target.value })}
+                  onChange={(e) => {
+                    const method = e.target.value;
+                    setFormData({ 
+                      ...formData, 
+                      arrivalMethod: method,
+                      busPickupPoint: method === 'Private car' ? 'private car' : ''
+                    });
+                  }}
                   className="input w-full"
-                  placeholder="Conference Bus, Private Transport, etc."
-                />
+                >
+                  <option value="">No selection</option>
+                  <option value="Conference Bus">Conference Bus</option>
+                  <option value="Private car">Private car</option>
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Bus Pickup Point</label>
-                <input
-                  type="text"
-                  value={formData.busPickupPoint}
-                  onChange={(e) => setFormData({ ...formData, busPickupPoint: e.target.value })}
-                  className="input w-full"
-                />
+                {formData.arrivalMethod === 'Private car' ? (
+                  <input
+                    type="text"
+                    value="private car"
+                    readOnly
+                    className="input w-full bg-gray-100 cursor-not-allowed"
+                  />
+                ) : formData.arrivalMethod === 'Conference Bus' ? (
+                  <select
+                    value={formData.busPickupPoint}
+                    onChange={(e) => setFormData({ ...formData, busPickupPoint: e.target.value })}
+                    className="input w-full"
+                  >
+                    <option value="">Select pickup point</option>
+                    <option value="el-ketbi hospital">el-ketbi hospital</option>
+                    <option value="Meriland Garden">Meriland Garden</option>
+                    <option value="ezbet el-nakhl">ezbet el-nakhl</option>
+                    <option value="Alexandria">Alexandria</option>
+                    <option value="10th Ramadan">10th Ramadan</option>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={formData.busPickupPoint}
+                    onChange={(e) => setFormData({ ...formData, busPickupPoint: e.target.value })}
+                    className="input w-full"
+                    placeholder="Specify pickup location"
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -648,6 +824,7 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                   className="input w-full"
                 >
                   <option value="ATTENDEE">Attendee</option>
+                  <option value="EXCEPTION">Exception</option>
                   <option value="LEADER">Leader</option>
                   <option value="PASTOR">Pastor</option>
                   <option value="VIP">VIP</option>
@@ -797,6 +974,178 @@ function ImportModal({ onClose, onSuccess }: ImportModalProps) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Attendee Details Modal - Display full attendee information
+ */
+interface AttendeeDetailsModalProps {
+  attendee: Attendee;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}
+
+function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeDetailsModalProps) {
+  const formatDate = (date: string | null | undefined) => {
+    if (!date) return '-';
+    return new Date(date).toLocaleString();
+  };
+
+  const DetailRow = ({ label, value }: { label: string; value: string | number | null | undefined }) => (
+    <div className="py-3 border-b border-gray-200">
+      <dt className="text-sm font-medium text-gray-500 mb-1">{label}</dt>
+      <dd className="text-sm text-gray-900">{value || '-'}</dd>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" onClick={onClose}>
+      <div className="relative top-10 mx-auto p-6 border w-full max-w-3xl shadow-lg rounded-md bg-white" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h3 className="text-2xl font-bold text-gray-900">{attendee.fullName}</h3>
+            <p className="text-sm text-gray-500 mt-1">Attendee Details</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-500">
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="max-h-[70vh] overflow-y-auto">
+          {/* Status Badges */}
+          <div className="flex gap-2 mb-6">
+            <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+              {attendee.conferenceRole}
+            </span>
+            {attendee.checkedOutAt ? (
+              <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-orange-100 text-orange-800">
+                Checked Out
+              </span>
+            ) : attendee.checkedInAt ? (
+              <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                Checked In
+              </span>
+            ) : (
+              <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                Not Checked In
+              </span>
+            )}
+            <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+              attendee.paymentStatus === 'CONFIRMED' ? 'bg-green-100 text-green-800' :
+              attendee.paymentStatus === 'REJECTED' ? 'bg-red-100 text-red-800' :
+              'bg-yellow-100 text-yellow-800'
+            }`}>
+              Payment: {attendee.paymentStatus}
+            </span>
+          </div>
+
+          <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+            {/* Basic Information */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Basic Information</h4>
+            </div>
+            <DetailRow label="Ticket ID" value={attendee.ticketId} />
+            <DetailRow label="Full Name" value={attendee.fullName} />
+            <DetailRow label="Phone" value={attendee.phone} />
+            <DetailRow label="Email" value={attendee.email} />
+            <DetailRow label="Age" value={attendee.age} />
+            <DetailRow label="Gender" value={attendee.gender} />
+
+            {/* Church & Location */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Church & Location</h4>
+            </div>
+            <DetailRow label="Church" value={attendee.church} />
+            <DetailRow label="Area" value={attendee.area} />
+            <DetailRow label="Governorate" value={attendee.governorate} />
+
+            {/* Travel & Transportation */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Travel & Transportation</h4>
+            </div>
+            <DetailRow label="Arrival Method" value={attendee.arrivalMethod} />
+            <DetailRow label="Bus Pickup Point" value={attendee.busPickupPoint} />
+
+            {/* Payment Information */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Payment Information</h4>
+            </div>
+            <DetailRow label="Payment Method" value={attendee.paymentMethod} />
+            <DetailRow label="Payment Status" value={attendee.paymentStatus} />
+            <DetailRow label="Transaction Number" value={attendee.transactionNumber} />
+
+            {/* Check-in Information */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Check-in Information</h4>
+            </div>
+            <DetailRow label="Checked In At" value={formatDate(attendee.checkedInAt)} />
+            <DetailRow label="Checked Out At" value={formatDate(attendee.checkedOutAt)} />
+
+            {/* Notes */}
+            {(attendee.notes || attendee.roomingNotes || attendee.internalNotes) && (
+              <>
+                <div className="col-span-2">
+                  <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Notes</h4>
+                </div>
+                {attendee.notes && (
+                  <div className="col-span-2">
+                    <DetailRow label="General Notes" value={attendee.notes} />
+                  </div>
+                )}
+                {attendee.roomingNotes && (
+                  <div className="col-span-2">
+                    <DetailRow label="Rooming Notes" value={attendee.roomingNotes} />
+                  </div>
+                )}
+                {attendee.internalNotes && (
+                  <div className="col-span-2">
+                    <DetailRow label="Internal Notes (Admin Only)" value={attendee.internalNotes} />
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* System Information */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">System Information</h4>
+            </div>
+            <DetailRow label="Created At" value={formatDate(attendee.createdAt)} />
+            <DetailRow label="Updated At" value={formatDate(attendee.updatedAt)} />
+          </dl>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-3 pt-6 border-t mt-6">
+          <button 
+            type="button" 
+            onClick={onClose} 
+            className="btn-secondary"
+          >
+            Close
+          </button>
+          <button 
+            type="button" 
+            onClick={onDelete} 
+            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+          >
+            Delete
+          </button>
+          <button 
+            type="button" 
+            onClick={onEdit} 
+            className="btn-primary"
+          >
+            Edit
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -16,6 +16,7 @@ export enum ConferenceRole {
   PASTOR = 'PASTOR',
   VIP = 'VIP',
   ATTENDEE = 'ATTENDEE',
+  EXCEPTION = 'EXCEPTION',
   STAFF = 'STAFF',
   VOLUNTEER = 'VOLUNTEER',
   OTHER = 'OTHER',

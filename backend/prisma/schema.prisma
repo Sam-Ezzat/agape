@@ -74,7 +74,7 @@ model Room {
   floorId     String   @map("floor_id")
   roomNumber  String   @map("room_number")
   capacity    Int      // Maximum number of people
-  roomType    RoomType @default(DOUBLE) @map("room_type")
+  roomType    RoomType @default(GENERAL) @map("room_type")
   amenities   Json?    // Flexible JSONB for features: ["AC", "Wheelchair accessible", "مكيف"]
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
@@ -91,10 +91,9 @@ model Room {
 
 // WHY: Room types for different accommodation styles
 enum RoomType {
-  SINGLE
-  DOUBLE
-  SUITE
-  DORMITORY
+  GENERAL
+  VIP
+  FAMILY
 }
 
 // WHY: Conference attendees with complete profile information
@@ -111,6 +110,7 @@ model Attendee {
   church            String?         // Church name (renamed from churchOrg)
   area              String?         // Area/neighborhood (e.g., "ain shams")
   governorate       String?         // Governorate/province (e.g., "القاهرة")
+  isServant         Boolean?        @map("is_servant") // Whether attendee is a servant in their church
   
   // Travel & Transportation
   arrivalMethod     String?         @map("arrival_method") // e.g., "باص المؤتمر", "ملاكي"
@@ -163,6 +163,7 @@ enum ConferenceRole {
   PASTOR
   VIP
   ATTENDEE
+  EXCEPTION
   STAFF
   VOLUNTEER
   OTHER

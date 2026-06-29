@@ -60,7 +60,13 @@ export class AttendeeController {
     const result = await this.attendeeService.list(params);
     res.json({
       success: true,
-      ...result,
+      data: result.data,
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        pages: result.totalPages,
+      },
     });
   }
 

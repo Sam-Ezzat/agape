@@ -1,475 +1,506 @@
 /**
- * Assignments Page
+ * Assignments Page - Redesigned Split Layout
  * 
- * WHY: Interface for managing room assignments
- * List assignments, create new assignments, bulk assign attendees
+ * WHY: Interface for managing room assignments with drag-and-drop
+ * Left panel: Attendees (Unassigned / Assigned tabs) with search
+ * Right panel: Room browser with Conference House → Building → Floor → Room hierarchy
  */
 
 import { useEffect, useState } from 'react';
-import { assignmentApi, attendeeApi, excelApi } from '@/services/api.service';
+import { assignmentApi, attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
-import type { RoomAssignment, Attendee, AssignmentFilters } from '@/types/api';
+import type { RoomAssignment, Attendee, ConferenceHouse, Building, Floor, Room } from '@/types/api';
 
 export default function AssignmentsPage() {
+  // Attendees (left panel)
+  const [allAttendees, setAllAttendees] = useState<Attendee[]>([]);
+  const [unassignedAttendees, setUnassignedAttendees] = useState<Attendee[]>([]);
+  const [assignedAttendees, setAssignedAttendees] = useState<Attendee[]>([]);
   const [assignments, setAssignments] = useState<RoomAssignment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [limit] = useState(20);
-  const [totalPages, setTotalPages] = useState(0);
-  const [totalCount, setTotalCount] = useState(0);
-  const [showModal, setShowModal] = useState(false);
-  const [unassignedCount, setUnassignedCount] = useState(0);
+  const [attendeesLoading, setAttendeesLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'unassigned' | 'assigned'>('unassigned');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedAttendeeId, setSelectedAttendeeId] = useState<string | null>(null);
 
-  // Filters
-  const [buildingFilter, setBuildingFilter] = useState('');
-  const [floorFilter, setFloorFilter] = useState('');
+  // Structure (right panel)
+  const [houses, setHouses] = useState<ConferenceHouse[]>([]);
+  const [buildings, setBuildings] = useState<Building[]>([]);
+  const [floors, setFloors] = useState<Floor[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [structureLoading, setStructureLoading] = useState(true);
+
+  // Right panel filters
+  const [selectedHouseId, setSelectedHouseId] = useState('');
+  const [selectedBuildingId, setSelectedBuildingId] = useState('');
+  const [selectedFloorId, setSelectedFloorId] = useState('');
+
+  // Drag state
+  const [draggedAttendee, setDraggedAttendee] = useState<Attendee | null>(null);
 
   useEffect(() => {
-    loadAssignments();
-    loadUnassignedCount();
-  }, [currentPage, buildingFilter, floorFilter]);
+    loadData();
+  }, []);
 
-  const loadAssignments = async () => {
+  const loadData = async () => {
+    await Promise.all([
+      loadAttendeesAndAssignments(),
+      loadStructure(),
+    ]);
+  };
+
+  const loadAttendeesAndAssignments = async () => {
     try {
-      setLoading(true);
-      const filters: AssignmentFilters = {
-        page: String(currentPage),
-        limit: String(limit),
-      };
+      setAttendeesLoading(true);
       
-      if (buildingFilter) filters.buildingId = buildingFilter;
-      if (floorFilter) filters.floorId = floorFilter;
+      // Load all assignments (unpaginated)
+      const assignmentsRes = await assignmentApi.list({ limit: '9999' });
+      const allAssignments = assignmentsRes.data;
+      setAssignments(allAssignments);
 
-      const response = await assignmentApi.list(filters);
-      setAssignments(response.data);
-      setTotalPages(response.pagination.pages);
-      setTotalCount(response.pagination.total);
+      // Load unassigned attendees
+      const unassignedRes = await attendeeApi.getUnassigned();
+      const unassigned = unassignedRes.data;
+      setUnassignedAttendees(unassigned);
+
+      // Build assigned attendees from assignments
+      const assigned: Attendee[] = allAssignments
+        .filter(a => a.attendee)
+        .map(a => a.attendee!)
+        .filter((a): a is Attendee => a !== undefined);
+      setAssignedAttendees(assigned);
+
+      // Combine all attendees
+      setAllAttendees([...unassigned, ...assigned]);
     } catch (error) {
-      toastError('Failed to load assignments');
+      toastError('Failed to load attendees');
     } finally {
-      setLoading(false);
+      setAttendeesLoading(false);
     }
   };
 
-  const loadUnassignedCount = async () => {
+  const loadStructure = async () => {
     try {
-      const response = await attendeeApi.getUnassigned();
-      setUnassignedCount(response.data.length);
+      setStructureLoading(true);
+      
+      const [housesRes, buildingsRes, floorsRes, roomsRes] = await Promise.all([
+        fetch('http://localhost:3000/api/conference-houses').then(r => r.json()),
+        fetch('http://localhost:3000/api/buildings').then(r => r.json()),
+        fetch('http://localhost:3000/api/floors').then(r => r.json()),
+        fetch('http://localhost:3000/api/rooms').then(r => r.json()),
+      ]);
+
+      setHouses(housesRes.data || []);
+      setBuildings(buildingsRes.data || []);
+      setFloors(floorsRes.data || []);
+      setRooms(roomsRes.data || []);
     } catch (error) {
-      console.error('Failed to load unassigned count', error);
+      toastError('Failed to load structure');
+    } finally {
+      setStructureLoading(false);
     }
   };
 
-  const handleDelete = async (id: string, attendeeName: string) => {
-    if (!confirm(`Remove room assignment for ${attendeeName}?`)) return;
-    
+  const handleAssignToRoom = async (attendeeId: string, roomId: string) => {
     try {
-      await assignmentApi.delete(id);
-      toastSuccess('Assignment removed successfully');
-      loadAssignments();
-      loadUnassignedCount();
+      await assignmentApi.create({ attendeeId, roomId });
+      toastSuccess('Attendee assigned successfully');
+      await loadAttendeesAndAssignments();
+      setSelectedAttendeeId(null);
+      setDraggedAttendee(null);
+    } catch (error) {
+      // Error already shown by API service
+    }
+  };
+
+  const handleUnassign = async (assignmentId: string, attendeeName: string) => {
+    try {
+      await assignmentApi.delete(assignmentId);
+      toastSuccess(`${attendeeName} unassigned`);
+      await loadAttendeesAndAssignments();
     } catch (error) {
       // Error already shown by API service
     }
   };
 
-  const openAssignModal = () => {
-    setShowModal(true);
+  // Drag handlers
+  const onDragStart = (attendee: Attendee) => {
+    setDraggedAttendee(attendee);
   };
 
-  const closeModal = () => {
-    setShowModal(false);
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
   };
 
-  const handleAssignmentCreated = () => {
-    closeModal();
-    loadAssignments();
-    loadUnassignedCount();
-  };
-
-  const handleExportAssignments = async () => {
-    try {
-      const blob = await excelApi.exportAssignments();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `assignments_export_${new Date().toISOString().split('T')[0]}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toastSuccess('Assignments exported successfully');
-    } catch (error) {
-      // Error already shown by API service
+  const onDrop = (roomId: string) => {
+    if (draggedAttendee) {
+      handleAssignToRoom(draggedAttendee.id, roomId);
     }
+  };
+
+  // Filter attendees by search
+  const filteredUnassigned = unassignedAttendees.filter(a =>
+    a.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (a.church && a.church.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (a.phone && a.phone.includes(searchQuery))
+  );
+
+  const filteredAssigned = assignedAttendees.filter(a =>
+    a.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (a.church && a.church.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (a.phone && a.phone.includes(searchQuery))
+  );
+
+  // Filter structure cascade
+  const filteredBuildings = selectedHouseId
+    ? buildings.filter(b => b.conferenceHouseId === selectedHouseId)
+    : buildings;
+
+  const filteredFloors = selectedBuildingId
+    ? floors.filter(f => f.buildingId === selectedBuildingId)
+    : selectedHouseId
+    ? floors.filter(f => filteredBuildings.some(b => b.id === f.buildingId))
+    : floors;
+
+  const filteredRooms = selectedFloorId
+    ? rooms.filter(r => r.floorId === selectedFloorId)
+    : selectedBuildingId
+    ? rooms.filter(r => filteredFloors.some(f => f.id === r.floorId))
+    : selectedHouseId
+    ? rooms.filter(r => filteredFloors.some(f => f.id === r.floorId))
+    : rooms;
+
+  // Compute occupancy per room
+  const getRoomOccupancy = (roomId: string): number => {
+    return assignments.filter(a => a.roomId === roomId).length;
+  };
+
+  const getRoomAssignments = (roomId: string): RoomAssignment[] => {
+    return assignments.filter(a => a.roomId === roomId);
+  };
+
+  const handleHouseChange = (houseId: string) => {
+    setSelectedHouseId(houseId);
+    setSelectedBuildingId('');
+    setSelectedFloorId('');
+  };
+
+  const handleBuildingChange = (buildingId: string) => {
+    setSelectedBuildingId(buildingId);
+    setSelectedFloorId('');
+  };
+
+  const handleFloorChange = (floorId: string) => {
+    setSelectedFloorId(floorId);
+  };
+
+  const clearFilters = () => {
+    setSelectedHouseId('');
+    setSelectedBuildingId('');
+    setSelectedFloorId('');
   };
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Room Assignments</h1>
-          <p className="text-gray-600 mt-1">Manage attendee room assignments</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={handleExportAssignments} className="btn-secondary flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Export
-          </button>
-          <button onClick={openAssignModal} className="btn-primary flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Assign Room
-          </button>
-        </div>
-      </div>
-
-      {/* Stats Banner */}
-      {unassignedCount > 0 && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span className="text-sm font-medium text-yellow-800">
-              {unassignedCount} attendee{unassignedCount !== 1 ? 's' : ''} without room assignment
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="card">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Building</label>
+    <div className="h-[calc(100vh-8rem)] flex gap-4">
+      {/* LEFT PANEL - Attendees */}
+      <div className="w-1/3 min-w-[360px] flex flex-col bg-white rounded-lg shadow-sm border">
+        {/* Header */}
+        <div className="p-4 border-b">
+          <h2 className="text-lg font-semibold text-gray-900">Attendees</h2>
+          
+          {/* Search */}
+          <div className="mt-3">
             <input
               type="text"
-              placeholder="Filter by building..."
-              value={buildingFilter}
-              onChange={(e) => {
-                setBuildingFilter(e.target.value);
-                setCurrentPage(1);
-              }}
+              placeholder="Search attendees..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               className="input w-full"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Floor</label>
-            <input
-              type="text"
-              placeholder="Filter by floor..."
-              value={floorFilter}
-              onChange={(e) => {
-                setFloorFilter(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="input w-full"
-            />
-          </div>
-          <div className="flex items-end">
+
+          {/* Tabs */}
+          <div className="flex mt-3 border-b">
             <button
-              onClick={() => {
-                setBuildingFilter('');
-                setFloorFilter('');
-                setCurrentPage(1);
-              }}
-              className="btn-secondary w-full"
+              onClick={() => setActiveTab('unassigned')}
+              className={`flex-1 pb-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'unassigned'
+                  ? 'border-primary-600 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
             >
-              Clear Filters
+              Unassigned ({unassignedAttendees.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('assigned')}
+              className={`flex-1 pb-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'assigned'
+                  ? 'border-primary-600 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Assigned ({assignedAttendees.length})
             </button>
           </div>
         </div>
-      </div>
 
-      {/* Assignments Table */}
-      <div className="card">
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-            <p className="mt-2 text-gray-600">Loading assignments...</p>
-          </div>
-        ) : assignments.length === 0 ? (
-          <div className="text-center py-12">
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-            </svg>
-            <p className="mt-2 text-gray-600">No assignments found</p>
-            <button onClick={openAssignModal} className="btn-primary mt-4">
-              Create First Assignment
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Attendee</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Floor</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Building</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assigned</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {assignments.map((assignment) => (
-                    <tr key={assignment.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">
-                            {assignment.attendee?.fullName || '-'}
-                          </div>
-                          <div className="text-sm text-gray-500">
-                            {assignment.attendee?.conferenceRole || '-'}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{assignment.room?.roomNumber || '-'}</div>
-                        <div className="text-sm text-gray-500">
-                          {assignment.room?.roomType} ({assignment.room?.capacity} capacity)
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">Floor {assignment.room?.floor?.floorNumber}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {assignment.room?.floor?.building?.name || '-'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {new Date(assignment.assignedAt).toLocaleDateString()}
-                        </div>
-                        <div className="text-sm text-gray-500">
-                          {new Date(assignment.assignedAt).toLocaleTimeString()}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <button
-                          onClick={() => handleDelete(assignment.id, assignment.attendee?.fullName || 'attendee')}
-                          className="text-red-600 hover:text-red-900"
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* Attendee List */}
+        <div className="flex-1 overflow-y-auto p-2">
+          {attendeesLoading ? (
+            <div className="text-center py-12">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+              <p className="mt-2 text-gray-600 text-sm">Loading...</p>
             </div>
+          ) : activeTab === 'unassigned' ? (
+            filteredUnassigned.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500 text-sm">
+                  {searchQuery ? 'No matching unassigned attendees' : 'All attendees are assigned!'}
+                </p>
+              </div>
+            ) : (
+              filteredUnassigned.map(attendee => (
+                <div
+                  key={attendee.id}
+                  draggable
+                  onDragStart={() => onDragStart(attendee)}
+                  onClick={() => setSelectedAttendeeId(selectedAttendeeId === attendee.id ? null : attendee.id)}
+                  className={`p-3 mb-1 rounded-lg cursor-pointer border-2 transition-all ${
+                    selectedAttendeeId === attendee.id
+                      ? 'border-primary-500 bg-primary-50'
+                      : 'border-transparent hover:bg-gray-50 hover:border-gray-200'
+                  } ${draggedAttendee?.id === attendee.id ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{attendee.fullName}</p>
+                      <p className="text-xs text-gray-500">
+                        {attendee.conferenceRole || 'Attendee'}
+                        {attendee.church && ` • ${attendee.church}`}
+                      </p>
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
+                      Unassigned
+                    </span>
+                  </div>
+                </div>
+              ))
+            )
+          ) : (
+            filteredAssigned.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500 text-sm">
+                  {searchQuery ? 'No matching assigned attendees' : 'No attendees assigned yet'}
+                </p>
+              </div>
+            ) : (
+              filteredAssigned.map(attendee => {
+                const assignment = assignments.find(a => a.attendeeId === attendee.id);
+                const room = rooms.find(r => r.id === assignment?.roomId);
+                const floor = room ? floors.find(f => f.id === room.floorId) : null;
+                const building = floor ? buildings.find(b => b.id === floor.buildingId) : null;
+                
+                return (
+                  <div
+                    key={attendee.id}
+                    className="p-3 mb-1 rounded-lg border border-gray-100 hover:bg-gray-50"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{attendee.fullName}</p>
+                        <p className="text-xs text-gray-500">
+                          {room && `Room ${room.roomNumber}`}
+                          {building && ` • ${building.name}`}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => assignment && handleUnassign(assignment.id, attendee.fullName)}
+                        className="text-xs text-red-600 hover:text-red-700 font-medium"
+                      >
+                        Unassign
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )
+          )}
+        </div>
 
-            {/* Pagination */}
-            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200">
-              <div className="flex-1 flex justify-between sm:hidden">
-                <button
-                  onClick={() => setCurrentPage((p) => p - 1)}
-                  disabled={currentPage === 1}
-                  className="btn-secondary"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setCurrentPage((p) => p + 1)}
-                  disabled={currentPage === totalPages}
-                  className="btn-secondary ml-3"
-                >
-                  Next
-                </button>
-              </div>
-              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm text-gray-700">
-                    Showing <span className="font-medium">{(currentPage - 1) * limit + 1}</span> to{' '}
-                    <span className="font-medium">{Math.min(currentPage * limit, totalCount)}</span> of{' '}
-                    <span className="font-medium">{totalCount}</span> results
-                  </p>
-                </div>
-                <div>
-                  <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                    <button
-                      onClick={() => setCurrentPage((p) => p - 1)}
-                      disabled={currentPage === 1}
-                      className="btn-secondary rounded-l-md"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={() => setCurrentPage((p) => p + 1)}
-                      disabled={currentPage === totalPages}
-                      className="btn-secondary rounded-r-md"
-                    >
-                      Next
-                    </button>
-                  </nav>
-                </div>
-              </div>
-            </div>
-          </>
+        {/* Selection hint */}
+        {selectedAttendeeId && activeTab === 'unassigned' && (
+          <div className="p-3 border-t bg-primary-50">
+            <p className="text-xs text-primary-700">
+              Click a room on the right to assign, or drag this attendee to a room
+            </p>
+          </div>
         )}
       </div>
 
-      {/* Assignment Modal */}
-      {showModal && (
-        <AssignmentModal onClose={closeModal} onSave={handleAssignmentCreated} />
-      )}
-    </div>
-  );
-}
-
-/**
- * Assignment Modal - Simple room assignment interface
- */
-interface AssignmentModalProps {
-  onClose: () => void;
-  onSave: () => void;
-}
-
-function AssignmentModal({ onClose, onSave }: AssignmentModalProps) {
-  const [unassignedAttendees, setUnassignedAttendees] = useState<Attendee[]>([]);
-  const [selectedAttendeeId, setSelectedAttendeeId] = useState('');
-  const [roomId, setRoomId] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    loadUnassignedAttendees();
-  }, []);
-
-  const loadUnassignedAttendees = async () => {
-    try {
-      setLoading(true);
-      const response = await attendeeApi.getUnassigned();
-      setUnassignedAttendees(response.data);
-    } catch (error) {
-      toastError('Failed to load unassigned attendees');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!selectedAttendeeId) {
-      toastError('Please select an attendee');
-      return;
-    }
-    
-    if (!roomId.trim()) {
-      toastError('Please enter a room ID');
-      return;
-    }
-
-    try {
-      setSaving(true);
-      await assignmentApi.create({
-        attendeeId: selectedAttendeeId,
-        roomId: roomId.trim(),
-      });
-      
-      const attendee = unassignedAttendees.find((a) => a.id === selectedAttendeeId);
-      toastSuccess(`${attendee?.fullName} assigned successfully`);
-      onSave();
-    } catch (error) {
-      // Error already shown by API service
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" onClick={onClose}>
-      <div className="relative top-20 mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium text-gray-900">Assign Room</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-500">
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-            <p className="mt-2 text-gray-600">Loading attendees...</p>
-          </div>
-        ) : unassignedAttendees.length === 0 ? (
-          <div className="text-center py-12">
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="mt-2 text-gray-600">All attendees have been assigned!</p>
-            <button onClick={onClose} className="btn-primary mt-4">
-              Close
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
+      {/* RIGHT PANEL - Rooms */}
+      <div className="flex-1 flex flex-col bg-white rounded-lg shadow-sm border">
+        {/* Header & Filters */}
+        <div className="p-4 border-b">
+          <h2 className="text-lg font-semibold text-gray-900 mb-3">Rooms</h2>
+          
+          {/* Filter cascade */}
+          <div className="grid grid-cols-4 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Select Attendee <span className="text-red-500">*</span>
-              </label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Conference House</label>
               <select
-                required
-                value={selectedAttendeeId}
-                onChange={(e) => setSelectedAttendeeId(e.target.value)}
-                className="input w-full"
+                value={selectedHouseId}
+                onChange={(e) => handleHouseChange(e.target.value)}
+                className="input w-full text-sm"
               >
-                <option value="">Choose an attendee...</option>
-                {unassignedAttendees.map((attendee) => (
-                  <option key={attendee.id} value={attendee.id}>
-                    {attendee.fullName} - {attendee.conferenceRole} {attendee.phone ? `(${attendee.phone})` : ''}
+                <option value="">All Houses</option>
+                {houses.map(house => (
+                  <option key={house.id} value={house.id}>{house.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Building</label>
+              <select
+                value={selectedBuildingId}
+                onChange={(e) => handleBuildingChange(e.target.value)}
+                className="input w-full text-sm"
+                disabled={!selectedHouseId && filteredBuildings.length === 0}
+              >
+                <option value="">All Buildings</option>
+                {filteredBuildings.map(building => (
+                  <option key={building.id} value={building.id}>{building.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Floor</label>
+              <select
+                value={selectedFloorId}
+                onChange={(e) => handleFloorChange(e.target.value)}
+                className="input w-full text-sm"
+                disabled={!selectedBuildingId && filteredFloors.length === 0}
+              >
+                <option value="">All Floors</option>
+                {filteredFloors.map(floor => (
+                  <option key={floor.id} value={floor.id}>
+                    Floor {floor.floorNumber}
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-gray-500 mt-1">
-                {unassignedAttendees.length} unassigned attendee{unassignedAttendees.length !== 1 ? 's' : ''}
-              </p>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Room ID <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={roomId}
-                onChange={(e) => setRoomId(e.target.value)}
-                placeholder="Enter room ID from database"
-                className="input w-full"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Enter the exact room UUID as it appears in the database
-              </p>
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-              <p className="text-sm text-blue-800">
-                <strong>Note:</strong> Make sure the room ID exists and has available capacity before assigning.
-                You can find room IDs from the Rooms management page.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-4 border-t">
-              <button type="button" onClick={onClose} className="btn-secondary">
-                Cancel
-              </button>
-              <button type="submit" disabled={saving} className="btn-primary">
-                {saving ? 'Assigning...' : 'Assign Room'}
+            <div className="flex items-end">
+              <button onClick={clearFilters} className="btn-secondary w-full text-sm">
+                Clear
               </button>
             </div>
-          </form>
-        )}
+          </div>
+        </div>
+
+        {/* Room Grid */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {structureLoading ? (
+            <div className="text-center py-12">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+              <p className="mt-2 text-gray-600 text-sm">Loading rooms...</p>
+            </div>
+          ) : filteredRooms.length === 0 ? (
+            <div className="text-center py-12">
+              <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+              </svg>
+              <p className="mt-2 text-gray-500">No rooms found with current filters</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filteredRooms.map(room => {
+                const occupancy = getRoomOccupancy(room.id);
+                const roomAssignments = getRoomAssignments(room.id);
+                const floor = floors.find(f => f.id === room.floorId);
+                const building = floor ? buildings.find(b => b.id === floor.buildingId) : null;
+                const house = building ? houses.find(h => h.id === building.conferenceHouseId) : null;
+                const isFull = occupancy >= room.capacity;
+                const isEmpty = occupancy === 0;
+
+                return (
+                  <div
+                    key={room.id}
+                    onDragOver={onDragOver}
+                    onDrop={() => onDrop(room.id)}
+                    onClick={() => {
+                      if (selectedAttendeeId && !isFull) {
+                        handleAssignToRoom(selectedAttendeeId, room.id);
+                      }
+                    }}
+                    className={`border-2 rounded-lg p-4 transition-all ${
+                      isFull
+                        ? 'border-red-200 bg-red-50 cursor-not-allowed'
+                        : selectedAttendeeId && !isFull
+                        ? 'border-primary-400 bg-primary-50 cursor-pointer hover:border-primary-500 hover:shadow-md'
+                        : 'border-gray-200 bg-white hover:border-gray-300 cursor-pointer'
+                    } ${draggedAttendee && !isFull ? 'border-dashed border-primary-400 bg-primary-50' : ''}`}
+                  >
+                    {/* Room header */}
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <h3 className="font-semibold text-gray-900">Room {room.roomNumber}</h3>
+                        <p className="text-xs text-gray-500">
+                          {house?.name && `${house.name} → `}
+                          {building?.name && `${building.name} → `}
+                          Floor {floor?.floorNumber}
+                        </p>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                        isFull
+                          ? 'bg-red-100 text-red-700'
+                          : isEmpty
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-blue-100 text-blue-700'
+                      }`}>
+                        {occupancy}/{room.capacity}
+                      </span>
+                    </div>
+
+                    {/* Room type */}
+                    <span className="inline-block text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 mb-3">
+                      {room.roomType}
+                    </span>
+
+                    {/* Assigned attendees in this room */}
+                    {roomAssignments.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-gray-100">
+                        <p className="text-xs font-medium text-gray-500 mb-2">Assigned:</p>
+                        <div className="space-y-1">
+                          {roomAssignments.map(assignment => (
+                            <div key={assignment.id} className="flex items-center justify-between text-xs">
+                              <span className="text-gray-700 truncate mr-2">
+                                {assignment.attendee?.fullName || 'Unknown'}
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleUnassign(assignment.id, assignment.attendee?.fullName || 'attendee');
+                                }}
+                                className="text-red-500 hover:text-red-700 flex-shrink-0"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Drop hint */}
+                    {draggedAttendee && !isFull && (
+                      <p className="text-xs text-primary-600 mt-2 font-medium">
+                        Drop to assign here
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

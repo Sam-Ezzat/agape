@@ -11,9 +11,10 @@
  * - GET /api/attendees/:id/details (view assignment)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
+import { useSocket } from '@/hooks/useSocket';
 import type { Attendee } from '@/types/api';
 
 export default function CheckInPage() {
@@ -22,6 +23,56 @@ export default function CheckInPage() {
   const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const socket = useSocket();
+
+  // Listen for check-in/out events from socket
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleAttendeeUpdate = async (payload: any) => {
+      const attendeeId = payload?.data?.attendeeId || payload?.attendeeId;
+      
+      // Refresh selected attendee if it's the one that was updated
+      if (selectedAttendee && attendeeId === selectedAttendee.id) {
+        try {
+          const response = await attendeeApi.getDetails(selectedAttendee.id);
+          setSelectedAttendee(response.data);
+          
+          // Update in search results
+          setSearchResults((prev) =>
+            prev.map((a) => (a.id === response.data.id ? response.data : a))
+          );
+        } catch (error) {
+          console.error('Failed to refresh attendee:', error);
+        }
+      }
+      
+      // Also update search results if the updated attendee is in the list
+      if (attendeeId && searchResults.length > 0) {
+        const attendeeInList = searchResults.find(a => a.id === attendeeId);
+        if (attendeeInList) {
+          try {
+            const response = await attendeeApi.getById(attendeeId);
+            setSearchResults((prev) =>
+              prev.map((a) => (a.id === attendeeId ? response.data : a))
+            );
+          } catch (error) {
+            console.error('Failed to refresh search result:', error);
+          }
+        }
+      }
+    };
+
+    socket.on('attendee:checked-in', handleAttendeeUpdate);
+    socket.on('attendee:checked-out', handleAttendeeUpdate);
+    socket.on('attendee:updated', handleAttendeeUpdate);
+
+    return () => {
+      socket.off('attendee:checked-in', handleAttendeeUpdate);
+      socket.off('attendee:checked-out', handleAttendeeUpdate);
+      socket.off('attendee:updated', handleAttendeeUpdate);
+    };
+  }, [socket, selectedAttendee, searchResults]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,19 +117,24 @@ export default function CheckInPage() {
       setProcessing(true);
       await attendeeApi.checkIn(selectedAttendee.id);
       toastSuccess(`${selectedAttendee.fullName} checked in successfully`);
-      
-      // Refresh attendee details
-      const response = await attendeeApi.getDetails(selectedAttendee.id);
-      setSelectedAttendee(response.data);
-      
-      // Update in search results
-      setSearchResults((prev) =>
-        prev.map((a) => (a.id === response.data.id ? response.data : a))
-      );
     } catch (error) {
       // Error already shown by API service
     } finally {
       setProcessing(false);
+      
+      // Always refresh attendee details to show current state
+      // (even if there was an error like "already checked in")
+      try {
+        const response = await attendeeApi.getDetails(selectedAttendee.id);
+        setSelectedAttendee(response.data);
+        
+        // Update in search results
+        setSearchResults((prev) =>
+          prev.map((a) => (a.id === response.data.id ? response.data : a))
+        );
+      } catch (refreshError) {
+        console.error('Failed to refresh attendee details:', refreshError);
+      }
     }
   };
 
@@ -93,19 +149,24 @@ export default function CheckInPage() {
       setProcessing(true);
       await attendeeApi.checkOut(selectedAttendee.id);
       toastSuccess(`${selectedAttendee.fullName} checked out successfully`);
-      
-      // Refresh attendee details
-      const response = await attendeeApi.getDetails(selectedAttendee.id);
-      setSelectedAttendee(response.data);
-      
-      // Update in search results
-      setSearchResults((prev) =>
-        prev.map((a) => (a.id === response.data.id ? response.data : a))
-      );
     } catch (error) {
       // Error already shown by API service
     } finally {
       setProcessing(false);
+      
+      // Always refresh attendee details to show current state
+      // (even if there was an error like "already checked out")
+      try {
+        const response = await attendeeApi.getDetails(selectedAttendee.id);
+        setSelectedAttendee(response.data);
+        
+        // Update in search results
+        setSearchResults((prev) =>
+          prev.map((a) => (a.id === response.data.id ? response.data : a))
+        );
+      } catch (refreshError) {
+        console.error('Failed to refresh attendee details:', refreshError);
+      }
     }
   };
 
@@ -165,15 +226,19 @@ export default function CheckInPage() {
                       <div>
                         <div className="font-medium text-gray-900">{attendee.fullName}</div>
                         <div className="text-sm text-gray-500">{attendee.phone || 'No phone'}</div>
-                        {attendee.churchOrg && (
-                          <div className="text-sm text-gray-500">{attendee.churchOrg}</div>
+                        {attendee.church && (
+                          <div className="text-sm text-gray-500">{attendee.church}</div>
                         )}
                       </div>
                       <div className="flex flex-col items-end gap-1">
                         <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
                           {attendee.conferenceRole}
                         </span>
-                        {attendee.checkedInAt ? (
+                        {attendee.checkedOutAt ? (
+                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-orange-100 text-orange-800">
+                            Checked Out
+                          </span>
+                        ) : attendee.checkedInAt ? (
                           <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
                             Checked In
                           </span>
@@ -231,7 +296,7 @@ export default function CheckInPage() {
                     </div>
                     <div className="flex justify-between">
                       <dt className="text-sm text-gray-600">Church/Org:</dt>
-                      <dd className="text-sm font-medium text-gray-900">{selectedAttendee.churchOrg || '-'}</dd>
+                      <dd className="text-sm font-medium text-gray-900">{selectedAttendee.church || '-'}</dd>
                     </div>
                     <div className="flex justify-between">
                       <dt className="text-sm text-gray-600">Role:</dt>
@@ -251,7 +316,11 @@ export default function CheckInPage() {
                     <div className="flex justify-between">
                       <dt className="text-sm text-gray-600">Status:</dt>
                       <dd>
-                        {selectedAttendee.checkedInAt ? (
+                        {selectedAttendee.checkedOutAt ? (
+                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-orange-100 text-orange-800">
+                            Checked Out
+                          </span>
+                        ) : selectedAttendee.checkedInAt ? (
                           <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
                             Checked In
                           </span>
@@ -331,21 +400,21 @@ export default function CheckInPage() {
 
                 {/* Action Buttons */}
                 <div className="pt-4 border-t space-y-2">
-                  {!selectedAttendee.checkedInAt ? (
-                    <button
-                      onClick={handleCheckIn}
-                      disabled={processing}
-                      className="btn-primary w-full"
-                    >
-                      {processing ? 'Processing...' : '✓ Check In'}
-                    </button>
-                  ) : (
+                  {selectedAttendee.checkedInAt && !selectedAttendee.checkedOutAt ? (
                     <button
                       onClick={handleCheckOut}
                       disabled={processing}
                       className="btn-secondary w-full"
                     >
                       {processing ? 'Processing...' : '✗ Check Out'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleCheckIn}
+                      disabled={processing}
+                      className="btn-primary w-full"
+                    >
+                      {processing ? 'Processing...' : '✓ Check In'}
                     </button>
                   )}
                 </div>

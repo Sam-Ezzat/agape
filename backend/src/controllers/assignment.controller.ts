@@ -52,7 +52,13 @@ export class AssignmentController {
     const result = await this.assignmentService.list(params);
     res.json({
       success: true,
-      ...result,
+      data: result.data,
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        pages: result.totalPages,
+      },
     });
   }
 

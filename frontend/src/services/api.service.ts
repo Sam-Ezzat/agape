@@ -134,12 +134,12 @@ export const attendeeApi = {
   },
 
   /**
-   * PUT /api/attendees/:id
+   * PATCH /api/attendees/:id
    * Update attendee
    */
   update: async (id: string, dto: UpdateAttendeeDTO): Promise<ApiResponse<Attendee>> => {
     try {
-      const { data } = await apiClient.put(`/attendees/${id}`, dto);
+      const { data } = await apiClient.patch(`/attendees/${id}`, dto);
       return data;
     } catch (error) {
       return handleApiError(error as Error);

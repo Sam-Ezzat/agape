@@ -43,7 +43,8 @@ export class AttendeeService {
         NotificationEvent.ATTENDEE_CREATED,
         NotificationType.SUCCESS,
         `Attendee "${attendee.fullName}" registered`,
-        'Attendee Registered'
+        'Attendee Registered',
+        { attendeeId: attendee.id, fullName: attendee.fullName }
       );
     } catch (error) {
       console.error('Failed to send notification:', error);
@@ -111,7 +112,8 @@ export class AttendeeService {
         NotificationEvent.ATTENDEE_UPDATED,
         NotificationType.INFO,
         `Attendee "${updated.fullName}" updated`,
-        'Attendee Updated'
+        'Attendee Updated',
+        { attendeeId: id, fullName: updated.fullName }
       );
     } catch (error) {
       console.error('Failed to send notification:', error);
@@ -156,7 +158,8 @@ export class AttendeeService {
         NotificationEvent.ATTENDEE_DELETED,
         NotificationType.WARNING,
         `Attendee "${attendee.fullName}" deleted`,
-        'Attendee Deleted'
+        'Attendee Deleted',
+        { attendeeId: id, fullName: attendee.fullName }
       );
     } catch (error) {
       console.error('Failed to send notification:', error);
@@ -201,7 +204,8 @@ export class AttendeeService {
         NotificationEvent.ATTENDEE_CHECKED_IN,
         NotificationType.SUCCESS,
         `${checkedIn.fullName} checked in`,
-        'Check-In Complete'
+        'Check-In Complete',
+        { attendeeId: id, fullName: checkedIn.fullName }
       );
     } catch (error) {
       console.error('Failed to send notification:', error);
@@ -258,7 +262,8 @@ export class AttendeeService {
         NotificationEvent.ATTENDEE_CHECKED_OUT,
         NotificationType.INFO,
         `${checkedOut.fullName} checked out`,
-        'Check-Out Complete'
+        'Check-Out Complete',
+        { attendeeId: id, fullName: checkedOut.fullName }
       );
     } catch (error) {
       console.error('Failed to send notification:', error);

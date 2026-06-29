@@ -97,10 +97,9 @@ export default function RoomsPage() {
 
   const getRoomTypeColor = (type: RoomType) => {
     switch (type) {
-      case RoomType.SINGLE: return 'bg-blue-100 text-blue-800';
-      case RoomType.DOUBLE: return 'bg-green-100 text-green-800';
-      case RoomType.SUITE: return 'bg-purple-100 text-purple-800';
-      case RoomType.DORMITORY: return 'bg-orange-100 text-orange-800';
+      case RoomType.GENERAL: return 'bg-blue-100 text-blue-800';
+      case RoomType.VIP: return 'bg-purple-100 text-purple-800';
+      case RoomType.FAMILY: return 'bg-green-100 text-green-800';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
@@ -214,11 +213,6 @@ export default function RoomsPage() {
                     <p className="text-xs text-gray-500 mt-1">
                       {building?.name} - Floor {floor?.floorNumber}
                     </p>
-                    {room.amenities && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        {JSON.stringify(room.amenities)}
-                      </p>
-                    )}
                   </div>
                   
                   <div className="text-xs text-gray-400 pt-2 border-t">
@@ -260,8 +254,7 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
     roomNumber: room?.roomNumber || '',
     floorId: room?.floorId || '',
     capacity: room?.capacity || 1,
-    roomType: room?.roomType || RoomType.SINGLE,
-    amenities: room?.amenities ? JSON.stringify(room.amenities) : '',
+    roomType: room?.roomType || RoomType.GENERAL,
   });
 
   const [selectedBuildingId, setSelectedBuildingId] = useState('');
@@ -275,23 +268,11 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
     e.preventDefault();
     
     try {
-      // Parse amenities if provided
-      let amenitiesData = null;
-      if (formData.amenities.trim()) {
-        try {
-          amenitiesData = JSON.parse(formData.amenities);
-        } catch {
-          toastError('Invalid JSON format for amenities');
-          return;
-        }
-      }
-
       const submitData = {
         roomNumber: formData.roomNumber,
         floorId: formData.floorId,
         capacity: formData.capacity,
         roomType: formData.roomType,
-        amenities: amenitiesData,
       };
 
       const url = room
@@ -387,25 +368,10 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
               onChange={(e) => setFormData({ ...formData, roomType: e.target.value as RoomType })}
               className="input"
             >
-              <option value={RoomType.SINGLE}>Single</option>
-              <option value={RoomType.DOUBLE}>Double</option>
-              <option value={RoomType.SUITE}>Suite</option>
-              <option value={RoomType.DORMITORY}>Dormitory</option>
+              <option value={RoomType.GENERAL}>General</option>
+              <option value={RoomType.VIP}>VIP</option>
+              <option value={RoomType.FAMILY}>Family</option>
             </select>
-          </div>
-
-          <div>
-            <label className="label">Amenities (JSON)</label>
-            <textarea
-              value={formData.amenities}
-              onChange={(e) => setFormData({ ...formData, amenities: e.target.value })}
-              className="input"
-              rows={3}
-              placeholder='{"wifi": true, "ac": true}'
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Optional. Provide as JSON object
-            </p>
           </div>
 
           <div className="flex gap-2 justify-end pt-4">

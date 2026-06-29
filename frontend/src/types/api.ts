@@ -17,6 +17,7 @@ export enum ConferenceRole {
   PASTOR = 'PASTOR',
   VIP = 'VIP',
   ATTENDEE = 'ATTENDEE',
+  EXCEPTION = 'EXCEPTION',
   STAFF = 'STAFF',
   VOLUNTEER = 'VOLUNTEER',
   OTHER = 'OTHER',
@@ -29,10 +30,9 @@ export enum PaymentStatus {
 }
 
 export enum RoomType {
-  SINGLE = 'SINGLE',
-  DOUBLE = 'DOUBLE',
-  SUITE = 'SUITE',
-  DORMITORY = 'DORMITORY',
+  GENERAL = 'GENERAL',
+  VIP = 'VIP',
+  FAMILY = 'FAMILY',
 }
 
 // Core entities matching Prisma schema
@@ -91,6 +91,7 @@ export interface Attendee {
   church?: string;
   area?: string;
   governorate?: string;
+  isServant?: boolean;
   arrivalMethod?: string;
   busPickupPoint?: string;
   paymentMethod?: string;
