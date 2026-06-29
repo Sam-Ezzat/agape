@@ -1,0 +1,114 @@
+# WHY: Continuous Integration workflow runs on all PRs and pushes
+# Ensures code quality and tests pass before merging
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # Backend lint and test
+  backend-ci:
+    name: Backend CI
+    runs-on: ubuntu-latest
+    
+    services:
+      # WHY: Spin up PostgreSQL for integration tests
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agape_conference_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run Prisma generate
+        working-directory: backend
+        run: npx prisma generate
+
+      - name: Run linter
+        working-directory: backend
+        run: npm run lint
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agape_conference_test?schema=public
+          NODE_ENV: test
+        run: npm run test
+
+      - name: Build
+        working-directory: backend
+        run: npm run build
+
+  # Frontend lint and test
+  frontend-ci:
+    name: Frontend CI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run linter
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run tests
+        working-directory: frontend
+        run: npm run test
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  # Check if all jobs passed
+  ci-status:
+    name: CI Status Check
+    runs-on: ubuntu-latest
+    needs: [backend-ci, frontend-ci]
+    if: always()
+    
+    steps:
+      - name: Check CI status
+        run: |
+          if [ "${{ needs.backend-ci.result }}" != "success" ] || [ "${{ needs.frontend-ci.result }}" != "success" ]; then
+            echo "CI failed"
+            exit 1
+          fi
+          echo "All CI checks passed!"

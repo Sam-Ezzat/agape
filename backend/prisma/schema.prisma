@@ -1,0 +1,214 @@
+// WHY: Prisma schema defines the entire database structure for the conference management system
+// This schema implements a hierarchical structure: ConferenceHouse → Building → Floor → Room
+// with attendees that can be assigned to rooms, tracked with audit logs
+
+generator client {
+  provider = "prisma-client-js"
+  // WHY: Enable full-text search for attendee names (performance optimization)
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // WHY: Direct URL needed for migrations in serverless environments (Vercel)
+  directUrl = env("DIRECT_URL")
+}
+
+// WHY: Top-level entity representing the entire conference venue
+// A conference house can have multiple buildings
+model ConferenceHouse {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  buildings   Building[]
+  
+  @@map("conference_houses")
+}
+
+// WHY: Buildings within a conference house (e.g., "Building A", "North Wing")
+model Building {
+  id                 String          @id @default(uuid())
+  conferenceHouseId  String          @map("conference_house_id")
+  name               String
+  floorCount         Int             @map("floor_count")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+  
+  // Relations
+  conferenceHouse    ConferenceHouse @relation(fields: [conferenceHouseId], references: [id], onDelete: Cascade)
+  floors             Floor[]
+  
+  // WHY: Ensure unique building names within a conference house
+  @@unique([conferenceHouseId, name])
+  @@index([conferenceHouseId])
+  @@map("buildings")
+}
+
+// WHY: Floors within a building to organize rooms hierarchically
+model Floor {
+  id          String   @id @default(uuid())
+  buildingId  String   @map("building_id")
+  floorNumber Int      @map("floor_number")
+  name        String   // e.g., "First Floor", "Ground Level", "الطابق الأول"
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  building    Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  rooms       Room[]
+  
+  // WHY: Ensure unique floor numbers within a building
+  @@unique([buildingId, floorNumber])
+  @@index([buildingId])
+  @@map("floors")
+}
+
+// WHY: Individual rooms where attendees are assigned
+model Room {
+  id          String   @id @default(uuid())
+  floorId     String   @map("floor_id")
+  roomNumber  String   @map("room_number")
+  capacity    Int      // Maximum number of people
+  roomType    RoomType @default(GENERAL) @map("room_type")
+  amenities   Json?    // Flexible JSONB for features: ["AC", "Wheelchair accessible", "مكيف"]
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  floor       Floor    @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  assignments RoomAssignment[]
+  
+  // WHY: Ensure unique room numbers within a floor
+  @@unique([floorId, roomNumber])
+  @@index([floorId])
+  @@map("rooms")
+}
+
+// WHY: Room types for different accommodation styles
+enum RoomType {
+  GENERAL
+  VIP
+  FAMILY
+}
+
+// WHY: Conference attendees with complete profile information
+// Supports Arabic names and special needs tracking
+// Updated to match conference registration Excel structure
+model Attendee {
+  id                String          @id @default(uuid())
+  ticketId          String?         @unique @map("ticket_id") // Conference ticket ID (e.g., TO-20260607-578181)
+  fullName          String          @map("full_name")
+  phone             String?
+  email             String?
+  age               Int?
+  gender            Gender?
+  church            String?         // Church name (renamed from churchOrg)
+  area              String?         // Area/neighborhood (e.g., "ain shams")
+  governorate       String?         // Governorate/province (e.g., "القاهرة")
+  isServant         Boolean?        @map("is_servant") // Whether attendee is a servant in their church
+  
+  // Travel & Transportation
+  arrivalMethod     String?         @map("arrival_method") // e.g., "باص المؤتمر", "ملاكي"
+  busPickupPoint    String?         @map("bus_pickup_point") // Bus pickup location
+  
+  // Payment Information
+  paymentMethod     String?         @map("payment_method") // e.g., "Orange Cash", "InstaPay"
+  paymentStatus     PaymentStatus?  @default(PENDING) @map("payment_status")
+  transactionNumber String?         @map("transaction_number") // Payment transaction reference
+  
+  // Conference Management
+  conferenceRole    ConferenceRole  @default(ATTENDEE) @map("conference_role")
+  notes             String?         @db.Text // Special needs, preferences, medical info
+  roomingNotes      String?         @db.Text @map("rooming_notes") // Room assignment preferences
+  internalNotes     String?         @db.Text @map("internal_notes") // Admin-only notes
+  
+  // Check-in Tracking
+  checkedInAt       DateTime?       @map("checked_in_at")
+  checkedOutAt      DateTime?       @map("checked_out_at")
+  checkedInBy       String?         @map("checked_in_by") // Staff member who checked in
+  
+  // Timestamps
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  deletedAt         DateTime?       @map("deleted_at") // Soft delete
+  
+  // Relations
+  assignment        RoomAssignment?
+  
+  // WHY: Indexes for fast searches (supports Arabic text with trigram similarity)
+  @@index([fullName])
+  @@index([ticketId])
+  @@index([conferenceRole])
+  @@index([checkedInAt])
+  @@index([paymentStatus])
+  @@index([email])
+  @@map("attendees")
+}
+
+// WHY: Gender enum for attendees (can be used for room assignment rules if needed)
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+// WHY: Conference roles to categorize attendees and provide special handling
+enum ConferenceRole {
+  LEADER
+  PASTOR
+  VIP
+  ATTENDEE
+  EXCEPTION
+  STAFF
+  VOLUNTEER
+  OTHER
+}
+
+// WHY: Payment status tracking for conference registration
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+// WHY: Maps attendees to rooms (one attendee per room, enforced by unique constraint)
+// This prevents double-booking at the database level
+model RoomAssignment {
+  id          String   @id @default(uuid())
+  roomId      String   @map("room_id")
+  attendeeId  String   @unique @map("attendee_id") // WHY: Unique ensures one person = one room
+  assignedAt  DateTime @default(now()) @map("assigned_at")
+  assignedBy  String?  @map("assigned_by") // Future: user ID who made the assignment
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  attendee    Attendee @relation(fields: [attendeeId], references: [id], onDelete: Cascade)
+  
+  // WHY: Fast lookups by room (to show all people in a room)
+  @@index([roomId])
+  @@map("room_assignments")
+}
+
+// WHY: Complete audit trail for all assignment operations
+// Enables answering "who assigned whom, when, and why" for accountability
+model AuditLog {
+  id          String   @id @default(uuid())
+  action      String   // "assign", "unassign", "check_in", "check_out", "create", "update", "delete"
+  entityType  String   @map("entity_type") // "attendee", "room", "assignment", "building"
+  entityId    String   @map("entity_id")
+  details     Json?    // Flexible JSONB for action-specific data
+  performedBy String?  @map("performed_by") // Future: user ID
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // WHY: Fast queries by entity (e.g., "show me all actions on this attendee")
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
