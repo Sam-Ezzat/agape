@@ -19,6 +19,7 @@ export default function RoomsPage() {
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
   const [filterFloorId, setFilterFloorId] = useState<string>('');
   const [filterBuildingId, setFilterBuildingId] = useState<string>('');
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   useEffect(() => {
     loadRooms();
@@ -29,7 +30,7 @@ export default function RoomsPage() {
   const loadRooms = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3000/api/rooms');
+      const response = await fetch(`${baseUrl}/rooms`);
       const data = await response.json();
       setRooms(data.data || []);
     } catch (error) {
@@ -41,7 +42,7 @@ export default function RoomsPage() {
 
   const loadFloors = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/floors');
+      const response = await fetch(`${baseUrl}/floors`);
       const data = await response.json();
       setFloors(data.data || []);
     } catch (error) {
@@ -51,7 +52,7 @@ export default function RoomsPage() {
 
   const loadBuildings = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/buildings');
+      const response = await fetch(`${baseUrl}/buildings`);
       const data = await response.json();
       setBuildings(data.data || []);
     } catch (error) {
@@ -63,7 +64,7 @@ export default function RoomsPage() {
     if (!confirm(`Are you sure you want to delete Room ${roomNumber}?`)) return;
     
     try {
-      const response = await fetch(`http://localhost:3000/api/rooms/${id}`, {
+      const response = await fetch(`${baseUrl}/rooms/${id}`, {
         method: 'DELETE',
       });
       if (!response.ok) throw new Error('Delete failed');
@@ -258,6 +259,7 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
   });
 
   const [selectedBuildingId, setSelectedBuildingId] = useState('');
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   // Filter floors by selected building
   const filteredFloors = selectedBuildingId
@@ -276,8 +278,8 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
       };
 
       const url = room
-        ? `http://localhost:3000/api/rooms/${room.id}`
-        : 'http://localhost:3000/api/rooms';
+        ? `${baseUrl}/rooms/${room.id}`
+        : `${baseUrl}/rooms`;
       
       const response = await fetch(url, {
         method: room ? 'PUT' : 'POST',

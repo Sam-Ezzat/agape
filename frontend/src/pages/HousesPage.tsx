@@ -15,6 +15,8 @@ export default function HousesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingHouse, setEditingHouse] = useState<ConferenceHouse | null>(null);
 
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+
   useEffect(() => {
     loadHouses();
   }, []);
@@ -22,7 +24,7 @@ export default function HousesPage() {
   const loadHouses = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3000/api/conference-houses');
+      const response = await fetch(`${baseUrl}/conference-houses`);
       const data = await response.json();
       setHouses(data.data || []);
     } catch (error) {
@@ -36,7 +38,7 @@ export default function HousesPage() {
     if (!confirm(`Are you sure you want to delete ${name}?`)) return;
     
     try {
-      const response = await fetch(`http://localhost:3000/api/conference-houses/${id}`, {
+      const response = await fetch(`${baseUrl}/conference-houses/${id}`, {
         method: 'DELETE',
       });
       if (!response.ok) throw new Error('Delete failed');
@@ -145,6 +147,7 @@ function HouseModal({ house, onClose, onSave }: {
   const [name, setName] = useState(house?.name || '');
   const [description, setDescription] = useState(house?.description || '');
   const [saving, setSaving] = useState(false);
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -157,8 +160,8 @@ function HouseModal({ house, onClose, onSave }: {
     try {
       setSaving(true);
       const url = house
-        ? `http://localhost:3000/api/conference-houses/${house.id}`
-        : 'http://localhost:3000/api/conference-houses';
+        ? `${baseUrl}/conference-houses/${house.id}`
+        : `${baseUrl}/conference-houses`;
       
       const response = await fetch(url, {
         method: house ? 'PUT' : 'POST',

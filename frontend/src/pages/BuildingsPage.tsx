@@ -17,6 +17,8 @@ export default function BuildingsPage() {
   const [editingBuilding, setEditingBuilding] = useState<Building | null>(null);
   const [filterHouseId, setFilterHouseId] = useState<string>('');
 
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+
   useEffect(() => {
     loadBuildings();
     loadHouses();
@@ -25,7 +27,7 @@ export default function BuildingsPage() {
   const loadBuildings = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3000/api/buildings');
+      const response = await fetch(`${baseUrl}/buildings`);
       const data = await response.json();
       setBuildings(data.data || []);
     } catch (error) {
@@ -37,7 +39,7 @@ export default function BuildingsPage() {
 
   const loadHouses = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/conference-houses');
+      const response = await fetch(`${baseUrl}/conference-houses`);
       const data = await response.json();
       setHouses(data.data || []);
     } catch (error) {
@@ -49,7 +51,7 @@ export default function BuildingsPage() {
     if (!confirm(`Are you sure you want to delete ${name}? This will also delete all floors and rooms in this building.`)) return;
     
     try {
-      const response = await fetch(`http://localhost:3000/api/buildings/${id}`, {
+      const response = await fetch(`${baseUrl}/buildings/${id}`, {
         method: 'DELETE',
       });
       if (!response.ok) throw new Error('Delete failed');
@@ -185,14 +187,15 @@ function BuildingModal({ building, houses, onClose, onSave }: BuildingModalProps
     conferenceHouseId: building?.conferenceHouseId || '',
     floorCount: building?.floorCount || 1,
   });
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     try {
       const url = building
-        ? `http://localhost:3000/api/buildings/${building.id}`
-        : 'http://localhost:3000/api/buildings';
+        ? `${baseUrl}/buildings/${building.id}`
+        : `${baseUrl}/buildings`;
       
       const response = await fetch(url, {
         method: building ? 'PUT' : 'POST',

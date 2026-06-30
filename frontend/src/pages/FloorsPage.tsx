@@ -17,6 +17,8 @@ export default function FloorsPage() {
   const [editingFloor, setEditingFloor] = useState<Floor | null>(null);
   const [filterBuildingId, setFilterBuildingId] = useState<string>('');
 
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+
   useEffect(() => {
     loadFloors();
     loadBuildings();
@@ -25,7 +27,7 @@ export default function FloorsPage() {
   const loadFloors = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3000/api/floors');
+      const response = await fetch(`${baseUrl}/floors`);
       const data = await response.json();
       setFloors(data.data || []);
     } catch (error) {
@@ -37,7 +39,7 @@ export default function FloorsPage() {
 
   const loadBuildings = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/buildings');
+      const response = await fetch(`${baseUrl}/buildings`);
       const data = await response.json();
       setBuildings(data.data || []);
     } catch (error) {
@@ -49,7 +51,7 @@ export default function FloorsPage() {
     if (!confirm(`Are you sure you want to delete ${name}? This will also delete all rooms on this floor.`)) return;
     
     try {
-      const response = await fetch(`http://localhost:3000/api/floors/${id}`, {
+      const response = await fetch(`${baseUrl}/floors/${id}`, {
         method: 'DELETE',
       });
       if (!response.ok) throw new Error('Delete failed');
@@ -185,14 +187,15 @@ function FloorModal({ floor, buildings, onClose, onSave }: FloorModalProps) {
     name: floor?.name || '',
     buildingId: floor?.buildingId || '',
   });
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     try {
       const url = floor
-        ? `http://localhost:3000/api/floors/${floor.id}`
-        : 'http://localhost:3000/api/floors';
+        ? `${baseUrl}/floors/${floor.id}`
+        : `${baseUrl}/floors`;
       
       const response = await fetch(url, {
         method: floor ? 'PUT' : 'POST',
