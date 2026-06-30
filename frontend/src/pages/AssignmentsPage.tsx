@@ -82,11 +82,12 @@ export default function AssignmentsPage() {
     try {
       setStructureLoading(true);
       
+      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
       const [housesRes, buildingsRes, floorsRes, roomsRes] = await Promise.all([
-        fetch('http://localhost:3000/api/conference-houses').then(r => r.json()),
-        fetch('http://localhost:3000/api/buildings').then(r => r.json()),
-        fetch('http://localhost:3000/api/floors').then(r => r.json()),
-        fetch('http://localhost:3000/api/rooms').then(r => r.json()),
+        fetch(`${baseUrl}/conference-houses`).then(r => r.json()),
+        fetch(`${baseUrl}/buildings`).then(r => r.json()),
+        fetch(`${baseUrl}/floors`).then(r => r.json()),
+        fetch(`${baseUrl}/rooms`).then(r => r.json()),
       ]);
 
       setHouses(housesRes.data || []);
