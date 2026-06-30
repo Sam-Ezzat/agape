@@ -63,7 +63,7 @@ export abstract class BaseRepository<T, TModel> {
   async findAll(skip?: number, limit?: number): Promise<T[]> {
     const options: any = {};
     if (skip !== undefined) options.skip = skip;
-    if (limit !== undefined) options.limit = limit;
+    if (limit !== undefined) options.take = limit;
     return (this.model as any).findMany(options) as Promise<T[]>;
   }
 
