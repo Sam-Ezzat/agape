@@ -31,7 +31,7 @@ export class FloorService {
     // Business rule: Building must exist
     const building = await this.buildingRepository.findById(data.buildingId);
     if (!building) {
-      throw new AppError('Building not found', 404);
+      throw new AppError(404, 'Building not found');
     }
 
     // Business rule: Check for duplicate floor number in building
@@ -41,8 +41,8 @@ export class FloorService {
     );
     if (existing) {
       throw new AppError(
-        `Floor ${data.floorNumber} already exists in ${building.name}`,
-        409
+        409,
+        `Floor ${data.floorNumber} already exists in ${building.name}`
       );
     }
 
@@ -73,7 +73,7 @@ export class FloorService {
       : await this.floorRepository.findById(id);
 
     if (!floor) {
-      throw new AppError('Floor not found', 404);
+      throw new AppError(404, 'Floor not found');
     }
 
     return floor;
@@ -86,7 +86,7 @@ export class FloorService {
     const floor = await this.floorRepository.findByIdWithFullDetails(id);
 
     if (!floor) {
-      throw new AppError('Floor not found', 404);
+      throw new AppError(404, 'Floor not found');
     }
 
     return floor;
@@ -99,7 +99,7 @@ export class FloorService {
     // Verify building exists
     const building = await this.buildingRepository.findById(buildingId);
     if (!building) {
-      throw new AppError('Building not found', 404);
+      throw new AppError(404, 'Building not found');
     }
 
     return this.floorRepository.findByBuildingId(buildingId);
@@ -126,7 +126,7 @@ export class FloorService {
         data.floorNumber
       );
       if (duplicate) {
-        throw new AppError('Floor number already exists in this building', 409);
+        throw new AppError(409, 'Floor number already exists in this building');
       }
     }
 

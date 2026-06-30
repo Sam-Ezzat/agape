@@ -53,7 +53,10 @@ export class ExcelService {
   parseAttendeesFromExcel(buffer: Buffer): { data: AttendeeExcelRow[]; errors: ValidationError[] } {
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     // Use first sheet (typically "Registrations")
-    const sheetName = workbook.SheetNames[0];
+    const sheetName = workbook.SheetNames[0] || '';
+    if (!sheetName) {
+      return { data: [], errors: [{ row: 0, field: 'sheet', value: '', message: 'Sheet not found' }] };
+    }
     const sheet = workbook.Sheets[sheetName];
     
     // Convert sheet to JSON

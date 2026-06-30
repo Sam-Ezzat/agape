@@ -31,7 +31,7 @@ export class RoomService {
     // Business rule: Floor must exist
     const floor = await this.floorRepository.findById(data.floorId);
     if (!floor) {
-      throw new AppError('Floor not found', 404);
+      throw new AppError(404, 'Floor not found');
     }
 
     // Business rule: Check for duplicate room number on floor
@@ -41,12 +41,12 @@ export class RoomService {
     );
     if (existing) {
       throw new AppError(
-        `Room ${data.roomNumber} already exists on this floor`,
-        409
+        409,
+        `Room ${data.roomNumber} already exists on this floor`
       );
     }
 
-    const room = await this.roomRepository.create(data);
+    const room = await this.roomRepository.create(data as any);
 
     // Notify clients
     try {
@@ -73,7 +73,7 @@ export class RoomService {
       : await this.roomRepository.findById(id);
 
     if (!room) {
-      throw new AppError('Room not found', 404);
+      throw new AppError(404, 'Room not found');
     }
 
     return room;
@@ -86,7 +86,7 @@ export class RoomService {
     // Verify floor exists
     const floor = await this.floorRepository.findById(floorId);
     if (!floor) {
-      throw new AppError('Floor not found', 404);
+      throw new AppError(404, 'Floor not found');
     }
 
     return this.roomRepository.findByFloorId(floorId);
@@ -187,11 +187,11 @@ export class RoomService {
         data.roomNumber
       );
       if (duplicate) {
-        throw new AppError('Room number already exists on this floor', 409);
+        throw new AppError(409, 'Room number already exists on this floor');
       }
     }
 
-    const updated = await this.roomRepository.update(id, data);
+    const updated = await this.roomRepository.update(id, data as any);
 
     try {
       const notificationService = getNotificationService();
@@ -216,7 +216,7 @@ export class RoomService {
 
     // Business rule: Cannot delete room with active assignment
     if ((room as any).assignments && (room as any).assignments.length > 0) {
-      throw new AppError('Cannot delete room with active assignment', 400);
+      throw new AppError(400, 'Cannot delete room with active assignment');
     }
 
     await this.roomRepository.delete(id);

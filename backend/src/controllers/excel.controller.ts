@@ -35,13 +35,15 @@ export class ExcelController {
 
     for (let i = 0; i < data.length; i++) {
       try {
-        const attendee = await this.attendeeService.create(data[i]);
+        const row = data[i];
+        if (!row) continue;
+        const attendee = await this.attendeeService.create(row as any);
         imported.push(attendee);
       } catch (error) {
         failed.push({
           row: i + 2,
           field: 'general',
-          value: data[i].fullName,
+          value: data[i]?.fullName || 'Unknown',
           message: (error as Error).message,
         });
       }
@@ -68,10 +70,10 @@ export class ExcelController {
       search: req.query.search as string,
       role: req.query.role as any,
       gender: req.query.gender as any,
-      checkedIn: req.query.checkedIn as any,
-      hasAssignment: req.query.hasAssignment as any,
-      page: '1',
-      limit: '10000', // Export all (with reasonable limit)
+      checkedIn: req.query.checkedIn === 'true' ? true : req.query.checkedIn === 'false' ? false : undefined,
+      hasAssignment: req.query.hasAssignment === 'true' ? true : req.query.hasAssignment === 'false' ? false : undefined,
+      page: 1,
+      limit: 10000, // Export all (with reasonable limit)
     };
 
     const result = await this.attendeeService.list(params);
@@ -93,8 +95,8 @@ export class ExcelController {
       roomId: req.query.roomId as string,
       buildingId: req.query.buildingId as string,
       floorId: req.query.floorId as string,
-      page: '1',
-      limit: '10000', // Export all
+      page: 1,
+      limit: 10000, // Export all
     };
 
     const result = await this.assignmentRepository.search(params);

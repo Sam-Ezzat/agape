@@ -64,7 +64,7 @@ export class ConferenceHouseService {
       : await this.conferenceHouseRepository.findById(id);
 
     if (!conferenceHouse) {
-      throw new AppError('Conference house not found', 404);
+      throw new AppError(404, 'Conference house not found');
     }
 
     return conferenceHouse;
@@ -78,7 +78,7 @@ export class ConferenceHouseService {
     const conferenceHouse = await this.conferenceHouseRepository.findByIdWithFullHierarchy(id);
 
     if (!conferenceHouse) {
-      throw new AppError('Conference house not found', 404);
+      throw new AppError(404, 'Conference house not found');
     }
 
     return conferenceHouse;

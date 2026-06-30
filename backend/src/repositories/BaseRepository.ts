@@ -60,8 +60,11 @@ export abstract class BaseRepository<T, TModel> {
    * Find all entities
    * WHY: Used for listing pages, extracted to reduce duplication
    */
-  async findAll(): Promise<T[]> {
-    return (this.model as any).findMany() as Promise<T[]>;
+  async findAll(skip?: number, limit?: number): Promise<T[]> {
+    const options: any = {};
+    if (skip !== undefined) options.skip = skip;
+    if (limit !== undefined) options.limit = limit;
+    return (this.model as any).findMany(options) as Promise<T[]>;
   }
 
   /**

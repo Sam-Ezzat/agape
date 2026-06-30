@@ -228,9 +228,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Batch create assignments
    * WHY: Efficient bulk insert
    */
-  async createMany(data: CreateAssignmentDTO[]) {
+  async createMany(data: any[]) {
     return this.prisma.roomAssignment.createMany({
-      data,
+      data: data as any,
       skipDuplicates: true, // Skip if attendee already assigned
     });
   }
