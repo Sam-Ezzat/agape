@@ -13,7 +13,6 @@ import type { RoomAssignment, Attendee, ConferenceHouse, Building, Floor, Room }
 
 export default function AssignmentsPage() {
   // Attendees (left panel)
-  const [allAttendees, setAllAttendees] = useState<Attendee[]>([]);
   const [unassignedAttendees, setUnassignedAttendees] = useState<Attendee[]>([]);
   const [assignedAttendees, setAssignedAttendees] = useState<Attendee[]>([]);
   const [assignments, setAssignments] = useState<RoomAssignment[]>([]);
@@ -68,9 +67,6 @@ export default function AssignmentsPage() {
         .map(a => a.attendee!)
         .filter((a): a is Attendee => a !== undefined);
       setAssignedAttendees(assigned);
-
-      // Combine all attendees
-      setAllAttendees([...unassigned, ...assigned]);
     } catch (error) {
       toastError('Failed to load attendees');
     } finally {
