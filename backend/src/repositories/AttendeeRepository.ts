@@ -191,14 +191,6 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
       orderBy: { fullName: 'asc' },
     });
   }
-    return this.prisma.attendee.findMany({
-      where: {
-        deletedAt: null,
-        assignment: null,
-      },
-      orderBy: { fullName: 'asc' },
-    });
-  }
 
   /**
    * Count attendees by status
