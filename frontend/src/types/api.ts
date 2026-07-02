@@ -205,6 +205,7 @@ export interface AttendeeFilters extends PaginationParams {
   gender?: Gender;
   checkedIn?: 'true' | 'false';
   hasAssignment?: 'true' | 'false';
+  dualSearch?: 'true' | 'false'; // Dual-language search (Arabic ↔ English)
 }
 
 export interface RoomFilters extends PaginationParams {

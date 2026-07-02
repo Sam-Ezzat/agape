@@ -29,10 +29,11 @@ export default function AttendeesPage() {
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<ConferenceRole | ''>('');
   const [genderFilter, setGenderFilter] = useState<Gender | ''>('');
+  const [isDualSearchEnabled, setIsDualSearchEnabled] = useState(true); // Dual-language search ON by default
 
   useEffect(() => {
     loadAttendees();
-  }, [currentPage, search, roleFilter, genderFilter]);
+  }, [currentPage, search, roleFilter, genderFilter, isDualSearchEnabled]);
 
   // Listen for real-time updates via socket
   useEffect(() => {
@@ -96,7 +97,10 @@ export default function AttendeesPage() {
         limit: String(limit),
       };
       
-      if (search) filters.search = search;
+      if (search) {
+        filters.search = search;
+        filters.dualSearch = isDualSearchEnabled ? 'true' : 'false';
+      }
       if (roleFilter) filters.role = roleFilter;
       if (genderFilter) filters.gender = genderFilter;
 
@@ -254,14 +258,27 @@ export default function AttendeesPage() {
       <div className="card">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
-            <input
-              type="text"
-              placeholder="Search by name..."
+            <label className="block text- (Arabic or English)..."
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
                 setCurrentPage(1);
+              }}
+              className="input w-full"
+            />
+            {/* Dual-language search toggle */}
+            <div className="mt-2 flex items-center">
+              <input
+                type="checkbox"
+                id="dualSearch"
+                checked={isDualSearchEnabled}
+                onChange={(e) => setIsDualSearchEnabled(e.target.checked)}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <label htmlFor="dualSearch" className="ml-2 text-sm text-gray-600">
+                Enable Arabic/English search (finds "محمد" when searching "Mohamed")
+              </label>
+            </div   setCurrentPage(1);
               }}
               className="input w-full"
             />
