@@ -1,0 +1,769 @@
+# Search Dual Languages Engine (SDLE)
+### Design Document v1.0
+
+**Author:** Sam Ezzat  
+**Language:** TypeScript / Node.js  
+**Purpose:** Search and match names across English and Arabic regardless of the language entered by the user.
+
+---
+
+# Problem Statement
+
+Many systems store customer names in one language while users search using another language.
+
+Example:
+
+| Stored Name | User Search |
+|-------------|------------|
+| محمد أحمد | Mohamed Ahmed |
+| Mohamed Ali | محمد علي |
+| George | جورج |
+| Abdelrahman | عبد الرحمن |
+
+Traditional SQL searches fail because they compare exact strings.
+
+Our goal is to build a **Search Dual Languages Engine (SDLE)** that intelligently searches names across both languages.
+
+---
+
+# Objectives
+
+The engine should:
+
+- Detect the input language automatically.
+- Normalize names.
+- Split names into logical parts.
+- Transliterate between English and Arabic.
+- Generate multiple spelling variations.
+- Search efficiently.
+- Rank the best matches.
+
+---
+
+# High-Level Architecture
+
+```text
+                User Input
+                     │
+                     ▼
+         Language Detection
+                     │
+                     ▼
+            Name Normalization
+                     │
+                     ▼
+              Name Splitting
+                     │
+                     ▼
+          Dictionary Lookup
+             │             │
+      Found              Not Found
+         │                    │
+         ▼                    ▼
+Use Dictionary        Rule-Based Transliteration
+         │                    │
+         └────────────┬───────┘
+                      ▼
+        Candidate Generation
+                      │
+                      ▼
+          Search Repository
+                      │
+                      ▼
+           Similarity Scoring
+                      │
+                      ▼
+               Ranked Results
+```
+
+---
+
+# Project Structure
+
+```
+src/
+│
+├── search/
+│   ├── dual-language/
+│   │
+│   ├── models/
+│   │     Language.ts
+│   │     SearchCandidate.ts
+│   │     SearchResult.ts
+│   │
+│   ├── services/
+│   │     LanguageDetector.ts
+│   │     NameNormalizer.ts
+│   │     NameSplitter.ts
+│   │     DictionaryService.ts
+│   │     Transliterator.ts
+│   │     CandidateGenerator.ts
+│   │     SimilarityService.ts
+│   │     SearchDualLanguageService.ts
+│   │
+│   ├── rules/
+│   │     englishToArabic.ts
+│   │     arabicToEnglish.ts
+│   │
+│   └── utils/
+│         StringHelper.ts
+```
+
+---
+
+# Module Responsibilities
+
+## LanguageDetector
+
+Detects whether the input is Arabic or English.
+
+Input
+
+```
+محمد احمد
+```
+
+Output
+
+```
+Arabic
+```
+
+---
+
+## NameNormalizer
+
+Normalizes text before processing.
+
+### Arabic
+
+Converts
+
+```
+أ
+إ
+آ
+```
+
+to
+
+```
+ا
+```
+
+Converts
+
+```
+ة
+```
+
+to
+
+```
+ه
+```
+
+Converts
+
+```
+ى
+```
+
+to
+
+```
+ي
+```
+
+Removes
+
+- Tashkeel
+- Tatweel
+- Extra spaces
+
+---
+
+### English
+
+- Lowercase
+- Trim
+- Remove duplicate spaces
+- Remove punctuation if configured
+
+Example
+
+```
+MOHAMED
+```
+
+↓
+
+```
+mohamed
+```
+
+---
+
+# NameSplitter
+
+Splits names into parts.
+
+Example
+
+```
+Mohamed Ahmed Ali
+```
+
+↓
+
+```
+[
+  Mohamed,
+  Ahmed,
+  Ali
+]
+```
+
+---
+
+# DictionaryService
+
+Contains known names.
+
+Example
+
+```
+Mohamed
+
+↓
+
+محمد
+```
+
+Dictionary lookup is always attempted before transliteration.
+
+This produces much higher accuracy.
+
+---
+
+# Transliterator
+
+Converts unknown names.
+
+Example
+
+```
+Sherif
+
+↓
+
+شريف
+```
+
+Uses two rule sets.
+
+## Multi-letter Rules
+
+Always processed first.
+
+Examples
+
+```
+sh → ش
+kh → خ
+gh → غ
+th → ث
+dh → ذ
+oo → و
+ee → ي
+ou → و
+ph → ف
+ch → تش
+```
+
+---
+
+## Single Letter Rules
+
+Example
+
+```
+a → ا
+b → ب
+c → ك
+d → د
+...
+```
+
+---
+
+# Candidate Generator
+
+The most important component.
+
+Input
+
+```
+Mohamed
+```
+
+Output
+
+```
+[
+Mohamed,
+Mohammad,
+Muhammad,
+Mohamad,
+Muhammed,
+محمد
+]
+```
+
+Example
+
+```
+عبد الرحمن
+```
+
+↓
+
+```
+[
+عبد الرحمن,
+عبدالرحمن,
+Abdelrahman,
+Abdel Rahman,
+Abdulrahman,
+Abdurrahman
+]
+```
+
+Instead of returning one translation, the engine returns all possible spellings.
+
+---
+
+# Search Repository
+
+Instead of searching
+
+```sql
+WHERE Name = 'Mohamed'
+```
+
+Search
+
+```sql
+WHERE Name IN (...)
+```
+
+Example
+
+```
+[
+محمد,
+Mohamed,
+Mohammad,
+Muhammad
+]
+```
+
+---
+
+# Similarity Service
+
+Ranks results.
+
+Possible algorithms
+
+- Levenshtein Distance
+- Jaro-Winkler
+- Dice Coefficient
+- Cosine Similarity
+
+Example
+
+User types
+
+```
+Mohamad
+```
+
+Database
+
+```
+Mohamed
+```
+
+Similarity
+
+```
+97%
+```
+
+Result returned.
+
+---
+
+# Search Flow
+
+```
+Input
+│
+▼
+Detect Language
+│
+▼
+Normalize
+│
+▼
+Split Name
+│
+▼
+Dictionary Lookup
+│
+├── Found
+│      │
+│      ▼
+│ Candidate
+│
+└── Not Found
+       │
+       ▼
+Rule Transliteration
+       │
+       ▼
+Generate Variations
+       │
+       ▼
+Repository Search
+       │
+       ▼
+Similarity Ranking
+       │
+       ▼
+Return Results
+```
+
+---
+
+# API Design
+
+## Convert
+
+```ts
+convert(name: string): string
+```
+
+Example
+
+```
+Mohamed
+
+↓
+
+محمد
+```
+
+---
+
+## Generate Candidates
+
+```ts
+generateCandidates(name: string): string[]
+```
+
+Example
+
+Input
+
+```
+Mohamed
+```
+
+Output
+
+```json
+[
+    "Mohamed",
+    "محمد",
+    "Mohammad",
+    "Muhammad",
+    "Mohamad"
+]
+```
+
+---
+
+## Search
+
+```ts
+search(name: string)
+```
+
+Returns
+
+```json
+[
+    {
+        "name":"محمد أحمد",
+        "score":99
+    },
+    {
+        "name":"Mohamed Ahmed",
+        "score":98
+    }
+]
+```
+
+---
+
+# Future Improvements
+
+## Version 2
+
+### AI Assisted Transliteration
+
+Instead of rules only,
+
+Use an LLM to predict uncommon names.
+
+Example
+
+```
+Xavier
+
+↓
+
+زافيير
+```
+
+---
+
+### Phonetic Encoding
+
+Build custom Arabic Soundex.
+
+Example
+
+```
+محمد
+Mohamed
+Mohammad
+Muhammad
+```
+
+↓
+
+```
+MHMD
+```
+
+All become one phonetic key.
+
+---
+
+### Caching
+
+Cache frequently translated names.
+
+Redis
+
+```
+Mohamed
+
+↓
+
+محمد
+```
+
+No need to transliterate repeatedly.
+
+---
+
+### Database Dictionary
+
+Instead of JSON
+
+```
+Dictionary
+```
+
+Store
+
+```
+Name
+Language
+Popularity
+Country
+Gender
+Frequency
+```
+
+This allows regional spellings.
+
+Example
+
+```
+Mohamed
+```
+
+Egypt
+
+↓
+
+```
+محمد
+```
+
+Turkey
+
+↓
+
+```
+Mehmet
+```
+
+---
+
+### Machine Learning Ranking
+
+Use search history.
+
+If users always choose
+
+```
+Mohamed Ahmed Hassan
+```
+
+Rank it first next time.
+
+---
+
+# Performance
+
+Expected complexity
+
+Language Detection
+
+```
+O(n)
+```
+
+Normalization
+
+```
+O(n)
+```
+
+Split
+
+```
+O(n)
+```
+
+Dictionary
+
+```
+O(1)
+```
+
+Transliteration
+
+```
+O(n)
+```
+
+Candidate Generation
+
+```
+O(k)
+```
+
+Similarity
+
+```
+O(m × n)
+```
+
+Overall
+
+```
+≈ O(n)
+```
+
+excluding similarity calculations.
+
+---
+
+# Advantages
+
+- Language independent
+- Fast
+- Modular
+- Easily extensible
+- Supports fuzzy search
+- Works with SQL Server
+- Works with PostgreSQL
+- Works with MongoDB
+- Works with Elasticsearch
+- Production-ready architecture
+
+---
+
+# Example
+
+Input
+
+```
+محمد عبد الرحمن
+```
+
+Engine
+
+```
+Normalize
+
+↓
+
+Split
+
+↓
+
+Dictionary
+
+↓
+
+Transliteration
+
+↓
+
+Generate Variants
+
+↓
+
+[
+محمد عبدالرحمن
+Mohamed Abdelrahman
+Mohammad Abdel Rahman
+Muhammad Abdulrahman
+Mohamed Abd El Rahman
+]
+```
+
+Repository searches using all candidates and ranks the results.
+
+---
+
+# Long-Term Vision
+
+The Search Dual Languages Engine should evolve beyond simple transliteration into a multilingual search platform. The engine will support multiple language pairs (e.g., English ↔ Arabic, English ↔ French, English ↔ Greek) through configurable language profiles while keeping the same pipeline of detection, normalization, candidate generation, and ranking.
+
+Each supported language pair will contribute:
+- Language detection rules.
+- Normalization rules.
+- Transliteration mappings.
+- Common-name dictionaries.
+- Phonetic encoding strategies.
+
+This architecture allows new languages to be added without modifying the core search engine, making SDLE a reusable component for multilingual applications rather than a solution limited to English and Arabic.

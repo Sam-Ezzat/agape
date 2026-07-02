@@ -7,7 +7,7 @@
 
 import { Request, Response } from 'express';
 import { AttendeeService } from '@/services/attendee.service';
-import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams } from '@/validators/attendee.schemas';
+import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams, UnassignedFilterParams } from '@/validators/attendee.schemas';
 
 export class AttendeeController {
   constructor(private attendeeService: AttendeeService) {}
@@ -73,9 +73,11 @@ export class AttendeeController {
   /**
    * GET /api/attendees/unassigned
    * Get attendees without room assignment
+   * Supports optional search with dual-language
    */
   async getUnassigned(req: Request, res: Response) {
-    const attendees = await this.attendeeService.getUnassigned();
+    const params: UnassignedFilterParams = req.query as any;
+    const attendees = await this.attendeeService.getUnassigned(params);
     res.json({
       success: true,
       data: attendees,

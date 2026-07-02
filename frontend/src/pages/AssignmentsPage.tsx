@@ -268,12 +268,31 @@ export default function AssignmentsPage() {
                   } ${draggedAttendee?.id === attendee.id ? 'opacity-50' : ''}`}
                 >
                   <div className="flex items-center justify-between">
-                    <div>
+                    <div className="flex-1">
                       <p className="text-sm font-medium text-gray-900">{attendee.fullName}</p>
                       <p className="text-xs text-gray-500">
                         {attendee.conferenceRole || 'Attendee'}
                         {attendee.church && ` • ${attendee.church}`}
                       </p>
+                      {(attendee.notes || attendee.roomingNotes || attendee.internalNotes) && (
+                        <div className="mt-1 space-y-0.5">
+                          {attendee.notes && (
+                            <p className="text-xs text-gray-600">
+                              <span className="font-medium">Note:</span> {attendee.notes}
+                            </p>
+                          )}
+                          {attendee.roomingNotes && (
+                            <p className="text-xs text-blue-600">
+                              <span className="font-medium">Rooming:</span> {attendee.roomingNotes}
+                            </p>
+                          )}
+                          {attendee.internalNotes && (
+                            <p className="text-xs text-amber-600">
+                              <span className="font-medium">Internal:</span> {attendee.internalNotes}
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
                       Unassigned
@@ -299,19 +318,46 @@ export default function AssignmentsPage() {
                 return (
                   <div
                     key={attendee.id}
-                    className="p-3 mb-1 rounded-lg border border-gray-100 hover:bg-gray-50"
+                    onClick={() => setSelectedAttendeeId(selectedAttendeeId === attendee.id ? null : attendee.id)}
+                    className={`p-3 mb-1 rounded-lg cursor-pointer border-2 transition-all ${
+                      selectedAttendeeId === attendee.id
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-transparent hover:bg-gray-50'
+                    }`}
                   >
                     <div className="flex items-center justify-between">
-                      <div>
+                      <div className="flex-1">
                         <p className="text-sm font-medium text-gray-900">{attendee.fullName}</p>
                         <p className="text-xs text-gray-500">
                           {room && `Room ${room.roomNumber}`}
                           {building && ` • ${building.name}`}
                         </p>
+                        {(attendee.notes || attendee.roomingNotes || attendee.internalNotes) && (
+                          <div className="mt-1 space-y-0.5">
+                            {attendee.notes && (
+                              <p className="text-xs text-gray-600">
+                                <span className="font-medium">Note:</span> {attendee.notes}
+                              </p>
+                            )}
+                            {attendee.roomingNotes && (
+                              <p className="text-xs text-blue-600">
+                                <span className="font-medium">Rooming:</span> {attendee.roomingNotes}
+                              </p>
+                            )}
+                            {attendee.internalNotes && (
+                              <p className="text-xs text-amber-600">
+                                <span className="font-medium">Internal:</span> {attendee.internalNotes}
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <button
-                        onClick={() => assignment && handleUnassign(assignment.id, attendee.fullName)}
-                        className="text-xs text-red-600 hover:text-red-700 font-medium"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          assignment && handleUnassign(assignment.id, attendee.fullName);
+                        }}
+                        className="text-xs text-red-600 hover:text-red-700 font-medium flex-shrink-0"
                       >
                         Unassign
                       </button>
@@ -323,14 +369,91 @@ export default function AssignmentsPage() {
           )}
         </div>
 
-        {/* Selection hint */}
-        {selectedAttendeeId && activeTab === 'unassigned' && (
-          <div className="p-3 border-t bg-primary-50">
-            <p className="text-xs text-primary-700">
-              Click a room on the right to assign, or drag this attendee to a room
-            </p>
-          </div>
-        )}
+        {/* Attendee Details Panel */}
+        {selectedAttendeeId && (() => {
+          const selectedAttendee = activeTab === 'unassigned'
+            ? unassignedAttendees.find(a => a.id === selectedAttendeeId)
+            : assignedAttendees.find(a => a.id === selectedAttendeeId);
+          
+          if (!selectedAttendee) return null;
+
+          return (
+            <div className="p-3 border-t">
+              <div className="bg-white rounded-lg shadow-md border-2 border-gray-200 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-900">Attendee Details</h3>
+                  <button
+                    onClick={() => setSelectedAttendeeId(null)}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {/* Full Name */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Full Name</label>
+                    <p className="text-sm text-gray-900">{selectedAttendee.fullName}</p>
+                  </div>
+
+                  {/* Role */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Role</label>
+                    <p className="text-sm text-gray-900">{selectedAttendee.conferenceRole || 'N/A'}</p>
+                  </div>
+
+                  {/* Church */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Church</label>
+                    <p className="text-sm text-gray-900">{selectedAttendee.church || 'N/A'}</p>
+                  </div>
+
+                  {/* Notes */}
+                  {selectedAttendee.notes && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+                      <p className="text-sm text-gray-700 bg-white p-2 rounded border border-gray-200">
+                        {selectedAttendee.notes}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Rooming Notes */}
+                  {selectedAttendee.roomingNotes && (
+                    <div>
+                      <label className="block text-xs font-medium text-blue-600 mb-1">Rooming Notes</label>
+                      <p className="text-sm text-blue-700 bg-blue-50 p-2 rounded border border-blue-200">
+                        {selectedAttendee.roomingNotes}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Internal Notes */}
+                  {selectedAttendee.internalNotes && (
+                    <div>
+                      <label className="block text-xs font-medium text-amber-600 mb-1">Internal Notes</label>
+                      <p className="text-sm text-amber-700 bg-amber-50 p-2 rounded border border-amber-200">
+                        {selectedAttendee.internalNotes}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Action hint for unassigned */}
+                {activeTab === 'unassigned' && (
+                  <div className="mt-4 p-2 bg-primary-50 rounded border border-primary-200">
+                    <p className="text-xs text-primary-700">
+                      💡 Click a room on the right to assign, or drag this attendee to a room
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* RIGHT PANEL - Rooms */}

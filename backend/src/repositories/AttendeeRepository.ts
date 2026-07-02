@@ -8,10 +8,14 @@
 import { Attendee, Prisma, PrismaClient } from '@prisma/client';
 import { BaseRepository } from './BaseRepository';
 import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams } from '@/validators/attendee.schemas';
+import { SearchDualLanguageService } from '@/search/dual-language';
 
 export class AttendeeRepository extends BaseRepository<Attendee, Prisma.AttendeeDelegate> {
+  private dualLanguageSearch: SearchDualLanguageService;
+
   constructor(prisma: PrismaClient) {
     super(prisma, prisma.attendee);
+    this.dualLanguageSearch = new SearchDualLanguageService();
   }
 
   /**
@@ -43,21 +47,36 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
     });
   }
 
-  /**
-   * Search attendees with filters
-   * WHY: Full-text search on names (supports Arabic) + role/gender filters
+  /* Supports dual-language search (English ↔ Arabic)
    */
   async search(params: AttendeeFilterParams) {
-    const { search, role, gender, checkedIn, hasAssignment, page, limit } = params;
+    const { search, role, gender, checkedIn, hasAssignment, page, limit, dualSearch } = params;
     const skip = (page - 1) * limit;
 
     const where: Prisma.AttendeeWhereInput = {
       deletedAt: null, // Only non-deleted attendees
     };
 
-    // Full-text search on name
+    // Full-text search on name with optional dual-language support
     if (search) {
-      where.fullName = {
+      if (dualSearch) {
+        // Generate search candidates using dual-language engine
+        const candidates = this.dualLanguageSearch.generateSearchCandidates(search);
+        
+        // Build OR query for all candidates
+        where.OR = candidates.map(candidate => ({
+          fullName: {
+            contains: candidate,
+            mode: 'insensitive' as const,
+          },
+        }));
+      } else {
+        // Standard single-language search
+        where.fullName = {
+          contains: search,
+          mode: 'insensitive', // Case-insensitive search
+        };
+      }ere.fullName = {
         contains: search,
         mode: 'insensitive', // Case-insensitive search
       };
@@ -123,13 +142,38 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
           },
         },
       }),
-      this.prisma.attendee.count({ where }),
-    ]);
+     Supports optional search with dual-language
+   */
+  async findUnassigned(search?: string, dualSearch?: boolean) {
+    const where: Prisma.AttendeeWhereInput = {
+      deletedAt: null,
+      assignment: null,
+    };
 
-    return {
-      data: attendees,
-      total,
-      page,
+    // Add search if provided
+    if (search) {
+      if (dualSearch) {
+        // Generate search candidates using dual-language engine
+        const candidates = this.dualLanguageSearch.generateSearchCandidates(search);
+        
+        // Build OR query for all candidates
+        where.OR = candidates.map(candidate => ({
+          fullName: {
+            contains: candidate,
+            mode: 'insensitive' as const,
+          },
+        }));
+      } else {
+        // Standard single-language search
+        where.fullName = {
+          contains: search,
+          mode: 'insensitive',
+        };
+      }
+    }
+
+    return this.prisma.attendee.findMany({
+      whereage,
       limit,
       totalPages: Math.ceil(total / limit),
     };

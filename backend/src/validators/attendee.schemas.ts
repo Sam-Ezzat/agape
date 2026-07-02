@@ -58,8 +58,18 @@ export const attendeeFilterSchema = z.object({
   gender: z.nativeEnum(Gender).optional(),
   checkedIn: z.enum(['true', 'false']).optional().transform((val) => val === undefined ? undefined : val === 'true'),
   hasAssignment: z.enum(['true', 'false']).optional().transform((val) => val === undefined ? undefined : val === 'true'),
+  dualSearch: z.enum(['true', 'false']).optional().default('false').transform((val) => val === 'true'), // Dual-language search
   page: z.string().optional().default('1').transform(Number),
   limit: z.string().optional().default('20').transform(Number),
+});
+
+/**
+ * Unassigned Attendee Filter Schema
+ * WHY: Validates query parameters for unassigned attendees endpoint
+ */
+export const unassignedFilterSchema = z.object({
+  search: z.string().optional(), // Full-text search on fullName
+  dualSearch: z.enum(['true', 'false']).optional().default('false').transform((val) => val === 'true'), // Dual-language search
 });
 
 /**
@@ -76,4 +86,5 @@ export const checkInOutSchema = z.object({
 export type CreateAttendeeDTO = z.infer<typeof createAttendeeSchema>;
 export type UpdateAttendeeDTO = z.infer<typeof updateAttendeeSchema>;
 export type AttendeeFilterParams = z.infer<typeof attendeeFilterSchema>;
+export type UnassignedFilterParams = z.infer<typeof unassignedFilterSchema>;
 export type CheckInOutDTO = z.infer<typeof checkInOutSchema>;

@@ -17,6 +17,7 @@ import {
   createAttendeeSchema,
   updateAttendeeSchema,
   attendeeFilterSchema,
+  unassignedFilterSchema,
   checkInOutSchema,
 } from '@/validators/attendee.schemas';
 import prisma from '@/utils/prisma-client';
@@ -50,9 +51,11 @@ router.post(
  * @desc    Get attendees without room assignment
  * @access  Public
  * @note    Must be before /:id route to avoid conflict
+ * @note    Supports optional search and dual-language search
  */
 router.get(
   '/unassigned',
+  validate(unassignedFilterSchema, 'query'),
   asyncHandler(attendeeController.getUnassigned.bind(attendeeController))
 );
 

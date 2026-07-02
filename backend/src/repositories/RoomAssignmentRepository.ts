@@ -69,15 +69,7 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
     return this.prisma.roomAssignment.findMany({
       where: { roomId },
       include: {
-        attendee: {
-          select: {
-            id: true,
-            fullName: true,
-            gender: true,
-            conferenceRole: true,
-            checkedInAt: true,
-          },
-        },
+        attendee: true,
       },
       orderBy: { assignedAt: 'desc' },
     });
@@ -118,16 +110,7 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
         take: limit,
         orderBy: { assignedAt: 'desc' },
         include: {
-          attendee: {
-            select: {
-              id: true,
-              fullName: true,
-              gender: true,
-              conferenceRole: true,
-              phone: true,
-              checkedInAt: true,
-            },
-          },
+          attendee: true,
           room: {
             select: {
               id: true,

@@ -9,7 +9,7 @@ import { Attendee } from '@prisma/client';
 import { AttendeeRepository } from '@/repositories/AttendeeRepository';
 import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AuditLogRepository } from '@/repositories/AuditLogRepository';
-import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams } from '@/validators/attendee.schemas';
+import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams, UnassignedFilterParams } from '@/validators/attendee.schemas';
 import { AppError } from '@/middleware/errorHandler';
 import { getNotificationService } from './notification.service';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
@@ -283,8 +283,9 @@ export class AttendeeService {
   /**
    * Get unassigned attendees
    * WHY: Show people who need room assignments
+   * Supports optional search with dual-language
    */
-  async getUnassigned() {
-    return this.attendeeRepository.findUnassigned();
+  async getUnassigned(params?: UnassignedFilterParams) {
+    return this.attendeeRepository.findUnassigned(params?.search, params?.dualSearch);
   }
 }
