@@ -142,7 +142,21 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
           },
         },
       }),
-     Supports optional search with dual-language
+    ]);
+
+    return {
+      data: attendees,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Get attendees without assignments
+   * WHY: Needed for assignment workflows
+   * Supports optional search with dual-language
    */
   async findUnassigned(search?: string, dualSearch?: boolean) {
     const where: Prisma.AttendeeWhereInput = {
@@ -173,17 +187,10 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
     }
 
     return this.prisma.attendee.findMany({
-      whereage,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+      where,
+      orderBy: { fullName: 'asc' },
+    });
   }
-
-  /**
-   * Get attendees without assignments
-   * WHY: Needed for assignment workflows
-   */
-  async findUnassigned() {
     return this.prisma.attendee.findMany({
       where: {
         deletedAt: null,
