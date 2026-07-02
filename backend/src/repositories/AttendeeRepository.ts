@@ -139,6 +139,7 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
           },
         },
       }),
+      this.prisma.attendee.count({ where }),
     ]);
 
     return {
