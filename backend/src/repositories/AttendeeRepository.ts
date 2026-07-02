@@ -76,10 +76,7 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
           contains: search,
           mode: 'insensitive', // Case-insensitive search
         };
-      }ere.fullName = {
-        contains: search,
-        mode: 'insensitive', // Case-insensitive search
-      };
+      }
     }
 
     // Filter by role
