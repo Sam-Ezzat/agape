@@ -19,6 +19,7 @@ export default function AssignmentsPage() {
   const [attendeesLoading, setAttendeesLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'unassigned' | 'assigned'>('unassigned');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isDualSearchEnabled, setIsDualSearchEnabled] = useState(true); // Dual-language search ON by default
   const [selectedAttendeeId, setSelectedAttendeeId] = useState<string | null>(null);
 
   // Structure (right panel)
@@ -40,6 +41,13 @@ export default function AssignmentsPage() {
     loadData();
   }, []);
 
+  // Reload unassigned attendees when search or dualSearch changes
+  useEffect(() => {
+    if (!attendeesLoading) {
+      loadUnassignedAttendees();
+    }
+  }, [searchQuery, isDualSearchEnabled]);
+
   const loadData = async () => {
     await Promise.all([
       loadAttendeesAndAssignments(),
@@ -56,10 +64,8 @@ export default function AssignmentsPage() {
       const allAssignments = assignmentsRes.data;
       setAssignments(allAssignments);
 
-      // Load unassigned attendees
-      const unassignedRes = await attendeeApi.getUnassigned();
-      const unassigned = unassignedRes.data;
-      setUnassignedAttendees(unassigned);
+      // Load unassigned attendees with search and dual-language support
+      await loadUnassignedAttendees();
 
       // Build assigned attendees from assignments
       const assigned: Attendee[] = allAssignments
@@ -71,6 +77,21 @@ export default function AssignmentsPage() {
       toastError('Failed to load attendees');
     } finally {
       setAttendeesLoading(false);
+    }
+  };
+
+  const loadUnassignedAttendees = async () => {
+    try {
+      const filters: any = {};
+      if (searchQuery) {
+        filters.search = searchQuery;
+        filters.dualSearch = isDualSearchEnabled ? 'true' : 'false';
+      }
+      
+      const unassignedRes = await attendeeApi.getUnassigned(filters);
+      setUnassignedAttendees(unassignedRes.data);
+    } catch (error) {
+      toastError('Failed to load unassigned attendees');
     }
   };
 
@@ -121,13 +142,11 @@ export default function AssignmentsPage() {
 
   // Drag handlers
   const onDragStart = (attendee: Attendee) => {
-    setDraggedAttendee(attendee);
-  };
+    setDraggedAttendee(attendee (server-side for unassigned, client-side for assigned)
+  // Unassigned attendees are already filtered by the backend
+  const filteredUnassigned = unassignedAttendees;
 
-  const onDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
+  // Keep client-side filtering for assigned attendees (derived from assignments)
   const onDrop = (roomId: string) => {
     if (draggedAttendee) {
       handleAssignToRoom(draggedAttendee.id, roomId);
@@ -208,11 +227,24 @@ export default function AssignmentsPage() {
           <div className="mt-3">
             <input
               type="text"
-              placeholder="Search attendees..."
+              placeholder="Search attendees (Arabic or English)..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="input w-full"
             />
+            {/* Dual-language search toggle */}
+            <div className="mt-2 flex items-center">
+              <input
+                type="checkbox"
+                id="dualSearchAssignments"
+                checked={isDualSearchEnabled}
+                onChange={(e) => setIsDualSearchEnabled(e.target.checked)}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <label htmlFor="dualSearchAssignments" className="ml-2 text-xs text-gray-600">
+                Enable Arabic/English search
+              </label>
+            </div>
           </div>
 
           {/* Tabs */}

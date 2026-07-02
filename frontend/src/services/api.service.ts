@@ -19,6 +19,7 @@ import type {
   PaginatedResponse,
   ApiResponse,
   AttendeeFilters,
+  UnassignedFilters,
   AssignmentFilters,
   AuditLogFilters,
   CreateAttendeeDTO,
@@ -97,10 +98,11 @@ export const attendeeApi = {
   /**
    * GET /api/attendees/unassigned
    * Get attendees without room assignment
+   * Supports optional search with dual-language
    */
-  getUnassigned: async (): Promise<ApiResponse<Attendee[]>> => {
+  getUnassigned: async (filters?: UnassignedFilters): Promise<ApiResponse<Attendee[]>> => {
     try {
-      const { data } = await apiClient.get('/attendees/unassigned');
+      const { data } = await apiClient.get('/attendees/unassigned', { params: filters });
       return data;
     } catch (error) {
       return handleApiError(error as Error);

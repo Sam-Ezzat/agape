@@ -208,6 +208,11 @@ export interface AttendeeFilters extends PaginationParams {
   dualSearch?: 'true' | 'false'; // Dual-language search (Arabic ↔ English)
 }
 
+export interface UnassignedFilters {
+  search?: string;
+  dualSearch?: 'true' | 'false'; // Dual-language search (Arabic ↔ English)
+}
+
 export interface RoomFilters extends PaginationParams {
   floorId?: string;
   available?: 'true' | 'false';
