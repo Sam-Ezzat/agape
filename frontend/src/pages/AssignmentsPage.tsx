@@ -142,24 +142,24 @@ export default function AssignmentsPage() {
 
   // Drag handlers
   const onDragStart = (attendee: Attendee) => {
-    setDraggedAttendee(attendee (server-side for unassigned, client-side for assigned)
-  // Unassigned attendees are already filtered by the backend
-  const filteredUnassigned = unassignedAttendees;
+    setDraggedAttendee(attendee);
+  };
 
-  // Keep client-side filtering for assigned attendees (derived from assignments)
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault(); // Allow drop
+  };
+
   const onDrop = (roomId: string) => {
     if (draggedAttendee) {
       handleAssignToRoom(draggedAttendee.id, roomId);
     }
   };
 
-  // Filter attendees by search
-  const filteredUnassigned = unassignedAttendees.filter(a =>
-    a.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (a.church && a.church.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (a.phone && a.phone.includes(searchQuery))
-  );
+  // Filter attendees by search (server-side for unassigned, client-side for assigned)
+  // Unassigned attendees are already filtered by the backend
+  const filteredUnassigned = unassignedAttendees;
 
+  // Keep client-side filtering for assigned attendees (derived from assignments)
   const filteredAssigned = assignedAttendees.filter(a =>
     a.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (a.church && a.church.toLowerCase().includes(searchQuery.toLowerCase())) ||

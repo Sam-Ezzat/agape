@@ -258,7 +258,10 @@ export default function AttendeesPage() {
       <div className="card">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="md:col-span-2">
-            <label className="block text- (Arabic or English)..."
+            <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
+            <input
+              type="text"
+              placeholder="Search by name (Arabic or English)..."
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -278,10 +281,7 @@ export default function AttendeesPage() {
               <label htmlFor="dualSearch" className="ml-2 text-sm text-gray-600">
                 Enable Arabic/English search (finds "محمد" when searching "Mohamed")
               </label>
-            </div   setCurrentPage(1);
-              }}
-              className="input w-full"
-            />
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
