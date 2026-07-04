@@ -156,9 +156,9 @@ export class ExcelService {
       'Rooming Notes': attendee.roomingNotes || '',
       'Internal Notes': attendee.internalNotes || '',
       'Role': attendee.conferenceRole || 'ATTENDEE',
-      'Room Number': attendee.assignment?.room?.roomNumber || '',
       'Building': attendee.assignment?.room?.floor?.building?.name || '',
       'Floor': attendee.assignment?.room?.floor?.floorNumber || '',
+      'Room Number': attendee.assignment?.room?.roomNumber || '',
     }));
 
     // Create workbook and worksheet
@@ -189,9 +189,9 @@ export class ExcelService {
       { wch: 30 }, // Rooming Notes
       { wch: 30 }, // Internal Notes
       { wch: 12 }, // Role
-      { wch: 12 }, // Room Number
       { wch: 25 }, // Building
       { wch: 8 },  // Floor
+      { wch: 12 }, // Room Number
     ];
 
     // Generate buffer
