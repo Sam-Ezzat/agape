@@ -26,6 +26,11 @@ import type {
   UpdateAttendeeDTO,
   CreateAssignmentDTO,
   BatchAssignmentDTO,
+  AutoAssignmentConfig,
+  RunAutoAssignmentDTO,
+  UpdateAutoAssignmentConfigDTO,
+  AutoAssignmentExecutionResult,
+  AutoAssignmentStatus,
 } from '@/types/api';
 
 // WHY: Single source of truth for API base URL
@@ -427,6 +432,80 @@ export const excelApi = {
         params: filters,
         responseType: 'blob',
       });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+};
+
+/**
+ * Auto-Assignment API
+ * Backend routes: /api/auto-assignment
+ */
+export const autoAssignmentApi = {
+  /**
+   * POST /api/auto-assignment/execute
+   * Execute auto-assignment with real-time progress
+   */
+  execute: async (dto: RunAutoAssignmentDTO): Promise<ApiResponse<AutoAssignmentExecutionResult>> => {
+    try {
+      const { data } = await apiClient.post('/auto-assignment/execute', dto);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * POST /api/auto-assignment/preview
+   * Preview auto-assignment (dry run mode)
+   */
+  preview: async (dto: RunAutoAssignmentDTO): Promise<ApiResponse<AutoAssignmentExecutionResult>> => {
+    try {
+      const { data } = await apiClient.post('/auto-assignment/preview', dto);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * GET /api/auto-assignment/config/:conferenceHouseId
+   * Get auto-assignment configuration
+   */
+  getConfig: async (conferenceHouseId: string): Promise<ApiResponse<AutoAssignmentConfig>> => {
+    try {
+      const { data } = await apiClient.get(`/auto-assignment/config/${conferenceHouseId}`);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * PUT /api/auto-assignment/config/:conferenceHouseId
+   * Update auto-assignment configuration
+   */
+  updateConfig: async (
+    conferenceHouseId: string,
+    dto: UpdateAutoAssignmentConfigDTO
+  ): Promise<ApiResponse<AutoAssignmentConfig>> => {
+    try {
+      const { data } = await apiClient.put(`/auto-assignment/config/${conferenceHouseId}`, dto);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * GET /api/auto-assignment/status/:conferenceHouseId
+   * Get current status and statistics
+   */
+  getStatus: async (conferenceHouseId: string): Promise<ApiResponse<AutoAssignmentStatus>> => {
+    try {
+      const { data } = await apiClient.get(`/auto-assignment/status/${conferenceHouseId}`);
       return data;
     } catch (error) {
       return handleApiError(error as Error);

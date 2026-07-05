@@ -35,6 +35,13 @@ export enum NotificationEvent {
   IMPORT_PROGRESS = 'import:progress',
   IMPORT_COMPLETED = 'import:completed',
   IMPORT_FAILED = 'import:failed',
+  
+  // Auto-Assignment Events
+  AUTO_ASSIGNMENT_PROGRESS = 'auto-assignment:progress',
+  AUTO_ASSIGNMENT_COMPLETE = 'auto-assignment:complete',
+  AUTO_ASSIGNMENT_ERROR = 'auto-assignment:error',
+  AUTO_ASSIGNMENT_PREVIEW_PROGRESS = 'auto-assignment:preview-progress',
+  AUTO_ASSIGNMENT_CONFIG_UPDATED = 'auto-assignment:config-updated',
 }
 
 /**
@@ -87,5 +94,29 @@ export interface ImportProgressNotification extends NotificationPayload {
     totalCount: number;
     percentage: number;
     errors?: string[];
+  };
+}
+
+/**
+ * Auto-assignment progress notification
+ */
+export interface AutoAssignmentProgressNotification extends NotificationPayload {
+  data: {
+    stage: string;
+    progress?: {
+      total: number;
+      processed: number;
+      percentage: number;
+    };
+    currentAction?: string;
+    result?: {
+      assignmentsCreated: number;
+      roomsUsed: number;
+      unassignedCount: number;
+    };
+    error?: {
+      reason: string;
+      attendeeId?: string;
+    };
   };
 }

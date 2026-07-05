@@ -258,3 +258,59 @@ export interface CreateAssignmentDTO {
 export interface BatchAssignmentDTO {
   assignments: CreateAssignmentDTO[];
 }
+
+// Auto-Assignment types
+export interface AutoAssignmentConfig {
+  id: string;
+  conferenceHouseId: string;
+  enabledBuildings?: string[];
+  staffReservedCapacity?: number;
+  ruleWeights?: Record<string, number>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunAutoAssignmentDTO {
+  conferenceHouseId: string;
+  buildingIds?: string[];
+  dryRun?: boolean;
+  options?: {
+    minGroupSize?: number;
+    preserveExistingAssignments?: boolean;
+  };
+}
+
+export interface UpdateAutoAssignmentConfigDTO {
+  enabledBuildings?: string[];
+  staffReservedCapacity?: number;
+  ruleWeights?: Record<string, number>;
+}
+
+export interface AutoAssignmentExecutionResult {
+  success: boolean;
+  assignmentsCreated: number;
+  roomsUsed: number;
+  unassignedAttendees: Array<{
+    id: string;
+    name: string;
+    reason: string;
+  }>;
+  validationErrors: Array<{
+    attendeeId: string;
+    reason: string;
+  }>;
+  executionTimeMs: number;
+  stages: Record<string, {
+    duration: number;
+    success: boolean;
+  }>;
+}
+
+export interface AutoAssignmentStatus {
+  totalAttendees: number;
+  assignedAttendees: number;
+  unassignedAttendees: number;
+  totalRooms: number;
+  availableRooms: number;
+  occupancyRate: number;
+}
