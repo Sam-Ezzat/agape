@@ -179,4 +179,84 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
       },
     });
   }
+
+  /**
+   * Find rooms for auto-assignment with full details
+   * WHY: Auto-assignment needs rooms with building context and current assignments
+   * 
+   * @param buildingIds - Filter rooms by building IDs
+   * @param conferenceHouseId - Optional filter by conference house
+   * @returns Rooms with floor, building, and assignment details
+   */
+  async findForAutoAssignment(
+    buildingIds: string[],
+    conferenceHouseId?: string
+  ): Promise<Array<Room & {
+    floor: {
+      floorNumber: number;
+      building: {
+        id: string;
+        name: string;
+        conferenceHouseId: string;
+      };
+    };
+    assignments: Array<{
+      id: string;
+      attendeeId: string;
+      roomId: string;
+      assignedAt: Date;
+      assignedBy: string;
+      isLocked: boolean;
+      lockedAt: Date | null;
+      lockedBy: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+  }>> {
+    return this.model.findMany({
+      where: {
+        isActive: true,
+        floor: {
+          building: {
+            id: { in: buildingIds },
+            ...(conferenceHouseId ? { conferenceHouseId } : {}),
+          },
+        },
+      },
+      include: {
+        floor: {
+          select: {
+            floorNumber: true,
+            building: {
+              select: {
+                id: true,
+                name: true,
+                conferenceHouseId: true,
+              },
+            },
+          },
+        },
+        assignments: {
+          select: {
+            id: true,
+            attendeeId: true,
+            roomId: true,
+            assignedAt: true,
+            assignedBy: true,
+            isLocked: true,
+            lockedAt: true,
+            lockedBy: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+      },
+      orderBy: [
+        { floor: { building: { name: 'asc' } } },
+        { floor: { floorNumber: 'asc' } },
+        { roomNumber: 'asc' },
+      ],
+    }) as any; // Type assertion needed due to Prisma include complexity
+  }
 }
+

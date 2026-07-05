@@ -26,6 +26,11 @@ class MockRoomRepository {
   async findAll(): Promise<any[]> {
     return [];
   }
+  
+  async findForAutoAssignment(buildingIds: string[], conferenceHouseId?: string): Promise<any[]> {
+    // Return empty array for tests
+    return [];
+  }
 }
 
 class MockRoomAssignmentRepository {

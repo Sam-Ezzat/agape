@@ -58,6 +58,8 @@ interface RoomWithDetails {
       conferenceHouseId: string;
     };
   };
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 /**
@@ -147,11 +149,27 @@ export class AutoAssignmentService {
       });
 
       const allAttendees = await this.attendeeRepository.findAll();
-      const unassignedAttendees = params.options?.onlyUnassigned
-        ? allAttendees.filter(a => !a.deletedAt) // TODO: Check for existing assignment
-        : allAttendees.filter(a => !a.deletedAt);
-
       const availableRooms = await this.loadAvailableRooms(enabledBuildings);
+      
+      // Filter out deleted attendees
+      let unassignedAttendees = allAttendees.filter(a => !a.deletedAt);
+      
+      // If onlyUnassigned option is set, filter out attendees with existing assignments
+      if (params.options?.onlyUnassigned) {
+        const assignedAttendeeIds = new Set<string>();
+        
+        // Collect all currently assigned attendee IDs from room assignments
+        for (const room of availableRooms) {
+          for (const assignment of room.currentAssignments) {
+            assignedAttendeeIds.add(assignment.attendeeId);
+          }
+        }
+        
+        // Filter out assigned attendees
+        unassignedAttendees = unassignedAttendees.filter(
+          a => !assignedAttendeeIds.has(a.id)
+        );
+      }
 
       stages.push({
         stage: 2,
@@ -378,9 +396,30 @@ export class AutoAssignmentService {
    * Load available rooms from enabled buildings
    */
   private async loadAvailableRooms(enabledBuildingIds: string[]): Promise<RoomWithDetails[]> {
-    // TODO: Implement proper room loading with relations
-    // For now, return mock structure that matches test expectations
-    return [];
+    const rooms = await this.roomRepository.findForAutoAssignment(enabledBuildingIds);
+    
+    // Transform to RoomWithDetails format and calculate current occupancy
+    return rooms.map(room => ({
+      id: room.id,
+      roomNumber: room.roomNumber,
+      roomType: room.roomType as 'GENERAL' | 'VIP' | 'FAMILY',
+      capacity: room.capacity,
+      floorId: room.floorId,
+      assignedGender: room.assignedGender,
+      isActive: room.isActive,
+      currentOccupancy: room.assignments.length,
+      currentAssignments: room.assignments,
+      floor: {
+        floorNumber: room.floor.floorNumber,
+        building: {
+          id: room.floor.building.id,
+          name: room.floor.building.name,
+          conferenceHouseId: room.floor.building.conferenceHouseId
+        }
+      },
+      createdAt: room.createdAt,
+      updatedAt: room.updatedAt
+    }));
   }
 
   /**
