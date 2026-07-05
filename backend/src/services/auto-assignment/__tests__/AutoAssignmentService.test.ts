@@ -121,7 +121,8 @@ describe('AutoAssignmentService', () => {
       roomRepo as any,
       assignmentRepo as any,
       auditRepo as any,
-      configRepo as any
+      configRepo as any,
+      { useAI: false }  // Disable AI for tests
     );
   });
 

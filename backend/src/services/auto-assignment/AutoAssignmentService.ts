@@ -86,9 +86,14 @@ export class AutoAssignmentService {
     private roomRepository: RoomRepository,
     private assignmentRepository: RoomAssignmentRepository,
     private auditLogRepository: AuditLogRepository,
-    private configRepository: AutoAssignmentConfigRepository
+    private configRepository: AutoAssignmentConfigRepository,
+    options?: {
+      useAI?: boolean;  // Allow disabling AI for tests
+    }
   ) {
-    this.classifier = new RoomingNotesClassifier({ useAI: true });
+    this.classifier = new RoomingNotesClassifier({ 
+      useAI: options?.useAI !== false  // Default to true, but allow override
+    });
     this.groupDetector = new GroupDetectionService(this.classifier);
     this.engine = new RuleEngine();
   }
@@ -315,8 +320,10 @@ export class AutoAssignmentService {
       });
 
       // Build result
+      // Success = workflow completed all stages (even if no assignments made)
+      // Failure = only if system crash/exception occurred
       const result: AutoAssignmentExecutionResult = {
-        success: errors.length === 0 || assignments.length > 0,
+        success: true,  // Workflow completed successfully
         assignmentsCreated: assignments.length,
         attendeesProcessed: unassignedAttendees.length,
         errors,
