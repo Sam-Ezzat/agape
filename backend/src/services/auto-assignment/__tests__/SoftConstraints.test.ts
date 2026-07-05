@@ -483,7 +483,10 @@ describe('LeaderProximityRule', () => {
 
   it('should return 100 for leader on preferred floor', () => {
     const context = createMockContext({
-      attendee: createMockAttendee({ conferenceRole: ConferenceRole.SERVANT }),
+      attendee: createMockAttendee({ 
+        conferenceRole: ConferenceRole.LEADER,
+        isServant: true  
+      }),
       configuration: {
         leaderPreferredFloorId: 'floor-1',
         leaderPreferredBuildingId: 'building-1'
@@ -497,7 +500,10 @@ describe('LeaderProximityRule', () => {
   it('should return lower score for leader in different building', () => {
     const baseRoom = createMockContext().room;
     const context = createMockContext({
-      attendee: createMockAttendee({ conferenceRole: ConferenceRole.SERVANT }),
+      attendee: createMockAttendee({ 
+        conferenceRole: ConferenceRole.LEADER,
+        isServant: true 
+      }),
       room: {
         ...baseRoom,
         floorId: 'floor-2',

@@ -205,17 +205,14 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
       attendeeId: string;
       roomId: string;
       assignedAt: Date;
-      assignedBy: string;
+      assignedBy: string | null;
       isLocked: boolean;
-      lockedAt: Date | null;
-      lockedBy: string | null;
       createdAt: Date;
       updatedAt: Date;
     }>;
   }>> {
     return this.model.findMany({
       where: {
-        isActive: true,
         floor: {
           building: {
             id: { in: buildingIds },
@@ -244,8 +241,6 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
             assignedAt: true,
             assignedBy: true,
             isLocked: true,
-            lockedAt: true,
-            lockedBy: true,
             createdAt: true,
             updatedAt: true,
           },

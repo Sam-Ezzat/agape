@@ -509,7 +509,8 @@ export class GroupDetectionService {
       return classification && classification.nearBathroom;
     });
     if (needsNearBathroom) {
-      constraints.requiresNearBathroom = true;
+      // Approximate - near bathroom often means ground floor or near elevator
+      constraints.requiresGroundFloor = true;
     }
 
     const needsNearElevator = members.some(m => {

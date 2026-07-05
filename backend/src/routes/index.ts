@@ -15,6 +15,7 @@ import assignmentRoutes from './assignment.routes';
 import auditLogRoutes from './auditLog.routes';
 import dashboardRoutes from './dashboard.routes';
 import excelRoutes from './excel.routes';
+import autoAssignmentRoutes from './autoAssignment.routes';
 
 const router = Router();
 
@@ -35,6 +36,9 @@ router.use('/audit-logs', auditLogRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/excel', excelRoutes);
 
+// Phase 4: Auto-Assignment Routes
+router.use('/auto-assignment', autoAssignmentRoutes);
+
 // API info endpoint
 router.get('/', (req, res) => {
   res.json({
@@ -54,6 +58,7 @@ router.get('/', (req, res) => {
       auditLogs: '/api/audit-logs',
       dashboard: '/api/dashboard',
       excel: '/api/excel',
+      autoAssignment: '/api/auto-assignment',
     },
     documentation: 'See README.md for API documentation',
   });

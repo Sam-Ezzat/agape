@@ -8,7 +8,7 @@ import {
   RuleValidationResult,
   RuleScoringResult,
   AssignmentContext
-} from './IAssignmentRule';
+} from './rules/IAssignmentRule';
 
 /**
  * Combined evaluation result from all rules

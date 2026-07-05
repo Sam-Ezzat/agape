@@ -46,8 +46,7 @@ interface RoomWithDetails {
   roomType: 'GENERAL' | 'VIP' | 'FAMILY';
   capacity: number;
   floorId: string;
-  assignedGender: Gender | null;
-  isActive: boolean;
+  amenities: any; // JsonValue from Prisma
   currentOccupancy: number;
   currentAssignments: RoomAssignment[];
   floor: {
@@ -405,8 +404,7 @@ export class AutoAssignmentService {
       roomType: room.roomType as 'GENERAL' | 'VIP' | 'FAMILY',
       capacity: room.capacity,
       floorId: room.floorId,
-      assignedGender: room.assignedGender,
-      isActive: room.isActive,
+      amenities: room.amenities,
       currentOccupancy: room.assignments.length,
       currentAssignments: room.assignments,
       floor: {
@@ -648,16 +646,9 @@ export class AutoAssignmentService {
             assignedAt: new Date(),
             assignedBy: 'auto-assignment',
             isLocked: false,
-            lockedAt: null,
-            lockedBy: null,
             createdAt: new Date(),
             updatedAt: new Date()
           });
-
-          // Update room gender if not set
-          if (!bestMatch.room.assignedGender) {
-            bestMatch.room.assignedGender = attendee.gender;
-          }
         }
 
         // Record successful assignment
@@ -763,8 +754,8 @@ export class AutoAssignmentService {
       
       scored.push({
         room,
-        score: result.overallScore,
-        appliedRules: Array.from(result.scoringResults.keys())
+        score: result.score,
+        appliedRules: Array.from(result.results.keys())
       });
     }
 

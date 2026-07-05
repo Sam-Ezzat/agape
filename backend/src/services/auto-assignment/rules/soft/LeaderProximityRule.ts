@@ -40,7 +40,8 @@ export class LeaderProximityRule implements IAssignmentRule {
    * Check if attendee is a leader (servant role or explicitly marked)
    */
   private isLeader(attendee: any): boolean {
-    return attendee.conferenceRole === ConferenceRole.SERVANT || 
+    return attendee.conferenceRole === ConferenceRole.LEADER ||
+           attendee.conferenceRole === ConferenceRole.PASTOR ||
            attendee.isServant === true;
   }
 
