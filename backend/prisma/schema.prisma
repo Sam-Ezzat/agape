@@ -25,7 +25,8 @@ model ConferenceHouse {
   updatedAt   DateTime @updatedAt @map("updated_at")
   
   // Relations
-  buildings   Building[]
+  buildings            Building[]
+  autoAssignmentConfig AutoAssignmentConfig?
   
   @@map("conference_houses")
 }
@@ -86,6 +87,7 @@ model Room {
   // WHY: Ensure unique room numbers within a floor
   @@unique([floorId, roomNumber])
   @@index([floorId])
+  @@index([roomType])
   @@map("rooms")
 }
 
@@ -144,6 +146,7 @@ model Attendee {
   @@index([fullName])
   @@index([ticketId])
   @@index([conferenceRole])
+  @@index([gender])
   @@index([checkedInAt])
   @@index([paymentStatus])
   @@index([email])
@@ -184,6 +187,7 @@ model RoomAssignment {
   attendeeId  String   @unique @map("attendee_id") // WHY: Unique ensures one person = one room
   assignedAt  DateTime @default(now()) @map("assigned_at")
   assignedBy  String?  @map("assigned_by") // Future: user ID who made the assignment
+  isLocked    Boolean  @default(false) @map("is_locked") // WHY: Manual assignments can be locked to prevent auto-assignment changes
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
   
@@ -191,8 +195,9 @@ model RoomAssignment {
   room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
   attendee    Attendee @relation(fields: [attendeeId], references: [id], onDelete: Cascade)
   
-  // WHY: Fast lookups by room (to show all people in a room)
+  // WHY: Fast lookups by room (to show all people in a room) and locked assignments
   @@index([roomId])
+  @@index([isLocked])
   @@map("room_assignments")
 }
 
@@ -200,7 +205,7 @@ model RoomAssignment {
 // Enables answering "who assigned whom, when, and why" for accountability
 model AuditLog {
   id          String   @id @default(uuid())
-  action      String   // "assign", "unassign", "check_in", "check_out", "create", "update", "delete"
+  action      String   // "assign", "unassign", "check_in", "check_out", "create", "update", "delete", "auto_assign"
   entityType  String   @map("entity_type") // "attendee", "room", "assignment", "building"
   entityId    String   @map("entity_id")
   details     Json?    // Flexible JSONB for action-specific data
@@ -211,4 +216,26 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// WHY: Configuration for auto-assignment engine
+// Stores per-conference settings for automated room assignment
+model AutoAssignmentConfig {
+  id                        String   @id @default(uuid())
+  conferenceHouseId         String   @unique @map("conference_house_id")
+  enabledBuildings          String[] @map("enabled_buildings") // Array of building IDs to include
+  staffReservedCapacity     Int      @default(0) @map("staff_reserved_capacity") // Beds reserved for staff
+  vipReservedCapacity       Int      @default(0) @map("vip_reserved_capacity") // Beds reserved for VIP
+  emergencyReservedCapacity Int      @default(0) @map("emergency_reserved_capacity") // Beds reserved for emergencies
+  enabledRules              String[] @map("enabled_rules") // Array of rule names to enable
+  ruleWeights               Json     @default("{}") @map("rule_weights") // Rule name → weight mapping
+  optimizationEnabled       Boolean  @default(true) @map("optimization_enabled") // Whether to run optimization
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  conferenceHouse           ConferenceHouse @relation(fields: [conferenceHouseId], references: [id], onDelete: Cascade)
+  
+  @@index([conferenceHouseId])
+  @@map("auto_assignment_configs")
 }

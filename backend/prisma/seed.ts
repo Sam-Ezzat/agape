@@ -23,6 +23,7 @@ async function main(): Promise<void> {
     await prisma.room.deleteMany();
     await prisma.floor.deleteMany();
     await prisma.building.deleteMany();
+    await prisma.autoAssignmentConfig.deleteMany();
     await prisma.conferenceHouse.deleteMany();
   }
 
@@ -243,12 +244,44 @@ async function main(): Promise<void> {
     )
   );
 
+  // Create Auto-Assignment Configuration
+  console.log('⚙️  Creating auto-assignment configuration...');
+  await prisma.autoAssignmentConfig.create({
+    data: {
+      conferenceHouseId: conferenceHouse.id,
+      enabledBuildings: [buildingA.id, buildingB.id],
+      staffReservedCapacity: 5,
+      vipReservedCapacity: 10,
+      emergencyReservedCapacity: 3,
+      enabledRules: [
+        'room_capacity',
+        'gender_match',
+        'room_type_match',
+        'room_availability',
+        'building_enabled',
+        'same_church',
+        'same_governorate',
+        'minimize_empty_beds'
+      ],
+      ruleWeights: {
+        same_church: 0.3,
+        same_governorate: 0.2,
+        similar_age: 0.1,
+        minimize_empty_beds: 0.2,
+        prefer_same_floor: 0.1,
+        leader_proximity: 0.1
+      },
+      optimizationEnabled: true
+    }
+  });
+
   console.log('✅ Seed completed successfully!');
   console.log(`   - Created 1 conference house`);
   console.log(`   - Created 2 buildings`);
   console.log(`   - Created 5 floors`);
   console.log(`   - Created ${rooms.length} rooms`);
   console.log(`   - Created ${attendees.length} attendees`);
+  console.log(`   - Created 1 auto-assignment configuration`);
   console.log('\n🚀 Database is ready for development!');
 }
 
