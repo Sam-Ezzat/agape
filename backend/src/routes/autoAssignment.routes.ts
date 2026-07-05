@@ -43,7 +43,9 @@ const autoAssignmentService = new AutoAssignmentService(
 // Controller (notification service accessed lazily via getNotificationService)
 const autoAssignmentController = new AutoAssignmentController(
   autoAssignmentService,
-  configRepository
+  configRepository,
+  attendeeRepository,
+  roomRepository
 );
 
 /**

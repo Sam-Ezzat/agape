@@ -28,13 +28,14 @@ import {
 import { Play, Eye, Settings, RotateCcw, Zap } from 'lucide-react';
 
 // WHY: Default rule weights for new configurations
+// Keys must match backend snake_case format
 const DEFAULT_RULE_WEIGHTS = {
-  SameChurchRule: 0.25,
-  SameGovernorateRule: 0.15,
-  SimilarAgeRule: 0.20,
-  MinimizeEmptyBedsRule: 0.15,
-  PreferSameFloorRule: 0.15,
-  LeaderProximityRule: 0.10,
+  same_church: 0.25,
+  same_governorate: 0.15,
+  similar_age: 0.20,
+  minimize_empty_beds: 0.15,
+  prefer_same_floor: 0.15,
+  leader_proximity: 0.10,
 };
 
 export default function AutoAssignmentPage() {
@@ -408,7 +409,7 @@ export default function AutoAssignmentPage() {
                 <div key={ruleName}>
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-sm font-medium text-gray-700">
-                      {ruleName.replace(/Rule$/, '')}
+                      {ruleName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
                     </label>
                     <span className="text-sm text-gray-600">{weight.toFixed(2)}</span>
                   </div>

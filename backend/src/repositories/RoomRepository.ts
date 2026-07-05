@@ -253,5 +253,43 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
       ],
     }) as any; // Type assertion needed due to Prisma include complexity
   }
+
+  /**
+   * Get room statistics for a conference house
+   * WHY: Used for dashboard and status displays
+   * 
+   * @param conferenceHouseId - Conference house to get stats for
+   * @returns Room counts with assignment information
+   */
+  async getRoomStatisticsByConferenceHouse(conferenceHouseId: string) {
+    const rooms = await this.model.findMany({
+      where: {
+        floor: {
+          building: {
+            conferenceHouseId,
+          },
+        },
+      },
+      include: {
+        _count: {
+          select: {
+            assignments: true,
+          },
+        },
+      },
+    });
+
+    const totalRooms = rooms.length;
+    const occupiedRooms = rooms.filter((r) => r._count.assignments > 0).length;
+    const availableRooms = totalRooms - occupiedRooms;
+    const occupancyRate = totalRooms > 0 ? occupiedRooms / totalRooms : 0;
+
+    return {
+      totalRooms,
+      occupiedRooms,
+      availableRooms,
+      occupancyRate,
+    };
+  }
 }
 

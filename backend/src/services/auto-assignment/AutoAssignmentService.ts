@@ -432,6 +432,9 @@ export class AutoAssignmentService {
    * Initialize rule engine with all hard and soft constraint rules
    */
   private initializeRuleEngine(config: any, enabledBuildings: string[]): void {
+    // Clear any previously registered rules to avoid duplicates
+    this.engine.clear();
+
     // Register hard constraint rules
     this.engine.registerRule(new RoomCapacityRule());
     this.engine.registerRule(new GenderMatchRule());

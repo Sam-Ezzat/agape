@@ -13,13 +13,17 @@ import {
   AutoAssignmentProgressEvent,
 } from '@/types/auto-assignment';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
+import { AttendeeRepository } from '@/repositories/AttendeeRepository';
+import { RoomRepository } from '@/repositories/RoomRepository';
 import { getNotificationService } from '@/utils/notification-singleton';
 import logger from '@/utils/logger';
 
 export class AutoAssignmentController {
   constructor(
     private autoAssignmentService: AutoAssignmentService,
-    private configRepository: AutoAssignmentConfigRepository
+    private configRepository: AutoAssignmentConfigRepository,
+    private attendeeRepository: AttendeeRepository,
+    private roomRepository: RoomRepository
   ) {}
 
   /**
@@ -202,17 +206,26 @@ export class AutoAssignmentController {
   async getStatus(req: Request, res: Response) {
     const { conferenceHouseId } = req.params;
 
-    // For now, return basic status
-    // Future: Track running executions, last execution time, etc.
-    const config = await this.configRepository.getOrCreateDefault(conferenceHouseId);
+    // Get attendee statistics
+    const attendeeStats = await this.attendeeRepository.getStatistics();
+    const totalAttendees = attendeeStats.total;
+    const assignedAttendees = attendeeStats.withAssignment;
+    const unassignedAttendees = totalAttendees - assignedAttendees;
+
+    // Get room statistics for this conference house
+    const roomStats = await this.roomRepository.getRoomStatisticsByConferenceHouse(
+      conferenceHouseId
+    );
 
     res.status(200).json({
       success: true,
       data: {
-        configured: config.enabledBuildings.length > 0,
-        enabledBuildings: config.enabledBuildings,
-        optimizationEnabled: config.optimizationEnabled,
-        lastUpdated: config.updatedAt,
+        totalAttendees,
+        assignedAttendees,
+        unassignedAttendees,
+        totalRooms: roomStats.totalRooms,
+        availableRooms: roomStats.availableRooms,
+        occupancyRate: roomStats.occupancyRate,
       },
     });
   }
