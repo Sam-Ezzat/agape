@@ -7,20 +7,19 @@
 
 import { Request, Response } from 'express';
 import { AutoAssignmentService } from '@/services/auto-assignment/AutoAssignmentService';
-import { NotificationService } from '@/services/notification.service';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
 import {
   RunAutoAssignmentDTO,
   AutoAssignmentProgressEvent,
 } from '@/types/auto-assignment';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
+import { getNotificationService } from '@/utils/notification-singleton';
 import logger from '@/utils/logger';
 
 export class AutoAssignmentController {
   constructor(
     private autoAssignmentService: AutoAssignmentService,
-    private configRepository: AutoAssignmentConfigRepository,
-    private notificationService: NotificationService
+    private configRepository: AutoAssignmentConfigRepository
   ) {}
 
   /**
@@ -39,7 +38,8 @@ export class AutoAssignmentController {
     // Progress callback to emit WebSocket events
     const onProgress = (event: AutoAssignmentProgressEvent) => {
       // Emit to conference-specific room
-      this.notificationService.notifyRoom(
+      const notificationService = getNotificationService();
+      notificationService.notifyRoom(
         params.conferenceHouseId,
         NotificationEvent.AUTO_ASSIGNMENT_PROGRESS,
         NotificationType.INFO,
@@ -60,7 +60,8 @@ export class AutoAssignmentController {
       });
 
       // Send completion notification
-      this.notificationService.notifyRoom(
+      const notificationService = getNotificationService();
+      notificationService.notifyRoom(
         params.conferenceHouseId,
         NotificationEvent.AUTO_ASSIGNMENT_COMPLETE,
         result.success ? NotificationType.SUCCESS : NotificationType.ERROR,
@@ -79,7 +80,8 @@ export class AutoAssignmentController {
       logger.error('Auto-assignment execution failed', error);
 
       // Send error notification
-      this.notificationService.notifyRoom(
+      const notificationService = getNotificationService();
+      notificationService.notifyRoom(
         params.conferenceHouseId,
         NotificationEvent.AUTO_ASSIGNMENT_ERROR,
         NotificationType.ERROR,
@@ -107,7 +109,8 @@ export class AutoAssignmentController {
 
     // Progress callback for preview
     const onProgress = (event: AutoAssignmentProgressEvent) => {
-      this.notificationService.notifyRoom(
+      const notificationService = getNotificationService();
+      notificationService.notifyRoom(
         params.conferenceHouseId,
         NotificationEvent.AUTO_ASSIGNMENT_PREVIEW_PROGRESS,
         NotificationType.INFO,
@@ -176,7 +179,8 @@ export class AutoAssignmentController {
     });
 
     // Notify connected clients of config change
-    this.notificationService.notifyRoom(
+    const notificationService = getNotificationService();
+    notificationService.notifyRoom(
       conferenceHouseId,
       NotificationEvent.AUTO_ASSIGNMENT_CONFIG_UPDATED,
       NotificationType.INFO,

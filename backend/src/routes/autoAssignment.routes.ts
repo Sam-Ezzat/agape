@@ -13,7 +13,6 @@ import { RoomRepository } from '@/repositories/RoomRepository';
 import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AuditLogRepository } from '@/repositories/AuditLogRepository';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
-import { NotificationService } from '@/services/notification.service';
 import { validate } from '@/middleware/validate';
 import { asyncHandler } from '@/middleware/asyncHandler';
 import {
@@ -22,7 +21,6 @@ import {
   conferenceHouseIdParamSchema,
 } from '@/validators/autoAssignment.schemas';
 import prisma from '@/utils/prisma-client';
-import { getNotificationService } from '@/utils/notification-singleton';
 
 const router = Router();
 
@@ -42,13 +40,10 @@ const autoAssignmentService = new AutoAssignmentService(
   configRepository
 );
 
-// Get notification service singleton
-const notificationService = getNotificationService();
-
+// Controller (notification service accessed lazily via getNotificationService)
 const autoAssignmentController = new AutoAssignmentController(
   autoAssignmentService,
-  configRepository,
-  notificationService
+  configRepository
 );
 
 /**
