@@ -780,10 +780,37 @@ export class AutoAssignmentService {
     group: AttendeeGroup,
     rooms: RoomWithDetails[]
   ): string | undefined {
-    // For now, return undefined
-    // Full implementation would check where group members are already assigned
-    // and return the most common floor ID
-    return undefined;
+    // Count floor occurrences for assigned group members
+    const floorCounts = new Map<string, number>();
+    
+    for (const member of group.members) {
+      // Find which room this member is currently assigned to
+      const assignedRoom = rooms.find(room => 
+        room.currentAssignments.some(assignment => assignment.attendeeId === member.id)
+      );
+      
+      if (assignedRoom) {
+        const count = floorCounts.get(assignedRoom.floorId) || 0;
+        floorCounts.set(assignedRoom.floorId, count + 1);
+      }
+    }
+    
+    // Return the floor with the most group members, or undefined if none assigned
+    if (floorCounts.size === 0) {
+      return undefined;
+    }
+    
+    let maxCount = 0;
+    let preferredFloorId: string | undefined = undefined;
+    
+    for (const [floorId, count] of floorCounts.entries()) {
+      if (count > maxCount) {
+        maxCount = count;
+        preferredFloorId = floorId;
+      }
+    }
+    
+    return preferredFloorId;
   }
 
   /**
@@ -794,10 +821,80 @@ export class AutoAssignmentService {
     group: AttendeeGroup,
     rooms: RoomWithDetails[]
   ): string | undefined {
-    // For now, return undefined
-    // Full implementation would identify leaders in the group
-    // and return the floor where most non-leader members are assigned
-    return undefined;
+    // Identify leaders in the group (by role or health issues)
+    const leaders: Attendee[] = [];
+    const nonLeaders: Attendee[] = [];
+    
+    for (const member of group.members) {
+      const isLeader = 
+        member.conferenceRole === 'LEADER' ||
+        member.conferenceRole === 'PASTOR' ||
+        member.conferenceRole === 'VIP' ||
+        (member.age !== null && member.age !== undefined && member.age >= 65) || // Elderly
+        (member.roomingNotes && this.hasHealthIssues(member.roomingNotes));
+      
+      if (isLeader) {
+        leaders.push(member);
+      } else {
+        nonLeaders.push(member);
+      }
+    }
+    
+    // If no leaders or no non-leaders, return undefined
+    if (leaders.length === 0 || nonLeaders.length === 0) {
+      return undefined;
+    }
+    
+    // Count floor occurrences for non-leader members
+    const floorCounts = new Map<string, number>();
+    
+    for (const member of nonLeaders) {
+      const assignedRoom = rooms.find(room => 
+        room.currentAssignments.some(assignment => assignment.attendeeId === member.id)
+      );
+      
+      if (assignedRoom) {
+        const count = floorCounts.get(assignedRoom.floorId) || 0;
+        floorCounts.set(assignedRoom.floorId, count + 1);
+      }
+    }
+    
+    // Return the floor with the most non-leader members
+    if (floorCounts.size === 0) {
+      return undefined;
+    }
+    
+    let maxCount = 0;
+    let preferredFloorId: string | undefined = undefined;
+    
+    for (const [floorId, count] of floorCounts.entries()) {
+      if (count > maxCount) {
+        maxCount = count;
+        preferredFloorId = floorId;
+      }
+    }
+    
+    return preferredFloorId;
+  }
+  
+  /**
+   * Check if rooming notes mention health issues
+   */
+  private hasHealthIssues(notes: string): boolean {
+    if (!notes) return false;
+    
+    const healthKeywords = [
+      // English
+      'health', 'medical', 'condition', 'disease', 'illness', 'disability',
+      'wheelchair', 'walker', 'cane', 'mobility', 'chronic',
+      'diabetes', 'heart', 'blood pressure', 'asthma', 'arthritis',
+      // Arabic
+      'صحة', 'مرض', 'حالة', 'كرسي متحرك', 'عكاز', 'مزمن',
+      'سكر', 'قلب', 'ضغط', 'ربو', 'مفاصل'
+    ];
+    
+    const lowerNotes = notes.toLowerCase();
+    return healthKeywords.some(keyword => lowerNotes.includes(keyword.toLowerCase()));
   }
 
   /**

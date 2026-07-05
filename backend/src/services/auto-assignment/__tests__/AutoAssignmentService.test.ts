@@ -404,4 +404,329 @@ describe('AutoAssignmentService', () => {
       // Should match number of non-deleted attendees
     });
   });
+
+  describe('Floor Preference Detection', () => {
+    it('should determine preferred floor based on group member assignments', async () => {
+      // Create service with exposed methods for testing
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      // Create mock group with members
+      const group = {
+        id: 'group-1',
+        type: 'FAMILY' as any,
+        members: [
+          createMockAttendee({ id: 'att-1', fullName: 'Member 1' }),
+          createMockAttendee({ id: 'att-2', fullName: 'Member 2' }),
+          createMockAttendee({ id: 'att-3', fullName: 'Member 3' })
+        ],
+        priority: 80,
+        constraints: {},
+        minRoomCount: 2
+      };
+
+      // Create mock rooms with assignments on different floors
+      const rooms = [
+        {
+          id: 'room-1',
+          floorId: 'floor-1',
+          currentAssignments: [
+            { attendeeId: 'att-1', roomId: 'room-1' }
+          ]
+        },
+        {
+          id: 'room-2',
+          floorId: 'floor-1',
+          currentAssignments: [
+            { attendeeId: 'att-2', roomId: 'room-2' }
+          ]
+        },
+        {
+          id: 'room-3',
+          floorId: 'floor-2',
+          currentAssignments: [
+            { attendeeId: 'att-3', roomId: 'room-3' }
+          ]
+        }
+      ];
+
+      // Access private method via any cast for testing
+      const preferredFloor = (service as any).determinePreferredFloor(group, rooms);
+
+      // Should prefer floor-1 (2 members vs 1 member on floor-2)
+      expect(preferredFloor).toBe('floor-1');
+    });
+
+    it('should return undefined when no group members are assigned', async () => {
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      const group = {
+        id: 'group-1',
+        type: 'FAMILY' as any,
+        members: [
+          createMockAttendee({ id: 'att-1', fullName: 'Member 1' })
+        ],
+        priority: 80,
+        constraints: {},
+        minRoomCount: 1
+      };
+
+      const rooms = [
+        {
+          id: 'room-1',
+          floorId: 'floor-1',
+          currentAssignments: [] // No assignments
+        }
+      ];
+
+      const preferredFloor = (service as any).determinePreferredFloor(group, rooms);
+
+      expect(preferredFloor).toBeUndefined();
+    });
+
+    it('should determine leader preferred floor based on non-leader assignments', async () => {
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      const group = {
+        id: 'group-1',
+        type: 'CHURCH' as any,
+        members: [
+          createMockAttendee({ 
+            id: 'att-1', 
+            fullName: 'Leader', 
+            conferenceRole: ConferenceRole.LEADER 
+          }),
+          createMockAttendee({ id: 'att-2', fullName: 'Member 1' }),
+          createMockAttendee({ id: 'att-3', fullName: 'Member 2' })
+        ],
+        priority: 90,
+        constraints: {},
+        minRoomCount: 2
+      };
+
+      const rooms = [
+        {
+          id: 'room-1',
+          floorId: 'floor-2',
+          currentAssignments: [
+            { attendeeId: 'att-2', roomId: 'room-1' }
+          ]
+        },
+        {
+          id: 'room-2',
+          floorId: 'floor-2',
+          currentAssignments: [
+            { attendeeId: 'att-3', roomId: 'room-2' }
+          ]
+        }
+      ];
+
+      const leaderFloor = (service as any).determineLeaderPreferredFloor(group, rooms);
+
+      // Should prefer floor-2 where non-leader members are
+      expect(leaderFloor).toBe('floor-2');
+    });
+
+    it('should identify elderly as leaders', async () => {
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      const group = {
+        id: 'group-1',
+        type: 'FAMILY' as any,
+        members: [
+          createMockAttendee({ 
+            id: 'att-1', 
+            fullName: 'Elderly Person', 
+            age: 70 
+          }),
+          createMockAttendee({ id: 'att-2', fullName: 'Member 1', age: 30 })
+        ],
+        priority: 85,
+        constraints: {},
+        minRoomCount: 2
+      };
+
+      const rooms = [
+        {
+          id: 'room-1',
+          floorId: 'floor-1',
+          currentAssignments: [
+            { attendeeId: 'att-2', roomId: 'room-1' }
+          ]
+        }
+      ];
+
+      const leaderFloor = (service as any).determineLeaderPreferredFloor(group, rooms);
+
+      // Should prefer floor-1 where younger member is
+      expect(leaderFloor).toBe('floor-1');
+    });
+
+    it('should identify people with health issues as leaders', async () => {
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      const group = {
+        id: 'group-1',
+        type: 'FAMILY' as any,
+        members: [
+          createMockAttendee({ 
+            id: 'att-1', 
+            fullName: 'Person with condition', 
+            roomingNotes: 'Has diabetes and needs medical attention'
+          }),
+          createMockAttendee({ id: 'att-2', fullName: 'Member 1' })
+        ],
+        priority: 85,
+        constraints: {},
+        minRoomCount: 2
+      };
+
+      const rooms = [
+        {
+          id: 'room-1',
+          floorId: 'floor-1',
+          currentAssignments: [
+            { attendeeId: 'att-2', roomId: 'room-1' }
+          ]
+        }
+      ];
+
+      const leaderFloor = (service as any).determineLeaderPreferredFloor(group, rooms);
+
+      expect(leaderFloor).toBe('floor-1');
+    });
+
+    it('should detect health issues in Arabic text', async () => {
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      const hasHealthIssues = (service as any).hasHealthIssues('يعاني من مرض السكر');
+      expect(hasHealthIssues).toBe(true);
+
+      const noHealthIssues = (service as any).hasHealthIssues('لا يوجد ملاحظات خاصة');
+      expect(noHealthIssues).toBe(false);
+    });
+
+    it('should return undefined when group has only leaders', async () => {
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      const group = {
+        id: 'group-1',
+        type: 'CHURCH' as any,
+        members: [
+          createMockAttendee({ 
+            id: 'att-1', 
+            fullName: 'Leader 1', 
+            conferenceRole: ConferenceRole.LEADER 
+          }),
+          createMockAttendee({ 
+            id: 'att-2', 
+            fullName: 'Leader 2', 
+            conferenceRole: ConferenceRole.PASTOR 
+          })
+        ],
+        priority: 90,
+        constraints: {},
+        minRoomCount: 2
+      };
+
+      const rooms = [
+        {
+          id: 'room-1',
+          floorId: 'floor-1',
+          currentAssignments: [
+            { attendeeId: 'att-1', roomId: 'room-1' }
+          ]
+        }
+      ];
+
+      const leaderFloor = (service as any).determineLeaderPreferredFloor(group, rooms);
+
+      expect(leaderFloor).toBeUndefined();
+    });
+
+    it('should return undefined when group has only non-leaders', async () => {
+      const service = new AutoAssignmentService(
+        new MockAttendeeRepository() as any,
+        new MockRoomRepository() as any,
+        new MockRoomAssignmentRepository() as any,
+        new MockAuditLogRepository() as any,
+        new MockAutoAssignmentConfigRepository() as any,
+        { useAI: false }
+      );
+
+      const group = {
+        id: 'group-1',
+        type: 'CHURCH' as any,
+        members: [
+          createMockAttendee({ id: 'att-1', fullName: 'Member 1', age: 25 }),
+          createMockAttendee({ id: 'att-2', fullName: 'Member 2', age: 30 })
+        ],
+        priority: 70,
+        constraints: {},
+        minRoomCount: 2
+      };
+
+      const rooms = [
+        {
+          id: 'room-1',
+          floorId: 'floor-1',
+          currentAssignments: [
+            { attendeeId: 'att-1', roomId: 'room-1' }
+          ]
+        }
+      ];
+
+      const leaderFloor = (service as any).determineLeaderPreferredFloor(group, rooms);
+
+      expect(leaderFloor).toBeUndefined();
+    });
+  });
 });
