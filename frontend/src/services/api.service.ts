@@ -26,6 +26,8 @@ import type {
   UpdateAttendeeDTO,
   CreateAssignmentDTO,
   BatchAssignmentDTO,
+  ConferenceHouse,
+  Building,
   AutoAssignmentConfig,
   RunAutoAssignmentDTO,
   UpdateAutoAssignmentConfigDTO,
@@ -432,6 +434,70 @@ export const excelApi = {
         params: filters,
         responseType: 'blob',
       });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+};
+
+/**
+ * Conference House API
+ * Backend routes: /api/conference-houses
+ */
+export const conferenceHouseApi = {
+  /**
+   * GET /api/conference-houses
+   * List all conference houses
+   */
+  list: async (): Promise<PaginatedResponse<ConferenceHouse>> => {
+    try {
+      const { data } = await apiClient.get('/conference-houses', { params: { limit: '100' } });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * GET /api/conference-houses/:id
+   * Get single conference house
+   */
+  getById: async (id: string): Promise<ApiResponse<ConferenceHouse>> => {
+    try {
+      const { data } = await apiClient.get(`/conference-houses/${id}`);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+};
+
+/**
+ * Building API
+ * Backend routes: /api/buildings
+ */
+export const buildingApi = {
+  /**
+   * GET /api/buildings
+   * List all buildings
+   */
+  list: async (): Promise<PaginatedResponse<Building>> => {
+    try {
+      const { data } = await apiClient.get('/buildings', { params: { limit: '100' } });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * GET /api/buildings/:id
+   * Get single building
+   */
+  getById: async (id: string): Promise<ApiResponse<Building>> => {
+    try {
+      const { data } = await apiClient.get(`/buildings/${id}`);
       return data;
     } catch (error) {
       return handleApiError(error as Error);

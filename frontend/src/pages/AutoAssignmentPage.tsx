@@ -14,13 +14,12 @@
 
 import { useEffect, useState } from 'react';
 import { useSocket } from '@/hooks/useSocket';
-import { autoAssignmentApi } from '@/services/api.service';
+import { autoAssignmentApi, conferenceHouseApi, buildingApi } from '@/services/api.service';
 import { toastSuccess, toastError, toastWarning } from '@/services/toast.service';
 import type {
   AutoAssignmentExecutionResult,
   AutoAssignmentStatus,
   Building,
-  ConferenceHouse,
 } from '@/types/api';
 import {
   NotificationEvent,
@@ -124,20 +123,23 @@ export default function AutoAssignmentPage() {
     try {
       setLoading(true);
       
-      // TODO: Load from API when endpoints are ready
-      // For now, mock data
-      const mockHouses: ConferenceHouse[] = [
-        { id: 'house-1', name: 'Main Conference House', createdAt: '', updatedAt: '' },
-      ];
-      const mockBuildings: Building[] = [
-        { id: 'building-1', name: 'Building A', conferenceHouseId: 'house-1', floorCount: 3, createdAt: '', updatedAt: '' },
-        { id: 'building-2', name: 'Building B', conferenceHouseId: 'house-1', floorCount: 4, createdAt: '', updatedAt: '' },
-      ];
+      // Load conference houses from API
+      const housesResponse = await conferenceHouseApi.list();
+      if (!housesResponse.success || housesResponse.data.length === 0) {
+        toastError('No conference houses found. Please create one first.');
+        setLoading(false);
+        return;
+      }
       
-      setBuildings(mockBuildings);
+      // Load buildings from API
+      const buildingsResponse = await buildingApi.list();
+      if (buildingsResponse.success) {
+        setBuildings(buildingsResponse.data);
+      }
       
-      if (mockHouses.length > 0 && mockHouses[0]) {
-        const houseId = mockHouses[0].id;
+      // Use the first conference house
+      if (housesResponse.data.length > 0 && housesResponse.data[0]) {
+        const houseId = housesResponse.data[0].id;
         setSelectedHouseId(houseId);
         await loadConfig(houseId);
         await loadStatus(houseId);
