@@ -156,18 +156,22 @@ describe('GenderMatchRule', () => {
   it('should reject mixed genders in GENERAL rooms when assignedGender is set', () => {
     const baseContext = createMockContext();
     
-    // Create a room with assigned gender
+    // Create male and female attendees
+    const maleAttendee = { id: 'male-attendee-1', gender: Gender.MALE, name: 'John' } as any;
+    const femaleAttendee = { ...baseContext.attendee, id: 'female-attendee-1', gender: Gender.FEMALE };
+    
+    // Create a room with a male occupant
     const roomWithGender: any = {
       ...baseContext.room,
       roomType: 'GENERAL' as const,
-      currentOccupancy: 2,
-      currentAssignments: [{ id: 'assignment-1' }, { id: 'assignment-2' }]
+      currentOccupancy: 1,
+      currentAssignments: [{ attendeeId: 'male-attendee-1', id: 'assignment-1' }]
     };
-    roomWithGender.assignedGender = Gender.MALE;
     
     const context: AssignmentContext = {
-      attendee: { ...baseContext.attendee, gender: Gender.FEMALE },
-      room: roomWithGender
+      attendee: femaleAttendee,
+      room: roomWithGender,
+      allAttendees: [maleAttendee, femaleAttendee]
     };
     
     const result = rule.validate(context);

@@ -17,6 +17,7 @@ import AttendeesPage from '@/pages/AttendeesPage';
 import CheckInPage from '@/pages/CheckInPage';
 import AssignmentsPage from '@/pages/AssignmentsPage';
 import AutoAssignmentPage from '@/pages/AutoAssignmentPage';
+import AutoAssignmentPreviewPage from '@/pages/AutoAssignmentPreviewPage';
 import HousesPage from '@/pages/HousesPage';
 import BuildingsPage from '@/pages/BuildingsPage';
 import FloorsPage from '@/pages/FloorsPage';
@@ -79,6 +80,9 @@ function App() {
             
             {/* Auto-Assignment - AI-powered automatic room assignment */}
             <Route path="/auto-assignment" element={<AutoAssignmentPage />} />
+            
+            {/* Auto-Assignment Preview - Full-page preview results */}
+            <Route path="/auto-assignment/preview" element={<AutoAssignmentPreviewPage />} />
             
             {/* Infrastructure Management */}
             <Route path="/houses" element={<HousesPage />} />

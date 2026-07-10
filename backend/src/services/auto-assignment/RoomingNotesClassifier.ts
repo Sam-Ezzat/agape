@@ -27,10 +27,17 @@ interface ClassifierConfig {
 export class RoomingNotesClassifier {
   private openai: OpenAI | null = null;
   private config: ClassifierConfig;
+  private lastApiCall: number = 0;
+  private minDelayBetweenCalls: number = 100; // 100ms between API calls
+  private rateLimitedUntil: number = 0; // Timestamp when rate limit expires
+  private classificationCache: Map<string, ClassifiedNotes> = new Map(); // Cache results
 
   constructor(config: ClassifierConfig = {}) {
+    // Check if AI is globally enabled via environment variable
+    const aiEnabled = process.env.OPENAI_ENABLED !== 'false';
+    
     this.config = {
-      useAI: true,
+      useAI: aiEnabled && config.useAI !== false,
       openAIModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       timeout: 10000,
       fallbackToKeywords: true,
@@ -38,7 +45,7 @@ export class RoomingNotesClassifier {
     };
 
     // Initialize OpenAI if API key is available and AI is enabled
-    if (this.config.useAI && process.env.OPENAI_API_KEY) {
+    if (this.config.useAI && process.env.OPENAI_API_KEY && aiEnabled) {
       try {
         this.openai = new OpenAI({
           apiKey: process.env.OPENAI_API_KEY,
@@ -65,21 +72,45 @@ export class RoomingNotesClassifier {
 
     const trimmedNotes = roomingNotes.trim();
 
+    // Check cache first
+    const cacheKey = trimmedNotes.toLowerCase();
+    if (this.classificationCache.has(cacheKey)) {
+      return this.classificationCache.get(cacheKey)!;
+    }
+
+    // Skip AI if we're currently rate limited
+    const now = Date.now();
+    if (now < this.rateLimitedUntil) {
+      console.warn(`Skipping AI classification (rate limited until ${new Date(this.rateLimitedUntil).toISOString()})`);
+      const keywordResult = this.classifyWithKeywords(trimmedNotes);
+      this.classificationCache.set(cacheKey, keywordResult);
+      return keywordResult;
+    }
+
     // Try AI classification first
     if (this.openai && this.config.useAI) {
       try {
         const aiResult = await this.classifyWithAI(trimmedNotes);
         if (aiResult) {
+          this.classificationCache.set(cacheKey, aiResult);
           return aiResult;
         }
-      } catch (error) {
-        console.warn('AI classification failed, falling back to keywords:', error);
+      } catch (error: any) {
+        // Handle rate limiting specifically
+        if (error?.status === 429) {
+          console.warn('OpenAI rate limit hit, switching to keyword classification for 60 seconds');
+          this.rateLimitedUntil = Date.now() + 60000; // Wait 60 seconds before trying AI again
+        } else {
+          console.warn('AI classification failed, falling back to keywords:', error?.message || error);
+        }
       }
     }
 
     // Fallback to keyword-based classification
     if (this.config.fallbackToKeywords) {
-      return this.classifyWithKeywords(trimmedNotes);
+      const keywordResult = this.classifyWithKeywords(trimmedNotes);
+      this.classificationCache.set(cacheKey, keywordResult);
+      return keywordResult;
     }
 
     // No classification method available
@@ -91,6 +122,14 @@ export class RoomingNotesClassifier {
    */
   private async classifyWithAI(notes: string): Promise<ClassifiedNotes | null> {
     if (!this.openai) return null;
+
+    // Rate limiting: wait before making next API call
+    const now = Date.now();
+    const timeSinceLastCall = now - this.lastApiCall;
+    if (timeSinceLastCall < this.minDelayBetweenCalls) {
+      await new Promise(resolve => setTimeout(resolve, this.minDelayBetweenCalls - timeSinceLastCall));
+    }
+    this.lastApiCall = Date.now();
 
     const prompt = `You are analyzing rooming notes for a conference accommodation system. Extract structured information from the following notes (may be in Arabic, English, or mixed).
 

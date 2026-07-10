@@ -15,7 +15,7 @@ import {
  */
 export interface RuleEngineResult {
   valid: boolean;                        // Overall validation (all hard constraints passed)
-  score: number;                         // Overall score (0-100) from soft constraints
+  score: number;                         // Overall score (0-1) from soft constraints
   validationResults: Map<string, RuleValidationResult>;
   scoringResults: Map<string, RuleScoringResult>;
   rejectionReason?: string;              // Why assignment was rejected
@@ -170,7 +170,7 @@ export class RuleEngine {
     }
     
     return {
-      score: Math.round(weightedScore * 100) / 100, // Round to 2 decimal places
+      score: Math.round(weightedScore) / 100, // Convert 0-100 to 0-1 range, round to 2 decimals
       breakdown,
       results
     };
@@ -220,7 +220,7 @@ export class RuleEngine {
     const lines: string[] = [];
     
     lines.push(`Assignment: ${context.attendee.fullName} → Room ${context.room.floor.building.name}`);
-    lines.push(`Overall: ${result.valid ? 'ACCEPTED' : 'REJECTED'} (Score: ${result.score}/100)`);
+    lines.push(`Overall: ${result.valid ? 'ACCEPTED' : 'REJECTED'} (Score: ${(result.score * 100).toFixed(1)}%)`);
     lines.push('');
     
     // Explain hard constraints

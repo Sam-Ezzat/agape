@@ -10,6 +10,7 @@ import { AuditLogRepository } from '@/repositories/AuditLogRepository';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
 import { RoomingNotesClassifier } from './RoomingNotesClassifier';
 import { GroupDetectionService } from './GroupDetectionService';
+import { AIGroupEnhancementService } from './AIGroupEnhancementService';
 import { RuleEngine } from './RuleEngine';
 import { AssignmentContext } from './rules/IAssignmentRule';
 import {
@@ -22,6 +23,7 @@ import {
   StageResult,
   RunAutoAssignmentDTO
 } from '@/types/auto-assignment';
+import logger from '@/utils/logger';
 
 // Import hard constraint rules
 import { RoomCapacityRule } from './rules/hard/RoomCapacityRule';
@@ -64,11 +66,12 @@ interface RoomWithDetails {
 /**
  * Auto-Assignment Service Orchestrator
  * 
- * Implements 11-stage workflow:
+ * Implements 12-stage workflow:
  * 1. Load configuration and rooms
  * 2. Load unassigned attendees
- * 3. Classify rooming notes (AI-powered)
- * 4. Detect groups (roommate, family, church)
+ * 3. Classify rooming notes (AI-powered text parsing)
+ * 4. Detect groups (roommate, family, church) - rule-based
+ * 4.5. AI Group Enhancement (semantic compatibility analysis)
  * 5. Prioritize groups by constraints
  * 6. Initialize rule engine
  * 7. Assign VIP/special needs first
@@ -80,7 +83,9 @@ interface RoomWithDetails {
 export class AutoAssignmentService {
   private classifier: RoomingNotesClassifier;
   private groupDetector: GroupDetectionService;
+  private aiEnhancer: AIGroupEnhancementService;
   private engine: RuleEngine;
+  private buildingGenderMap: Map<string, Gender>; // Track which gender is assigned to each building
 
   constructor(
     private attendeeRepository: AttendeeRepository,
@@ -96,7 +101,11 @@ export class AutoAssignmentService {
       useAI: options?.useAI !== false  // Default to true, but allow override
     });
     this.groupDetector = new GroupDetectionService(this.classifier);
+    this.aiEnhancer = new AIGroupEnhancementService({
+      useAI: options?.useAI !== false  // Default to true, but allow override
+    });
     this.engine = new RuleEngine();
+    this.buildingGenderMap = new Map(); // Initialize building gender tracking
   }
 
   /**
@@ -115,6 +124,9 @@ export class AutoAssignmentService {
     const assignments: AssignmentResult[] = [];
     const errors: ValidationError[] = [];
     const warnings: ValidationError[] = [];
+
+    // Reset building gender tracking for this execution
+    this.buildingGenderMap.clear();
 
     try {
       // Stage 1: Load configuration
@@ -190,15 +202,19 @@ export class AutoAssignmentService {
         stage: { number: 3, name: 'Classify Notes', status: 'started' }
       });
 
-      // Classification happens inside group detector
-      // Already integrated in GroupDetectionService
+      // Classify all rooming notes for AI enhancement
+      const classifications = new Map();
+      for (const attendee of unassignedAttendees) {
+        const classified = await this.classifier.classify(attendee.roomingNotes);
+        classifications.set(attendee.id, classified);
+      }
 
       stages.push({
         stage: 3,
         name: 'Classify Notes',
         status: 'completed',
         durationMs: Date.now() - stage3Start,
-        details: 'AI-powered note classification complete'
+        details: `AI-powered note classification complete (${classifications.size} attendees)`
       });
 
       this.emitProgress(onProgress, {
@@ -229,6 +245,45 @@ export class AutoAssignmentService {
         stage: { number: 4, name: 'Detect Groups', status: 'completed' }
       });
 
+      // Stage 4b: AI Group Enhancement (optional layer)
+      const stage4bStart = Date.now();
+      this.emitProgress(onProgress, {
+        type: 'stage',
+        stage: { number: 4.5, name: 'AI Group Enhancement', status: 'started' }
+      });
+
+      let enhancedGroups = groups;
+      if (this.aiEnhancer.isAIAvailable()) {
+        try {
+          logger.info('Starting AI group enhancement...');
+          enhancedGroups = await this.aiEnhancer.enhanceGroups(
+            unassignedAttendees,
+            classifications,
+            groups
+          );
+          logger.info(`AI enhancement: ${groups.length} → ${enhancedGroups.length} groups`);
+        } catch (error) {
+          logger.error('AI group enhancement failed, using rule-based groups:', error);
+          enhancedGroups = groups;
+        }
+      } else {
+        logger.info('AI group enhancement skipped (AI unavailable)');
+      }
+
+      stages.push({
+        stage: 4.5,
+        name: 'AI Group Enhancement',
+        status: 'completed',
+        durationMs: Date.now() - stage4bStart,
+        details: `Enhanced groups: ${groups.length} → ${enhancedGroups.length}`,
+        itemsProcessed: enhancedGroups.length
+      });
+
+      this.emitProgress(onProgress, {
+        type: 'stage',
+        stage: { number: 4.5, name: 'AI Group Enhancement', status: 'completed' }
+      });
+
       // Stage 5: Sort groups by priority
       const stage5Start = Date.now();
       this.emitProgress(onProgress, {
@@ -236,7 +291,7 @@ export class AutoAssignmentService {
         stage: { number: 5, name: 'Prioritize Groups', status: 'started' }
       });
 
-      const sortedGroups = this.sortGroupsByPriority(groups);
+      const sortedGroups = this.sortGroupsByPriority(enhancedGroups);
 
       stages.push({
         stage: 5,
@@ -336,6 +391,13 @@ export class AutoAssignmentService {
         stage: { number: 11, name: 'Validate Results', status: 'completed' }
       });
 
+      // Enrich assignments with attendee and room details for preview
+      const enrichedAssignments = await this.enrichAssignmentDetails(
+        assignments,
+        unassignedAttendees,
+        availableRooms
+      );
+
       // Build result
       // Success = workflow completed all stages (even if no assignments made)
       // Failure = only if system crash/exception occurred
@@ -345,7 +407,7 @@ export class AutoAssignmentService {
         attendeesProcessed: unassignedAttendees.length,
         errors,
         warnings,
-        assignments,
+        assignments: enrichedAssignments,  // Use enriched assignments with full details
         executionTimeMs: Date.now() - startTime,
         stages
       };
@@ -572,8 +634,8 @@ export class AutoAssignmentService {
   }
 
   /**
-   * Assign a single group to rooms
-   * Attempts to find best-scoring valid assignments for all members
+   * Assign a group of attendees to rooms
+   * For ROOMMATE groups, tries to keep them together in one room
    */
   private async assignGroup(
     group: AttendeeGroup,
@@ -596,7 +658,35 @@ export class AutoAssignmentService {
     // Determine leader preferred floor (if group has leaders)
     const leaderPreferredFloorId = this.determineLeaderPreferredFloor(group, rooms);
 
-    // Try to assign each member of the group
+    // Special handling for ROOMMATE groups - try to keep them together
+    if (group.type === GroupType.ROOMMATE && group.members.length > 1) {
+      const roommateResult = await this.tryAssignRoommatesTogether(
+        group,
+        rooms,
+        allAttendees,
+        dryRun,
+        onProgress,
+        preferredFloorId,
+        leaderPreferredFloorId
+      );
+      
+      // If we successfully assigned all roommates together, return
+      if (roommateResult.assignments.length === group.members.length) {
+        return roommateResult;
+      }
+      
+      // Otherwise, fall through to individual assignment
+      // but keep track of partial assignments
+      assignments.push(...roommateResult.assignments);
+      errors.push(...roommateResult.errors);
+      warnings.push(...roommateResult.warnings);
+      
+      // Filter out already-assigned members
+      const assignedIds = new Set(roommateResult.assignments.map(a => a.attendeeId));
+      group.members = group.members.filter(m => !assignedIds.has(m.id));
+    }
+
+    // Try to assign each member of the group individually
     for (const attendee of group.members) {
       try {
         // Find candidate rooms that pass hard constraints
@@ -606,15 +696,15 @@ export class AutoAssignmentService {
           errors.push({
             attendeeId: attendee.id,
             attendeeName: attendee.fullName,
-            reason: 'No available rooms match hard constraints',
-            violatedRule: 'System',
+            reason: 'No available rooms match hard constraints (capacity, gender, building restrictions)',
+            violatedRule: 'Hard Constraints',
             severity: 'error'
           });
           continue;
         }
 
         // Score each candidate room with soft constraints
-        const scoredRooms = this.scoreRooms(
+        const scoringResults = this.scoreRoomsDetailed(
           attendee,
           candidateRooms,
           allAttendees,
@@ -622,7 +712,7 @@ export class AutoAssignmentService {
           leaderPreferredFloorId
         );
 
-        if (scoredRooms.length === 0) {
+        if (scoringResults.length === 0) {
           errors.push({
             attendeeId: attendee.id,
             attendeeName: attendee.fullName,
@@ -634,24 +724,50 @@ export class AutoAssignmentService {
         }
 
         // Select best-scoring room
-        const bestMatch = scoredRooms[0]; // Already sorted by score (highest first)
+        const bestMatch = scoringResults[0]; // Already sorted by score (highest first)
 
-        // Create assignment (if not dry run)
+        // Build reasoning explanation
+        const reason = this.buildAssignmentReason(
+          attendee,
+          bestMatch.room,
+          group,
+          bestMatch.score,
+          bestMatch.scoreBreakdown
+        );
+
+        // Update room occupancy in memory for subsequent assignments (ALWAYS, even in dry run)
+        // This ensures gender validation works correctly for subsequent assignments
+        bestMatch.room.currentOccupancy++;
+        bestMatch.room.currentAssignments.push({
+          id: `temp-${attendee.id}`,
+          attendeeId: attendee.id,
+          roomId: bestMatch.room.id,
+          assignedAt: new Date(),
+          assignedBy: 'auto-assignment',
+          isLocked: false,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        // Update building gender map (only for non-FAMILY rooms)
+        if (bestMatch.room.roomType !== 'FAMILY' && attendee.gender) {
+          const buildingId = bestMatch.room.floor.building.id;
+          if (!this.buildingGenderMap.has(buildingId)) {
+            this.buildingGenderMap.set(buildingId, attendee.gender);
+          }
+        }
+
+        // Create assignment in database (only if not dry run)
         if (!dryRun) {
           await this.createAssignment(attendee.id, bestMatch.room.id);
-          
-          // Update room occupancy in memory for subsequent assignments
-          bestMatch.room.currentOccupancy++;
-          bestMatch.room.currentAssignments.push({
-            id: `temp-${attendee.id}`,
-            attendeeId: attendee.id,
-            roomId: bestMatch.room.id,
-            assignedAt: new Date(),
-            assignedBy: 'auto-assignment',
-            isLocked: false,
-            createdAt: new Date(),
-            updatedAt: new Date()
-          });
+        }
+
+        // Count roommates in the same room (for ROOMMATE groups)
+        let roommatesInSameRoom = 0;
+        if (group.type === GroupType.ROOMMATE) {
+          roommatesInSameRoom = group.members.filter(member =>
+            assignments.some(a => a.attendeeId === member.id && a.roomId === bestMatch.room.id)
+          ).length + 1; // +1 for current attendee
         }
 
         // Record successful assignment
@@ -660,7 +776,15 @@ export class AutoAssignmentService {
           roomId: bestMatch.room.id,
           score: bestMatch.score,
           appliedRules: bestMatch.appliedRules,
-          warnings: bestMatch.score < 50 ? ['Low quality score'] : undefined
+          reason: reason,
+          scoreBreakdown: bestMatch.scoreBreakdown,
+          groupInfo: group.type !== GroupType.INDIVIDUAL ? {
+            groupId: group.id,
+            groupType: group.type,
+            groupSize: group.members.length,
+            roommatesInSameRoom: group.type === GroupType.ROOMMATE ? roommatesInSameRoom : undefined
+          } : undefined,
+          warnings: bestMatch.score < 0.5 ? ['Low quality score'] : undefined
         });
 
         // Emit progress event
@@ -675,11 +799,11 @@ export class AutoAssignmentService {
         });
 
         // Add warning if score is low
-        if (bestMatch.score < 50) {
+        if (bestMatch.score < 0.5) {
           warnings.push({
             attendeeId: attendee.id,
             attendeeName: attendee.fullName,
-            reason: `Low assignment quality score: ${bestMatch.score.toFixed(1)}`,
+            reason: `Low assignment quality score: ${(bestMatch.score * 100).toFixed(0)}%`,
             violatedRule: 'Quality',
             severity: 'warning'
           });
@@ -701,6 +825,260 @@ export class AutoAssignmentService {
   }
 
   /**
+   * Try to assign roommates together in the same room
+   */
+  private async tryAssignRoommatesTogether(
+    group: AttendeeGroup,
+    rooms: RoomWithDetails[],
+    allAttendees: Attendee[],
+    dryRun: boolean,
+    onProgress?: ProgressCallback,
+    preferredFloorId?: string,
+    leaderPreferredFloorId?: string
+  ): Promise<{
+    assignments: AssignmentResult[];
+    errors: ValidationError[];
+    warnings: ValidationError[];
+  }> {
+    const assignments: AssignmentResult[] = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationError[] = [];
+
+    const groupSize = group.members.length;
+    
+    // Find rooms that can fit the entire group
+    const suitableRooms: RoomWithDetails[] = [];
+    
+    for (const room of rooms) {
+      const availableSpace = room.capacity - room.currentOccupancy;
+      if (availableSpace >= groupSize) {
+        // Check if all members pass hard constraints for this room
+        let allMembersValid = true;
+        for (const member of group.members) {
+          const candidates = this.findCandidateRooms(member, [room], allAttendees);
+          if (candidates.length === 0) {
+            allMembersValid = false;
+            break;
+          }
+        }
+        
+        if (allMembersValid) {
+          suitableRooms.push(room);
+        }
+      }
+    }
+
+    if (suitableRooms.length === 0) {
+      // No room can fit all roommates together
+      warnings.push({
+        attendeeId: group.members[0].id,
+        attendeeName: `Roommate group (${groupSize} people)`,
+        reason: `No single room found with capacity for ${groupSize} roommates. Will assign to separate rooms.`,
+        violatedRule: 'Room Capacity',
+        severity: 'warning'
+      });
+      return { assignments, errors, warnings };
+    }
+
+    // Score the suitable rooms for the first member (as representative)
+    const firstMember = group.members[0];
+    const scoringResults = this.scoreRoomsDetailed(
+      firstMember,
+      suitableRooms,
+      allAttendees,
+      preferredFloorId,
+      leaderPreferredFloorId
+    );
+
+    if (scoringResults.length === 0) {
+      return { assignments, errors, warnings };
+    }
+
+    // Select best room
+    const bestRoom = scoringResults[0].room;
+    
+    // Assign all roommates to this room
+    for (const member of group.members) {
+      // Update room occupancy
+      bestRoom.currentOccupancy++;
+      bestRoom.currentAssignments.push({
+        id: `temp-${member.id}`,
+        attendeeId: member.id,
+        roomId: bestRoom.id,
+        assignedAt: new Date(),
+        assignedBy: 'auto-assignment',
+        isLocked: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      
+      // Update building gender map
+      if (bestRoom.roomType !== 'FAMILY' && member.gender) {
+        const buildingId = bestRoom.floor.building.id;
+        if (!this.buildingGenderMap.has(buildingId)) {
+          this.buildingGenderMap.set(buildingId, member.gender);
+        }
+      }
+
+      // Create assignment in database (only if not dry run)
+      if (!dryRun) {
+        await this.createAssignment(member.id, bestRoom.id);
+      }
+
+      // Build reason
+      const reason = `Assigned with ${groupSize - 1} roommate(s) to room ${bestRoom.roomNumber} (capacity ${bestRoom.capacity}). Roommates kept together as requested.`;
+
+      // Record assignment
+      assignments.push({
+        attendeeId: member.id,
+        roomId: bestRoom.id,
+        score: scoringResults[0].score,
+        appliedRules: scoringResults[0].appliedRules,
+        reason: reason,
+        scoreBreakdown: scoringResults[0].scoreBreakdown,
+        groupInfo: {
+          groupId: group.id,
+          groupType: group.type,
+          groupSize: groupSize,
+          roommatesInSameRoom: groupSize
+        }
+      });
+
+      // Emit progress
+      this.emitProgress(onProgress, {
+        type: 'assignment',
+        assignment: {
+          attendeeId: member.id,
+          attendeeName: member.fullName,
+          roomId: bestRoom.id,
+          roomNumber: bestRoom.roomNumber
+        }
+      });
+    }
+
+    return { assignments, errors, warnings };
+  }
+
+  /**
+   * Build human-readable reasoning for an assignment with detailed context
+   */
+  private buildAssignmentReason(
+    attendee: Attendee,
+    room: RoomWithDetails,
+    group: AttendeeGroup,
+    score: number,
+    scoreBreakdown: Record<string, number>
+  ): string {
+    const reasons: string[] = [];
+
+    // Attendee Basic Info
+    const attendeeInfo: string[] = [];
+    if (attendee.gender) {
+      attendeeInfo.push(`${attendee.gender.toLowerCase()}`);
+    }
+    if (attendee.age) {
+      attendeeInfo.push(`age ${attendee.age}`);
+    }
+    if (attendeeInfo.length > 0) {
+      reasons.push(`Attendee: ${attendeeInfo.join(', ')}`);
+    }
+
+    // Group Information
+    if (group.type !== GroupType.INDIVIDUAL) {
+      const groupDesc = `${group.type} group (${group.members.length} members)`;
+      reasons.push(`Group: ${groupDesc}`);
+    }
+
+    // Room Assignment Details
+    const roomDetails: string[] = [];
+    roomDetails.push(`Room ${room.roomNumber} in ${room.floor.building.name}`);
+    roomDetails.push(`floor ${room.floor.floorNumber}`);
+    if (room.roomType !== 'GENERAL') {
+      roomDetails.push(`${room.roomType.toLowerCase()} type`);
+    }
+    const occupancyAfter = room.currentOccupancy + 1;
+    roomDetails.push(`occupancy ${occupancyAfter}/${room.capacity}`);
+    reasons.push(`Assigned to: ${roomDetails.join(', ')}`);
+
+    // Score Analysis - explain why this score
+    const scorePct = (score * 100).toFixed(0);
+    const scoreQuality = score >= 0.8 ? 'excellent' : score >= 0.6 ? 'good' : 'acceptable';
+    reasons.push(`Quality: ${scorePct}% (${scoreQuality} match)`);
+
+    // Detailed Scoring Factors with context
+    const sortedFactors = Object.entries(scoreBreakdown)
+      .sort((a, b) => b[1] - a[1])
+      .filter(([_, value]) => value >= 0.05); // Show factors contributing 5% or more
+    
+    if (sortedFactors.length > 0) {
+      const factorDetails: string[] = [];
+      
+      for (const [rule, value] of sortedFactors) {
+        const pct = (value * 100).toFixed(0);
+        let detail = `${this.humanizeRuleName(rule)} (+${pct}%)`;
+        
+        // Add context for each rule
+        if (rule === 'SameChurchRule' && attendee.church) {
+          detail += ` - attendee from ${attendee.church}`;
+        } else if (rule === 'SameGovernorateRule' && attendee.governorate) {
+          detail += ` - ${attendee.governorate} governorate`;
+        } else if (rule === 'SimilarAgeRule' && attendee.age) {
+          detail += ` - age ${attendee.age}`;
+        } else if (rule === 'MinimizeEmptyBedsRule') {
+          const emptyBeds = room.capacity - occupancyAfter;
+          detail += ` - ${emptyBeds} empty bed${emptyBeds !== 1 ? 's' : ''} after assignment`;
+        } else if (rule === 'PreferSameFloorRule') {
+          detail += ` - floor ${room.floor.floorNumber}`;
+        }
+        
+        factorDetails.push(detail);
+      }
+      
+      reasons.push(`Factors: ${factorDetails.join('; ')}`);
+    }
+
+    // Special Constraints
+    const constraints: string[] = [];
+    if (group.constraints.requiresAccessibility) {
+      constraints.push('accessibility required');
+    }
+    if (group.constraints.requiresGroundFloor) {
+      constraints.push('ground floor required');
+    }
+    if (room.roomType === 'VIP' && group.constraints.requiredRoomType === 'VIP') {
+      constraints.push('VIP status');
+    }
+    if (constraints.length > 0) {
+      reasons.push(`Special needs: ${constraints.join(', ')}`);
+    }
+
+    // Rooming Notes if available
+    if (attendee.roomingNotes && attendee.roomingNotes.trim()) {
+      const notesPreview = attendee.roomingNotes.length > 50 
+        ? attendee.roomingNotes.substring(0, 50) + '...' 
+        : attendee.roomingNotes;
+      reasons.push(`Notes: "${notesPreview}"`);
+    }
+
+    return reasons.join('. ') + '.';
+  }
+
+  /**
+   * Convert rule names to human-readable format
+   */
+  private humanizeRuleName(ruleName: string): string {
+    const map: Record<string, string> = {
+      'SameChurchRule': 'Same church',
+      'SameGovernorateRule': 'Same governorate',
+      'SimilarAgeRule': 'Similar age',
+      'MinimizeEmptyBedsRule': 'Minimize empty beds',
+      'PreferSameFloorRule': 'Same floor preference',
+      'LeaderProximityRule': 'Near leaders'
+    };
+    return map[ruleName] || ruleName;
+  }
+
+  /**
    * Find candidate rooms that pass all hard constraints
    */
   private findCandidateRooms(
@@ -711,6 +1089,23 @@ export class AutoAssignmentService {
     const candidates: RoomWithDetails[] = [];
 
     for (const room of rooms) {
+      // First check building-level gender compatibility (CRITICAL)
+      // FAMILY rooms are exempt from building gender restrictions
+      if (room.roomType !== 'FAMILY') {
+        const buildingGender = this.buildingGenderMap.get(room.floor.building.id);
+        const attendeeGender = attendee.gender;
+        
+        // If building has a gender assigned and it doesn't match attendee, skip this room
+        if (buildingGender && attendeeGender && buildingGender !== attendeeGender) {
+          continue; // Skip this room - building gender mismatch
+        }
+        
+        // If attendee has no gender or OTHER gender, can only use empty buildings or FAMILY rooms
+        if ((!attendeeGender || attendeeGender === Gender.OTHER) && buildingGender) {
+          continue; // Skip this room - attendee can't be in occupied building
+        }
+      }
+      
       const context: AssignmentContext = {
         attendee,
         room,
@@ -759,6 +1154,61 @@ export class AutoAssignmentService {
         room,
         score: result.score,
         appliedRules: Array.from(result.results.keys())
+      });
+    }
+
+    // Sort by score (highest first)
+    return scored.sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Score candidate rooms with detailed breakdown for reasoning
+   */
+  private scoreRoomsDetailed(
+    attendee: Attendee,
+    rooms: RoomWithDetails[],
+    allAttendees: Attendee[],
+    preferredFloorId?: string,
+    leaderPreferredFloorId?: string
+  ): Array<{ 
+    room: RoomWithDetails; 
+    score: number; 
+    appliedRules: string[];
+    scoreBreakdown: Record<string, number>;
+  }> {
+    const scored: Array<{ 
+      room: RoomWithDetails; 
+      score: number; 
+      appliedRules: string[];
+      scoreBreakdown: Record<string, number>;
+    }> = [];
+
+    for (const room of rooms) {
+      const context: AssignmentContext = {
+        attendee,
+        room,
+        allAttendees,
+        configuration: {
+          preferredFloorId,
+          leaderPreferredFloorId
+        }
+      };
+
+      // Score with soft constraints
+      const result = this.engine.scoreSoftConstraints(context);
+      
+      // Build breakdown from results - normalize scores to 0-1 range
+      const breakdown: Record<string, number> = {};
+      for (const [ruleName, ruleResult] of result.results.entries()) {
+        // Individual rule scores are 0-100, normalize to 0-1 by dividing by 100
+        breakdown[ruleName] = ruleResult.score / 100;
+      }
+      
+      scored.push({
+        room,
+        score: result.score,
+        appliedRules: Array.from(result.results.keys()),
+        scoreBreakdown: breakdown
       });
     }
 
@@ -935,7 +1385,45 @@ export class AutoAssignmentService {
   }
 
   /**
-   * Emit progress event to callback
+   * Enrich assignment details with attendee and room information for preview
+   */
+  private async enrichAssignmentDetails(
+    assignments: AssignmentResult[],
+    attendees: Attendee[],
+    rooms: RoomWithDetails[]
+  ): Promise<any[]> {
+    // Create lookup maps for O(1) access
+    const attendeeMap = new Map(
+      attendees.map(a => [a.id, a])
+    );
+    const roomMap = new Map(
+      rooms.map(r => [r.id, r])
+    );
+
+    // Enrich each assignment with full details
+    return assignments.map(assignment => {
+      const attendee = attendeeMap.get(assignment.attendeeId);
+      const room = roomMap.get(assignment.roomId);
+
+      if (!attendee || !room) {
+        logger.warn('Missing attendee or room data for assignment enrichment', {
+          attendeeId: assignment.attendeeId,
+          roomId: assignment.roomId
+        });
+        return assignment;  // Return original if data missing
+      }
+
+      return {
+        ...assignment,
+        attendeeName: attendee.fullName,
+        roomNumber: room.roomNumber,
+        buildingName: room.floor.building.name,
+        floorNumber: room.floor.floorNumber
+      };
+    });
+  }
+
+  /**   * Emit progress event to callback
    */
   private emitProgress(
     callback: ProgressCallback | undefined,

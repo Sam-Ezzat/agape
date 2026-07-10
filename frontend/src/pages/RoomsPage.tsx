@@ -282,7 +282,7 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
         : `${baseUrl}/rooms`;
       
       const response = await fetch(url, {
-        method: room ? 'PUT' : 'POST',
+        method: room ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(submitData),
       });

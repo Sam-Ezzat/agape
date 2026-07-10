@@ -279,7 +279,7 @@ export default function AttendeesPage() {
                 className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
               />
               <label htmlFor="dualSearch" className="ml-2 text-sm text-gray-600">
-                Enable Arabic/English search (finds "محمد" when searching "Mohamed")
+                Enable Arabic/English search (finds "مينا" when searching "Mina")
               </label>
             </div>
           </div>

@@ -269,8 +269,8 @@ describe('RuleEngine', () => {
       const context = createMockContext();
       const result = engine.scoreSoftConstraints(context);
       
-      // Expected: (100 * 0.6 + 50 * 0.4) / (0.6 + 0.4) = (60 + 20) / 1 = 80
-      expect(result.score).toBe(80);
+      // Expected: (100 * 0.6 + 50 * 0.4) / (0.6 + 0.4) / 100 = (60 + 20) / 1 / 100 = 0.8
+      expect(result.score).toBe(0.8);
     });
     
     it('should return 0 when no soft constraints are registered', () => {
@@ -280,7 +280,7 @@ describe('RuleEngine', () => {
       expect(result.score).toBe(0);
     });
     
-    it('should normalize scores to 0-100 range', () => {
+    it('should normalize scores to 0-1 range', () => {
       const rule = new MockSoftConstraintRule(150); // Out of range
       rule.weight = 1.0;
       engine.registerRule(rule);
@@ -288,7 +288,7 @@ describe('RuleEngine', () => {
       const context = createMockContext();
       const result = engine.scoreSoftConstraints(context);
       
-      expect(result.score).toBe(100); // Capped at 100
+      expect(result.score).toBe(1); // Capped at 1.0 (was 100, now 1.0 after dividing by 100)
     });
     
     it('should provide score breakdown by rule', () => {

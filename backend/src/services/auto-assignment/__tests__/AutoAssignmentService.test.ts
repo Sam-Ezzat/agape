@@ -132,7 +132,7 @@ describe('AutoAssignmentService', () => {
   });
 
   describe('execute', () => {
-    it('should execute all 11 stages in order', async () => {
+    it('should execute all 12 stages in order', async () => {
       const params: RunAutoAssignmentDTO = {
         conferenceHouseId: 'house-1',
         dryRun: true
@@ -141,16 +141,17 @@ describe('AutoAssignmentService', () => {
       const result = await service.execute(params);
 
       expect(result.success).toBe(true);
-      expect(result.stages.length).toBeGreaterThanOrEqual(7); // At least stages 1-9, 11 (10 may be skipped)
+      expect(result.stages.length).toBeGreaterThanOrEqual(8); // At least stages 1-9, 11 (10 may be skipped)
       
       // Verify stage order
       expect(result.stages[0].name).toBe('Load Configuration');
       expect(result.stages[1].name).toBe('Load Data');
       expect(result.stages[2].name).toBe('Classify Notes');
       expect(result.stages[3].name).toBe('Detect Groups');
-      expect(result.stages[4].name).toBe('Prioritize Groups');
-      expect(result.stages[5].name).toBe('Initialize Rules');
-      expect(result.stages[6].name).toBe('Assign VIP/Special Needs');
+      expect(result.stages[4].name).toBe('AI Group Enhancement');
+      expect(result.stages[5].name).toBe('Prioritize Groups');
+      expect(result.stages[6].name).toBe('Initialize Rules');
+      expect(result.stages[7].name).toBe('Assign VIP/Special Needs');
     });
 
     it('should emit progress events during execution', async () => {

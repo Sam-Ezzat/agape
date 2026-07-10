@@ -124,18 +124,45 @@ export class AutoAssignmentController {
       );
     };
 
-    const result = await this.autoAssignmentService.execute(params, onProgress);
+    try {
+      const result = await this.autoAssignmentService.execute(params, onProgress);
 
-    logger.info('Auto-assignment preview completed', {
-      assignmentsWouldCreate: result.assignmentsCreated,
-      attendeesProcessed: result.attendeesProcessed,
-    });
+      logger.info('Auto-assignment preview completed', {
+        assignmentsWouldCreate: result.assignmentsCreated,
+        attendeesProcessed: result.attendeesProcessed,
+      });
 
-    res.status(200).json({
-      success: true,
-      data: result,
-      message: 'Preview completed (no changes made to database)',
-    });
+      // Send completion notification
+      const notificationService = getNotificationService();
+      notificationService.notifyRoom(
+        params.conferenceHouseId,
+        NotificationEvent.AUTO_ASSIGNMENT_COMPLETE,
+        result.success ? NotificationType.SUCCESS : NotificationType.ERROR,
+        `Preview completed: ${result.assignmentsCreated} assignments would be created (no changes made to database)`,
+        'Preview Complete',
+        { result }
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result,
+        message: 'Preview completed (no changes made to database)',
+      });
+    } catch (error) {
+      logger.error('Auto-assignment preview failed', error);
+
+      // Send error notification
+      const notificationService = getNotificationService();
+      notificationService.notifyRoom(
+        params.conferenceHouseId,
+        NotificationEvent.AUTO_ASSIGNMENT_ERROR,
+        NotificationType.ERROR,
+        error instanceof Error ? error.message : 'Preview failed',
+        'Preview Error'
+      );
+
+      throw error;
+    }
   }
 
   /**

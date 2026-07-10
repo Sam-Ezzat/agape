@@ -54,21 +54,24 @@ export class GenderMatchRule implements IAssignmentRule {
     // Check gender of current occupants
     const currentOccupants = room.currentAssignments;
     if (currentOccupants && currentOccupants.length > 0) {
-      // Get attendee IDs from current assignments
-      // Note: We'd need to pass full attendee data in context for this check
-      // For now, we assume the room.currentAssignments includes attendee data
-      // This will be populated by the service layer
+      // Get the gender from first occupant by looking up in allAttendees
+      const firstOccupantId = currentOccupants[0].attendeeId;
       
-      // Simplified check: In practice, service layer should pre-calculate room gender
-      // For now, we'll add this to the context as room.assignedGender
-      const roomGender = (room as any).assignedGender;
-      
-      if (roomGender && roomGender !== attendeeGender) {
-        return {
-          valid: false,
-          reason: `Room is assigned to ${roomGender} attendees, cannot assign ${attendeeGender} attendee`,
-          conflictingRule: this.name
-        };
+      // Defensive: check if allAttendees is provided (may not be in tests)
+      if (context.allAttendees && context.allAttendees.length > 0) {
+        const firstOccupant = context.allAttendees.find(a => a.id === firstOccupantId);
+        
+        if (firstOccupant && firstOccupant.gender) {
+          const roomGender = firstOccupant.gender;
+          
+          if (roomGender !== attendeeGender) {
+            return {
+              valid: false,
+              reason: `Room is assigned to ${roomGender} attendees, cannot assign ${attendeeGender} attendee`,
+              conflictingRule: this.name
+            };
+          }
+        }
       }
     }
     

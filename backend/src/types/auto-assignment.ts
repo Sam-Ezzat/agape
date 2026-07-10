@@ -85,6 +85,19 @@ export interface AssignmentResult {
   score: number;                  // Assignment quality score
   appliedRules: string[];         // Rules that contributed to this assignment
   warnings?: string[];            // Non-critical issues
+  reason?: string;                // Explanation of why this assignment was made
+  groupInfo?: {                   // Group membership information
+    groupId: string;
+    groupType: GroupType;
+    groupSize: number;
+    roommatesInSameRoom?: number;  // How many roommates assigned to this room
+  };
+  scoreBreakdown?: Record<string, number>; // Score contribution by each rule
+  // Enriched details for preview (populated before returning to client)
+  attendeeName?: string;
+  roomNumber?: string;
+  buildingName?: string;
+  floorNumber?: number;
 }
 
 /**

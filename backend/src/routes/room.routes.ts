@@ -73,6 +73,12 @@ router.patch(
   validate(updateRoomSchema, 'body'),
   asyncHandler(roomController.update)
 );
+router.put(
+  '/:id',
+  validate(roomIdSchema, 'params'),
+  validate(updateRoomSchema, 'body'),
+  asyncHandler(roomController.update)
+);
 
 // Delete room
 router.delete('/:id', validate(roomIdSchema, 'params'), asyncHandler(roomController.delete));

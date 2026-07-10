@@ -286,10 +286,31 @@ export interface UpdateAutoAssignmentConfigDTO {
   ruleWeights?: Record<string, number>;
 }
 
+export interface AssignmentPreview {
+  attendeeId: string;
+  attendeeName: string;
+  roomId: string;
+  roomNumber: string;
+  buildingName: string;
+  floorNumber: number;
+  score: number;
+  appliedRules: string[];
+  reason?: string;                    // Explanation of why this assignment was made
+  scoreBreakdown?: Record<string, number>; // Score contribution by each rule
+  groupInfo?: {                       // Group membership information
+    groupId: string;
+    groupType: 'roommate' | 'family' | 'church' | 'governorate' | 'individual';
+    groupSize: number;
+    roommatesInSameRoom?: number;      // How many roommates assigned to this room
+  };
+  warnings?: string[];                 // Non-critical issues
+}
+
 export interface AutoAssignmentExecutionResult {
   success: boolean;
   assignmentsCreated: number;
   roomsUsed: number;
+  attendeesProcessed: number;
   unassignedAttendees: Array<{
     id: string;
     name: string;
@@ -299,6 +320,7 @@ export interface AutoAssignmentExecutionResult {
     attendeeId: string;
     reason: string;
   }>;
+  assignments?: AssignmentPreview[];  // Preview of all assignments
   executionTimeMs: number;
   stages: Record<string, {
     duration: number;

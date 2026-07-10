@@ -164,7 +164,7 @@ function HouseModal({ house, onClose, onSave }: {
         : `${baseUrl}/conference-houses`;
       
       const response = await fetch(url, {
-        method: house ? 'PUT' : 'POST',
+        method: house ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), description: description.trim() }),
       });

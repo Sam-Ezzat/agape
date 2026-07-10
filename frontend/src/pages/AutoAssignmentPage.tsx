@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useSocket } from '@/hooks/useSocket';
 import { autoAssignmentApi, conferenceHouseApi, buildingApi } from '@/services/api.service';
 import { toastSuccess, toastError, toastWarning } from '@/services/toast.service';
@@ -39,6 +40,8 @@ const DEFAULT_RULE_WEIGHTS = {
 };
 
 export default function AutoAssignmentPage() {
+  const navigate = useNavigate();
+  
   // State
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [selectedHouseId, setSelectedHouseId] = useState<string>('');
@@ -63,6 +66,17 @@ export default function AutoAssignmentPage() {
   // Socket connection
   const socket = useSocket();
   
+  // Debug: Log executionResult changes
+  useEffect(() => {
+    console.log('🔄 executionResult changed:', executionResult);
+    console.log('📊 Has assignments:', executionResult?.assignments?.length);
+    console.log('📋 Display condition met:', 
+      executionResult && 
+      executionResult.assignments && 
+      executionResult.assignments.length > 0
+    );
+  }, [executionResult]);
+  
   // Load initial data
   useEffect(() => {
     loadInitialData();
@@ -85,11 +99,18 @@ export default function AutoAssignmentPage() {
     };
     
     const handleComplete = (payload: any) => {
+      console.log('🎯 handleComplete triggered:', payload);
+      console.log('📦 Payload data:', payload.data);
+      console.log('📊 Result:', payload.data?.result);
+      
       setIsExecuting(false);
       setIsPreviewing(false);
       
       if (payload.data?.result) {
+        console.log('✅ Setting executionResult from WebSocket with', payload.data.result.assignments?.length, 'assignments');
         setExecutionResult(payload.data.result);
+      } else {
+        console.warn('⚠️ WebSocket complete event missing result data');
       }
       
       // Reload status
@@ -101,6 +122,7 @@ export default function AutoAssignmentPage() {
     };
     
     const handleError = (payload: any) => {
+      console.error('❌ WebSocket error event:', payload);
       setIsExecuting(false);
       setIsPreviewing(false);
       toastError(payload.message || 'Auto-assignment failed');
@@ -163,7 +185,8 @@ export default function AutoAssignmentPage() {
         }
         
         if (configData.staffReservedCapacity !== undefined) {
-          setStaffReservedCapacity(configData.staffReservedCapacity);
+          // Backend sends integer percentage (0-50), convert to decimal (0.0-0.5)
+          setStaffReservedCapacity(configData.staffReservedCapacity / 100);
         }
         
         if (configData.enabledBuildings) {
@@ -216,7 +239,8 @@ export default function AutoAssignmentPage() {
       await autoAssignmentApi.updateConfig(selectedHouseId, {
         enabledBuildings: selectedBuildingIds,
         ruleWeights,
-        staffReservedCapacity,
+        // Backend expects integer percentage (0-50), convert from decimal (0.0-0.5)
+        staffReservedCapacity: Math.round(staffReservedCapacity * 100),
       });
       
       toastSuccess('Configuration saved');
@@ -251,13 +275,22 @@ export default function AutoAssignmentPage() {
         socket.emit('join', selectedHouseId);
       }
       
-      await autoAssignmentApi.execute({
+      const response = await autoAssignmentApi.execute({
         conferenceHouseId: selectedHouseId,
         buildingIds: selectedBuildingIds,
         dryRun: false,
       });
       
-      // Result will be handled by socket event
+      // Handle result from HTTP response (fallback if socket event is missed)
+      if (response.success && response.data) {
+        setExecutionResult(response.data);
+        setIsExecuting(false);
+        await loadStatus(selectedHouseId);
+        toastSuccess(response.data.success 
+          ? `Auto-assignment completed: ${response.data.assignmentsCreated} assignments created` 
+          : 'Auto-assignment completed with errors'
+        );
+      }
     } catch (error) {
       setIsExecuting(false);
       toastError('Failed to start auto-assignment');
@@ -283,16 +316,73 @@ export default function AutoAssignmentPage() {
         socket.emit('join', selectedHouseId);
       }
       
-      await autoAssignmentApi.preview({
+      console.log('🚀 Starting preview request...');
+      const response = await autoAssignmentApi.preview({
         conferenceHouseId: selectedHouseId,
         buildingIds: selectedBuildingIds,
         dryRun: true,
       });
       
-      // Result will be handled by socket event
+      console.log('✅ Preview response:', response);
+      console.log('📊 Response data:', response.data);
+      console.log('📝 Assignments:', response.data?.assignments);
+      
+      // Handle result from HTTP response (fallback if socket event is missed)
+      if (response.success && response.data) {
+        console.log('✅ Setting executionResult with', response.data.assignments?.length, 'assignments');
+        
+        // Save preview to localStorage (persists across page navigations)
+        localStorage.setItem('autoAssignmentPreview', JSON.stringify(response.data));
+        localStorage.setItem('autoAssignmentPreviewTimestamp', new Date().toISOString());
+        
+        setExecutionResult(response.data);
+        setIsPreviewing(false);
+        await loadStatus(selectedHouseId);
+        
+        toastSuccess('Preview completed - opening full results page...');
+        
+        // Navigate to preview page with params
+        navigate(`/auto-assignment/preview?houseId=${selectedHouseId}&buildingIds=${selectedBuildingIds.join(',')}`);
+      } else {
+        console.warn('⚠️ Preview response not successful or missing data:', response);
+        setIsPreviewing(false);
+      }
     } catch (error) {
+      console.error('❌ Preview error:', error);
       setIsPreviewing(false);
       toastError('Failed to start preview');
+    }
+  };
+
+  const handleConfirmAndExecute = async () => {
+    if (!selectedHouseId) return;
+    
+    try {
+      setIsExecuting(true);
+      setProgressPercentage(0);
+      setProgressMessage('Executing assignments and saving to database...');
+      
+      // Join conference house room for progress updates
+      if (socket) {
+        socket.emit('join', selectedHouseId);
+      }
+      
+      const response = await autoAssignmentApi.execute({
+        conferenceHouseId: selectedHouseId,
+        buildingIds: selectedBuildingIds,
+        dryRun: false,  // Actually save to database
+      });
+      
+      // Handle result from HTTP response
+      if (response.success && response.data) {
+        setExecutionResult(response.data);
+        setIsExecuting(false);
+        await loadStatus(selectedHouseId);
+        toastSuccess(`Successfully created ${response.data.assignmentsCreated} assignments!`);
+      }
+    } catch (error) {
+      setIsExecuting(false);
+      toastError('Failed to execute assignments');
     }
   };
   
@@ -320,20 +410,11 @@ export default function AutoAssignmentPage() {
             AI-powered automatic room assignment with smart grouping
           </p>
         </div>
-        
-        {status && (
-          <div className="text-right">
-            <div className="text-sm text-gray-600">Unassigned Attendees</div>
-            <div className="text-3xl font-bold text-primary-600">
-              {status.unassignedAttendees}
-            </div>
-          </div>
-        )}
       </div>
       
       {/* Status Cards */}
       {status && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-5 gap-4">
           <div className="bg-white rounded-lg shadow p-4">
             <div className="text-sm text-gray-600">Total Attendees</div>
             <div className="text-2xl font-bold text-gray-900 mt-1">
@@ -349,6 +430,13 @@ export default function AutoAssignmentPage() {
           </div>
           
           <div className="bg-white rounded-lg shadow p-4">
+            <div className="text-sm text-gray-600">Unassigned</div>
+            <div className="text-2xl font-bold text-orange-600 mt-1">
+              {status.unassignedAttendees}
+            </div>
+          </div>
+          
+          <div className="bg-white rounded-lg shadow p-4">
             <div className="text-sm text-gray-600">Available Rooms</div>
             <div className="text-2xl font-bold text-blue-600 mt-1">
               {status.availableRooms}
@@ -360,6 +448,123 @@ export default function AutoAssignmentPage() {
             <div className="text-2xl font-bold text-purple-600 mt-1">
               {(status.occupancyRate * 100).toFixed(1)}%
             </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Detailed Preview Table */}
+      {executionResult && executionResult.assignments && executionResult.assignments.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900">
+              Assignment Preview - {executionResult.assignments.length} Assignments
+            </h2>
+            <div className="text-sm text-gray-600">
+              Review assignments before executing
+            </div>
+          </div>
+          
+          <div className="overflow-x-auto max-h-96 overflow-y-auto border rounded-lg">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50 sticky top-0">
+                <tr>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">#</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Attendee</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Building</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Floor</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Score</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-96">Reasoning & Group Info</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {executionResult.assignments.map((assignment, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className="px-3 py-3 text-sm text-gray-500">{idx + 1}</td>
+                    <td className="px-3 py-3 text-sm font-medium text-gray-900">{assignment.attendeeName}</td>
+                    <td className="px-3 py-3 text-sm text-gray-900">{assignment.roomNumber}</td>
+                    <td className="px-3 py-3 text-sm text-gray-600">{assignment.buildingName}</td>
+                    <td className="px-3 py-3 text-sm text-gray-600">{assignment.floorNumber}</td>
+                    <td className="px-3 py-3 text-sm">
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${
+                        assignment.score >= 0.8 ? 'bg-green-100 text-green-800' :
+                        assignment.score >= 0.6 ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-orange-100 text-orange-800'
+                      }`}>
+                        {(assignment.score * 100).toFixed(0)}%
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 text-sm text-gray-700">
+                      <div className="space-y-1">
+                        {/* Group Badge */}
+                        {assignment.groupInfo && assignment.groupInfo.groupType !== 'individual' && (
+                          <div className="flex items-center gap-1 mb-1">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                              assignment.groupInfo.groupType === 'roommate' ? 'bg-blue-100 text-blue-800' :
+                              assignment.groupInfo.groupType === 'family' ? 'bg-purple-100 text-purple-800' :
+                              assignment.groupInfo.groupType === 'church' ? 'bg-green-100 text-green-800' :
+                              'bg-gray-100 text-gray-800'
+                            }`}>
+                              {assignment.groupInfo.groupType.toUpperCase()}
+                              {assignment.groupInfo.groupSize > 1 && ` (${assignment.groupInfo.groupSize})`}
+                            </span>
+                            {assignment.groupInfo.roommatesInSameRoom !== undefined && (
+                              <span className="text-xs text-gray-600">
+                                {assignment.groupInfo.roommatesInSameRoom}/{assignment.groupInfo.groupSize} together
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Reasoning Text */}
+                        <div className="text-xs leading-relaxed whitespace-normal">
+                          {assignment.reason || 'No reasoning available'}
+                        </div>
+                        
+                        {/* Warnings */}
+                        {assignment.warnings && assignment.warnings.length > 0 && (
+                          <div className="flex items-center gap-1 mt-1">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                              ⚠️ {assignment.warnings[0]}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Action buttons for preview */}
+          <div className="mt-6 flex gap-3">
+            <button
+              onClick={handleConfirmAndExecute}
+              disabled={isExecuting}
+              className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 font-medium"
+            >
+              {isExecuting ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                  Executing...
+                </>
+              ) : (
+                <>
+                  <Play size={18} />
+                  Confirm & Execute These Assignments
+                </>
+              )}
+            </button>
+            
+            <button
+              onClick={() => setExecutionResult(null)}
+              disabled={isExecuting}
+              className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            >
+              <RotateCcw size={18} />
+              Cancel
+            </button>
           </div>
         </div>
       )}
@@ -400,55 +605,71 @@ export default function AutoAssignmentPage() {
                 Assignment Rules
               </h2>
               <div className={`text-sm font-medium ${isWeightsValid ? 'text-green-600' : 'text-red-600'}`}>
-                Total: {weightsTotal.toFixed(2)} {isWeightsValid ? '✓' : '⚠'}
+                Total: {(weightsTotal * 100).toFixed(0)}% {isWeightsValid ? '✓' : '⚠'}
               </div>
             </div>
             
-            <div className="space-y-4">
+            <div className="space-y-3">
               {Object.entries(ruleWeights).map(([ruleName, weight]) => (
-                <div key={ruleName}>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-sm font-medium text-gray-700">
-                      {ruleName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
-                    </label>
-                    <span className="text-sm text-gray-600">{weight.toFixed(2)}</span>
+                <div key={ruleName} className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-gray-700 flex-1">
+                    {ruleName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={(weight * 100).toFixed(0)}
+                      onChange={(e) => {
+                        const percentage = parseFloat(e.target.value);
+                        if (!isNaN(percentage) && percentage >= 0 && percentage <= 100) {
+                          handleRuleWeightChange(ruleName, percentage / 100);
+                        }
+                      }}
+                      className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    />
+                    <span className="text-sm text-gray-600">%</span>
                   </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={weight}
-                    onChange={(e) => handleRuleWeightChange(ruleName, parseFloat(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
                 </div>
               ))}
             </div>
             
             <div className="mt-6 pt-6 border-t">
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-gray-700 flex-1">
                   Staff Reserved Capacity
                 </label>
-                <span className="text-sm text-gray-600">
-                  {(staffReservedCapacity * 100).toFixed(0)}%
-                </span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="50"
+                    step="1"
+                    value={(staffReservedCapacity * 100).toFixed(0)}
+                    onChange={(e) => {
+                      const percentage = parseFloat(e.target.value) || 0;
+                      // Clamp value between 0 and 50
+                      const clampedPercentage = Math.max(0, Math.min(50, percentage));
+                      setStaffReservedCapacity(clampedPercentage / 100);
+                      setConfigDirty(true);
+                    }}
+                    onBlur={(e) => {
+                      // Ensure value is within range on blur
+                      const percentage = parseFloat(e.target.value) || 0;
+                      const clampedPercentage = Math.max(0, Math.min(50, percentage));
+                      if (percentage !== clampedPercentage) {
+                        setStaffReservedCapacity(clampedPercentage / 100);
+                      }
+                    }}
+                    className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  />
+                  <span className="text-sm text-gray-600">%</span>
+                </div>
               </div>
-              <input
-                type="range"
-                min="0"
-                max="0.5"
-                step="0.05"
-                value={staffReservedCapacity}
-                onChange={(e) => {
-                  setStaffReservedCapacity(parseFloat(e.target.value));
-                  setConfigDirty(true);
-                }}
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Percentage of room capacity reserved for staff members
+              <p className="text-xs text-gray-500 mt-2">
+                Percentage of room capacity reserved for staff members (max 50%)
               </p>
             </div>
             
@@ -517,10 +738,10 @@ export default function AutoAssignmentPage() {
             </div>
           )}
           
-          {/* Results Display */}
+          {/* Results Summary */}
           {executionResult && !isExecuting && !isPreviewing && (
             <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-sm font-semibold text-gray-900 mb-4">Results</h3>
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Summary</h3>
               
               <div className="space-y-3">
                 <div className="flex justify-between items-center py-2 border-b">
@@ -531,7 +752,7 @@ export default function AutoAssignmentPage() {
                 </div>
                 
                 <div className="flex justify-between items-center py-2 border-b">
-                  <span className="text-sm text-gray-600">Assignments Created</span>
+                  <span className="text-sm text-gray-600">Assignments</span>
                   <span className="text-sm font-medium text-gray-900">
                     {executionResult.assignmentsCreated}
                   </span>
@@ -551,7 +772,7 @@ export default function AutoAssignmentPage() {
                   </span>
                 </div>
                 
-                {executionResult.unassignedAttendees.length > 0 && (
+                {executionResult.unassignedAttendees && executionResult.unassignedAttendees.length > 0 && (
                   <div className="mt-4 p-3 bg-amber-50 rounded-lg">
                     <div className="text-sm font-medium text-amber-800 mb-2">
                       Unassigned: {executionResult.unassignedAttendees.length}

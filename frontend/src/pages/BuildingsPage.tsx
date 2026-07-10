@@ -198,7 +198,7 @@ function BuildingModal({ building, houses, onClose, onSave }: BuildingModalProps
         : `${baseUrl}/buildings`;
       
       const response = await fetch(url, {
-        method: building ? 'PUT' : 'POST',
+        method: building ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });

@@ -198,7 +198,7 @@ function FloorModal({ floor, buildings, onClose, onSave }: FloorModalProps) {
         : `${baseUrl}/floors`;
       
       const response = await fetch(url, {
-        method: floor ? 'PUT' : 'POST',
+        method: floor ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
