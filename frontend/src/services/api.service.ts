@@ -41,7 +41,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
 // WHY: Axios instance with default config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 120000, // Increased general timeout from 30s to 120s
   headers: {
     'Content-Type': 'application/json',
   },
@@ -193,6 +193,22 @@ export const attendeeApi = {
       return handleApiError(error as Error);
     }
   },
+
+  /**
+   * GET /api/attendees/search-assigned
+   * Search assigned attendees with dual-language support
+   * Uses backend's dual-language search engine for fuzzy matching and transliteration
+   */
+  searchAssigned: async (query: string): Promise<ApiResponse<Attendee[]>> => {
+    try {
+      const { data } = await apiClient.get('/attendees/search-assigned', { 
+        params: { query } 
+      });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
 };
 
 /**
@@ -259,6 +275,32 @@ export const assignmentApi = {
   delete: async (id: string): Promise<ApiResponse<RoomAssignment>> => {
     try {
       const { data } = await apiClient.delete(`/assignments/${id}`);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * POST /api/assignments/swap/validate
+   * Validate room assignment swap between attendees
+   */
+  validateSwap: async (groupA: string[], groupB: string[]): Promise<ApiResponse<any>> => {
+    try {
+      const { data } = await apiClient.post('/assignments/swap/validate', { groupA, groupB });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * POST /api/assignments/swap
+   * Execute room assignment swap between attendees
+   */
+  executeSwap: async (groupA: string[], groupB: string[]): Promise<ApiResponse<any>> => {
+    try {
+      const { data } = await apiClient.post('/assignments/swap', { groupA, groupB });
       return data;
     } catch (error) {
       return handleApiError(error as Error);
@@ -393,7 +435,7 @@ export const excelApi = {
    * POST /api/excel/attendees/import
    * Import attendees from Excel file
    */
-  importAttendees: async (file: File): Promise<ApiResponse<any>> => {
+  importAttendees: async (file: File, onUploadProgress?: (progressEvent: any) => void): Promise<ApiResponse<any>> => {
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -401,6 +443,30 @@ export const excelApi = {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        timeout: 600000, // Large timeout override (10 minutes) for heavy batch updates
+        onUploadProgress,
+      });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * POST /api/excel/rooms/import
+   * Import rooms from Excel file
+   */
+  importRooms: async (file: File, conferenceHouseId: string, onUploadProgress?: (progressEvent: any) => void): Promise<ApiResponse<any>> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('conferenceHouseId', conferenceHouseId);
+      const { data } = await apiClient.post('/excel/rooms/import', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 600000, // Large timeout override (10 minutes) for heavy batch updates
+        onUploadProgress,
       });
       return data;
     } catch (error) {
@@ -572,6 +638,26 @@ export const autoAssignmentApi = {
   getStatus: async (conferenceHouseId: string): Promise<ApiResponse<AutoAssignmentStatus>> => {
     try {
       const { data } = await apiClient.get(`/auto-assignment/status/${conferenceHouseId}`);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+};
+
+/**
+ * Search API
+ * Backend routes: /api/search
+ */
+export const searchApi = {
+  /**
+   * POST /api/search/generate-candidates
+   * Generate search candidates for dual-language search
+   * Returns variations of the search query (e.g., "fady" -> ["fady", "فادي"])
+   */
+  generateCandidates: async (query: string): Promise<ApiResponse<{ query: string; candidates: string[] }>> => {
+    try {
+      const { data } = await apiClient.post('/search/generate-candidates', { query });
       return data;
     } catch (error) {
       return handleApiError(error as Error);

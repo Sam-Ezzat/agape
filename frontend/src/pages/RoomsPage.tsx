@@ -258,7 +258,13 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
     roomType: room?.roomType || RoomType.GENERAL,
   });
 
-  const [selectedBuildingId, setSelectedBuildingId] = useState('');
+  const [selectedBuildingId, setSelectedBuildingId] = useState(() => {
+    if (room && room.floorId) {
+      const foundFloor = floors.find(f => f.id === room.floorId);
+      return foundFloor?.buildingId || '';
+    }
+    return '';
+  });
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   // Filter floors by selected building

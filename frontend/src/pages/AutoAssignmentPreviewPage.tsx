@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User } from 'lucide-react';
+import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight } from 'lucide-react';
 import { AutoAssignmentExecutionResult, Attendee } from '@/types/api';
 import { autoAssignmentApi, attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
+import SwapAttendeesModal from '@/components/SwapAttendeesModal';
 
 type SortOption = 'room' | 'attendee' | 'score' | 'building';
 
@@ -33,6 +34,9 @@ export default function AutoAssignmentPreviewPage() {
   const [showAttendeeModal, setShowAttendeeModal] = useState(false);
   const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
   const [isLoadingAttendee, setIsLoadingAttendee] = useState(false);
+  
+  // Swap modal state
+  const [showSwapModal, setShowSwapModal] = useState(false);
 
   // Load preview result from localStorage on mount
   useEffect(() => {
@@ -63,12 +67,8 @@ export default function AutoAssignmentPreviewPage() {
       const roomKey = assignment.roomId;
       
       if (!map.has(roomKey)) {
-        // Extract capacity from reasoning text (e.g., "occupancy 4/4")
-        let capacity = 0;
-        const match = assignment.reason?.match(/occupancy (\d+)\/(\d+)/);
-        if (match && match[2]) {
-          capacity = parseInt(match[2], 10);
-        }
+        // Use roomCapacity from assignment (added by backend)
+        const capacity = (assignment as any).roomCapacity || 0;
         
         map.set(roomKey, {
           roomId: assignment.roomId,
@@ -157,6 +157,159 @@ export default function AutoAssignmentPreviewPage() {
     } finally {
       setIsExecuting(false);
     }
+  };
+
+  const handleSwapComplete = () => {
+    // For auto-assignment preview, reload the updated preview from localStorage
+    const savedPreview = localStorage.getItem('autoAssignmentPreview');
+    if (savedPreview) {
+      try {
+        const parsed = JSON.parse(savedPreview);
+        setPreviewResult(parsed);
+        toastSuccess('Swap completed! Preview updated.');
+      } catch (error) {
+        console.error('Failed to reload preview:', error);
+      }
+    }
+  };
+
+  const handlePreviewSwap = async (groupA: string[], groupB: string[], targetRoomId?: string) => {
+    if (!previewResult?.assignments) {
+      toastError('No preview data available');
+      return { success: false };
+    }
+
+    // Find assignments for Group A
+    const groupAAssignments = previewResult.assignments.filter(a => groupA.includes(a.attendeeId));
+
+    if (groupAAssignments.length !== groupA.length) {
+      toastError('Some attendees in Group A not found in preview');
+      return { success: false };
+    }
+
+    if (groupAAssignments.length === 0) {
+      toastError('Cannot swap: Group A has no assignments');
+      return { success: false };
+    }
+
+    // CASE 1: Move operation (Group A → Target Room)
+    if (targetRoomId && groupB.length === 0) {
+      // Find the target room info from any assignment in that room
+      const targetRoomAssignment = previewResult.assignments.find(a => a.roomId === targetRoomId);
+      
+      if (!targetRoomAssignment) {
+        toastError('Target room not found in preview');
+        return { success: false };
+      }
+
+      const targetRoomInfo = {
+        roomId: targetRoomAssignment.roomId,
+        roomNumber: targetRoomAssignment.roomNumber,
+        buildingName: targetRoomAssignment.buildingName,
+        floorNumber: targetRoomAssignment.floorNumber,
+        roomCapacity: targetRoomAssignment.roomCapacity,
+      };
+
+      // Move Group A to target room
+      const updatedAssignments = previewResult.assignments.map(assignment => {
+        if (groupA.includes(assignment.attendeeId)) {
+          return {
+            ...assignment,
+            roomId: targetRoomInfo.roomId,
+            roomNumber: targetRoomInfo.roomNumber,
+            buildingName: targetRoomInfo.buildingName,
+            floorNumber: targetRoomInfo.floorNumber,
+            roomCapacity: targetRoomInfo.roomCapacity,
+            reason: assignment.reason + ' (manually moved)',
+          };
+        }
+        return assignment;
+      });
+
+      // Update preview result
+      const updatedPreview = {
+        ...previewResult,
+        assignments: updatedAssignments,
+      };
+
+      setPreviewResult(updatedPreview);
+      localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
+      
+      return { success: true, data: { valid: true } };
+    }
+
+    // CASE 2: Swap operation (Group A ↔ Group B)
+    const groupBAssignments = previewResult.assignments.filter(a => groupB.includes(a.attendeeId));
+
+    if (groupBAssignments.length !== groupB.length) {
+      toastError('Some attendees in Group B not found in preview');
+      return { success: false };
+    }
+
+    if (groupBAssignments.length === 0) {
+      toastError('Cannot swap: Group B has no assignments');
+      return { success: false };
+    }
+
+    // Get the room info from each group (use first assignment as reference)
+    const groupARoomInfo = {
+      roomId: groupAAssignments[0]!.roomId,
+      roomNumber: groupAAssignments[0]!.roomNumber,
+      buildingName: groupAAssignments[0]!.buildingName,
+      floorNumber: groupAAssignments[0]!.floorNumber,
+      roomCapacity: groupAAssignments[0]!.roomCapacity,
+    };
+
+    const groupBRoomInfo = {
+      roomId: groupBAssignments[0]!.roomId,
+      roomNumber: groupBAssignments[0]!.roomNumber,
+      buildingName: groupBAssignments[0]!.buildingName,
+      floorNumber: groupBAssignments[0]!.floorNumber,
+      roomCapacity: groupBAssignments[0]!.roomCapacity,
+    };
+
+    // Create updated assignments with swapped rooms
+    const updatedAssignments = previewResult.assignments.map(assignment => {
+      // If this assignment is in Group A, move to Group B's room
+      if (groupA.includes(assignment.attendeeId)) {
+        return {
+          ...assignment,
+          roomId: groupBRoomInfo.roomId,
+          roomNumber: groupBRoomInfo.roomNumber,
+          buildingName: groupBRoomInfo.buildingName,
+          floorNumber: groupBRoomInfo.floorNumber,
+          roomCapacity: groupBRoomInfo.roomCapacity,
+          reason: assignment.reason + ' (manually swapped)',
+        };
+      }
+      
+      // If this assignment is in Group B, move to Group A's room
+      if (groupB.includes(assignment.attendeeId)) {
+        return {
+          ...assignment,
+          roomId: groupARoomInfo.roomId,
+          roomNumber: groupARoomInfo.roomNumber,
+          buildingName: groupARoomInfo.buildingName,
+          floorNumber: groupARoomInfo.floorNumber,
+          roomCapacity: groupARoomInfo.roomCapacity,
+          reason: assignment.reason + ' (manually swapped)',
+        };
+      }
+      
+      // Otherwise, keep as is
+      return assignment;
+    });
+
+    // Update preview result
+    const updatedPreview = {
+      ...previewResult,
+      assignments: updatedAssignments,
+    };
+
+    setPreviewResult(updatedPreview);
+    localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
+    
+    return { success: true, data: { valid: true } };
   };
 
   const handleAttendeeClick = async (attendeeId: string) => {
@@ -271,6 +424,13 @@ export default function AutoAssignmentPreviewPage() {
             
             <div className="flex items-center gap-3">
               <button
+                onClick={() => setShowSwapModal(true)}
+                className="px-4 py-2 border border-blue-300 text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2"
+              >
+                <ArrowLeftRight size={16} />
+                Swap Attendees
+              </button>
+              <button
                 onClick={handleExportCSV}
                 className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
               >
@@ -376,7 +536,7 @@ export default function AutoAssignmentPreviewPage() {
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Building</th>
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Floor</th>
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Score</th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-1/2">Detailed Reasoning</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-1/2">Match Analysis</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -479,58 +639,106 @@ export default function AutoAssignmentPreviewPage() {
                       </span>
                     </td>
                     <td className="px-3 py-4 text-sm text-gray-700">
-                      <div className="space-y-2">
-                        {/* Group Badge */}
-                        {assignment.groupInfo && assignment.groupInfo.groupType !== 'individual' && (
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                              assignment.groupInfo.groupType === 'roommate' ? 'bg-blue-100 text-blue-800' :
-                              assignment.groupInfo.groupType === 'family' ? 'bg-purple-100 text-purple-800' :
-                              assignment.groupInfo.groupType === 'church' ? 'bg-green-100 text-green-800' :
-                              'bg-gray-100 text-gray-800'
-                            }`}>
-                              {assignment.groupInfo.groupType.toUpperCase()}
-                              {assignment.groupInfo.groupSize > 1 && ` (${assignment.groupInfo.groupSize})`}
-                            </span>
-                            {assignment.groupInfo.roommatesInSameRoom !== undefined && (
-                              <span className="text-xs text-gray-600 font-medium">
-                                {assignment.groupInfo.roommatesInSameRoom}/{assignment.groupInfo.groupSize} together
+                      <div className="space-y-3">
+                        {/* Compact Info Grid */}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {/* Gender & Age */}
+                          {(assignment.gender || assignment.age) && (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-gray-500 font-medium">👤</span>
+                              <span className="text-gray-700">
+                                {assignment.gender && (
+                                  <span className="capitalize">{assignment.gender.toLowerCase()}</span>
+                                )}
+                                {assignment.gender && assignment.age && ', '}
+                                {assignment.age && <span>{assignment.age}y</span>}
                               </span>
-                            )}
-                          </div>
-                        )}
-                        
-                        {/* Reasoning Text */}
-                        <div className="text-xs leading-relaxed whitespace-normal text-gray-700">
-                          {assignment.reason || 'No reasoning available'}
+                            </div>
+                          )}
+                          
+                          {/* Group Info */}
+                          {assignment.groupInfo && assignment.groupInfo.groupType !== 'individual' && (
+                            <div className="flex items-center gap-1.5">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${
+                                assignment.groupInfo.groupType === 'roommate' ? 'bg-blue-100 text-blue-700' :
+                                assignment.groupInfo.groupType === 'family' ? 'bg-purple-100 text-purple-700' :
+                                assignment.groupInfo.groupType === 'church' ? 'bg-green-100 text-green-700' :
+                                'bg-gray-100 text-gray-700'
+                              }`}>
+                                {assignment.groupInfo.groupType === 'roommate' ? '🤝' : 
+                                 assignment.groupInfo.groupType === 'family' ? '👨‍👩‍👧‍👦' : 
+                                 assignment.groupInfo.groupType === 'church' ? '⛪' : '👥'}
+                                <span className="ml-1">
+                                  {assignment.groupInfo.groupType.charAt(0).toUpperCase() + assignment.groupInfo.groupType.slice(1)}
+                                </span>
+                                {assignment.groupInfo.groupSize > 1 && (
+                                  <span className="ml-1">
+                                    ({assignment.groupInfo.roommatesInSameRoom || 0}/{assignment.groupInfo.groupSize})
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          )}
                         </div>
-                        
-                        {/* Score Breakdown */}
+
+                        {/* {Score Factors}
                         {assignment.scoreBreakdown && Object.keys(assignment.scoreBreakdown).length > 0 && (
-                          <details className="text-xs">
-                            <summary className="cursor-pointer text-blue-600 hover:text-blue-800 font-medium">
-                              View Score Breakdown
-                            </summary>
-                            <div className="mt-2 space-y-1 pl-3 border-l-2 border-gray-200">
+                          <div>
+                            <div className="text-xs text-gray-500 font-medium mb-1.5">Applied Factors:</div>
+                            <div className="flex flex-wrap gap-1">
                               {Object.entries(assignment.scoreBreakdown)
                                 .sort((a, b) => b[1] - a[1])
+                                .slice(0, 5)
                                 .map(([rule, score]) => (
-                                  <div key={rule} className="flex justify-between items-center">
-                                    <span className="text-gray-600">{rule.replace('Rule', '')}:</span>
-                                    <span className="font-medium text-gray-900">
-                                      {(score * 100).toFixed(0)}%
-                                    </span>
-                                  </div>
+                                  <span 
+                                    key={rule}
+                                    className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200"
+                                    title={`${rule}: ${(score * 100).toFixed(0)}%`}
+                                  >
+                                    {rule.replace('Rule', '').replace(/_/g, ' ').toLowerCase()}
+                                    <span className="ml-1 font-semibold">+{(score * 100).toFixed(0)}%</span>
+                                  </span>
                                 ))}
+                              {Object.keys(assignment.scoreBreakdown).length > 5 && (
+                                <details className="inline-block">
+                                  <summary className="cursor-pointer text-xs text-blue-600 hover:text-blue-800 px-2 py-0.5">
+                                    +{Object.keys(assignment.scoreBreakdown).length - 5} more
+                                  </summary>
+                                  <div className="absolute z-10 mt-1 p-2 bg-white border border-gray-200 rounded shadow-lg space-y-1 min-w-48">
+                                    {Object.entries(assignment.scoreBreakdown)
+                                      .sort((a, b) => b[1] - a[1])
+                                      .slice(5)
+                                      .map(([rule, score]) => (
+                                        <div key={rule} className="flex justify-between items-center text-xs">
+                                          <span className="text-gray-600">{rule.replace('Rule', '').replace(/_/g, ' ')}:</span>
+                                          <span className="font-medium text-gray-900">+{(score * 100).toFixed(0)}%</span>
+                                        </div>
+                                      ))}
+                                  </div>
+                                </details>
+                              )}
                             </div>
-                          </details>
+                          </div>
+                        )} */}
+
+                        {/* Special Notes */}
+                        {assignment.reason && assignment.reason.includes('Notes:') && (
+                          <div className="mt-2 pt-2 border-t border-gray-200">
+                            <div className="text-xs">
+                              <span className="text-gray-500 font-medium">📝 Notes: </span>
+                              <span className="text-gray-700">
+                                {assignment.reason.split('Notes:')[1]?.replace(/[".]/g, '').trim()}
+                              </span>
+                            </div>
+                          </div>
                         )}
                         
                         {/* Warnings */}
                         {assignment.warnings && assignment.warnings.length > 0 && (
-                          <div className="flex items-center gap-1 mt-1">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                              ⚠️ {assignment.warnings[0]}
+                          <div className="flex items-start gap-1.5 mt-2 pt-2 border-t border-yellow-200 bg-yellow-50 -mx-2 px-2 py-1.5 rounded">
+                            <span className="text-yellow-600 text-xs">⚠️</span>
+                            <span className="text-xs text-yellow-800 font-medium flex-1">
+                              {assignment.warnings[0]}
                             </span>
                           </div>
                         )}
@@ -787,6 +995,61 @@ export default function AutoAssignmentPreviewPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Swap Attendees Modal */}
+      {showSwapModal && previewResult?.assignments && (
+        <SwapAttendeesModal
+          isOpen={showSwapModal}
+          onClose={() => setShowSwapModal(false)}
+          onSwapComplete={handleSwapComplete}
+          customSwapHandler={handlePreviewSwap}
+          useLocalSearch={true}
+          attendees={previewResult.assignments.map((assignment) => {
+            const roomCapacity = roomCapacityMap.get(assignment.roomId)?.capacity || 0;
+            
+            return {
+              id: assignment.attendeeId,
+              fullName: assignment.attendeeName,
+              gender: assignment.gender as any,
+              age: assignment.age,
+              conferenceRole: 'ATTENDEE' as const,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              assignment: {
+                id: assignment.attendeeId,
+                attendeeId: assignment.attendeeId,
+                roomId: assignment.roomId,
+                assignedAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                room: {
+                  id: assignment.roomId,
+                  roomNumber: assignment.roomNumber,
+                  capacity: roomCapacity,
+                  roomType: 'GENERAL' as const,
+                  floorId: '',
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                  floor: {
+                    id: '',
+                    floorNumber: assignment.floorNumber,
+                    buildingId: '',
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    building: {
+                      id: '',
+                      name: assignment.buildingName,
+                      conferenceHouseId: '',
+                      createdAt: new Date().toISOString(),
+                      updatedAt: new Date().toISOString(),
+                    },
+                  },
+                },
+              },
+            } as Attendee;
+          })}
+        />
       )}
     </div>
   );

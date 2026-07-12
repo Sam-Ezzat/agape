@@ -7,8 +7,10 @@
  */
 
 import { useEffect, useState } from 'react';
+import { ArrowLeftRight } from 'lucide-react';
 import { assignmentApi, attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
+import SwapAttendeesModal from '@/components/SwapAttendeesModal';
 import type { RoomAssignment, Attendee, ConferenceHouse, Building, Floor, Room } from '@/types/api';
 
 export default function AssignmentsPage() {
@@ -36,6 +38,9 @@ export default function AssignmentsPage() {
 
   // Drag state
   const [draggedAttendee, setDraggedAttendee] = useState<Attendee | null>(null);
+
+  // Swap modal state
+  const [showSwapModal, setShowSwapModal] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -149,6 +154,11 @@ export default function AssignmentsPage() {
     e.preventDefault(); // Allow drop
   };
 
+  const handleSwapComplete = async () => {
+    toastSuccess('Swap completed! Reloading assignments...');
+    await loadAttendeesAndAssignments();
+  };
+
   const onDrop = (roomId: string) => {
     if (draggedAttendee) {
       handleAssignToRoom(draggedAttendee.id, roomId);
@@ -221,7 +231,16 @@ export default function AssignmentsPage() {
       <div className="w-1/3 min-w-[360px] flex flex-col bg-white rounded-lg shadow-sm border">
         {/* Header */}
         <div className="p-4 border-b">
-          <h2 className="text-lg font-semibold text-gray-900">Attendees</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold text-gray-900">Attendees</h2>
+            <button
+              onClick={() => setShowSwapModal(true)}
+              className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2"
+            >
+              <ArrowLeftRight size={14} />
+              Swap
+            </button>
+          </div>
           
           {/* Search */}
           <div className="mt-3">
@@ -654,6 +673,16 @@ export default function AssignmentsPage() {
           )}
         </div>
       </div>
+
+      {/* Swap Attendees Modal */}
+      {showSwapModal && (
+        <SwapAttendeesModal
+          isOpen={showSwapModal}
+          onClose={() => setShowSwapModal(false)}
+          onSwapComplete={handleSwapComplete}
+          attendees={assignedAttendees}
+        />
+      )}
     </div>
   );
 }

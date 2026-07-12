@@ -22,10 +22,7 @@ import type {
   AutoAssignmentStatus,
   Building,
 } from '@/types/api';
-import {
-  NotificationEvent,
-  type AutoAssignmentProgressNotification,
-} from '@/types/notifications';
+import { NotificationEvent } from '@/types/notifications';
 import { Play, Eye, Settings, RotateCcw, Zap } from 'lucide-react';
 
 // WHY: Default rule weights for new configurations
@@ -86,15 +83,32 @@ export default function AutoAssignmentPage() {
   useEffect(() => {
     if (!socket) return;
     
-    const handleProgress = (payload: AutoAssignmentProgressNotification) => {
-      const { stage, progress, currentAction } = payload.data;
+    const handleProgress = (payload: any) => {
+      console.log('📊 Progress event received:', payload);
       
-      setCurrentStage(stage);
-      if (progress) {
-        setProgressPercentage(progress.percentage);
+      // The backend wraps the event in payload.data.event
+      const event = payload.data?.event;
+      if (!event) {
+        console.warn('⚠️ Progress event missing event data');
+        return;
       }
-      if (currentAction) {
-        setProgressMessage(currentAction);
+      
+      // Handle different event types
+      if (event.type === 'stage' && event.stage) {
+        setCurrentStage(`${event.stage.name} - ${event.stage.status}`);
+      }
+      
+      if (event.type === 'progress' && event.progress) {
+        setProgressPercentage(event.progress.percentage || 0);
+        setProgressMessage(
+          `Processing: ${event.progress.processed}/${event.progress.total} attendees`
+        );
+      }
+      
+      if (event.type === 'assignment' && event.assignment) {
+        setProgressMessage(
+          `Assigned ${event.assignment.attendeeName} to ${event.assignment.roomNumber}`
+        );
       }
     };
     
@@ -105,6 +119,7 @@ export default function AutoAssignmentPage() {
       
       setIsExecuting(false);
       setIsPreviewing(false);
+      setProgressPercentage(100);
       
       if (payload.data?.result) {
         console.log('✅ Setting executionResult from WebSocket with', payload.data.result.assignments?.length, 'assignments');
@@ -125,6 +140,7 @@ export default function AutoAssignmentPage() {
       console.error('❌ WebSocket error event:', payload);
       setIsExecuting(false);
       setIsPreviewing(false);
+      setProgressPercentage(0);
       toastError(payload.message || 'Auto-assignment failed');
     };
     
@@ -269,11 +285,25 @@ export default function AutoAssignmentPage() {
       setExecutionResult(null);
       setProgressPercentage(0);
       setProgressMessage('Starting auto-assignment...');
+      setCurrentStage('Initializing');
       
       // Join conference house room for progress updates
       if (socket) {
         socket.emit('join', selectedHouseId);
+      } else {
+        console.warn('⚠️ Socket not connected - progress updates may not work');
+        toastWarning('Real-time updates unavailable - results will show when complete');
       }
+      
+      // Start a fallback timer for progress simulation if no WebSocket updates
+      let fallbackProgress = 0;
+      const fallbackInterval = setInterval(() => {
+        fallbackProgress += 2;
+        if (fallbackProgress <= 90) {
+          setProgressPercentage(fallbackProgress);
+          setProgressMessage('Processing assignments...');
+        }
+      }, 1000);
       
       const response = await autoAssignmentApi.execute({
         conferenceHouseId: selectedHouseId,
@@ -281,19 +311,30 @@ export default function AutoAssignmentPage() {
         dryRun: false,
       });
       
+      // Clear fallback timer
+      clearInterval(fallbackInterval);
+      
       // Handle result from HTTP response (fallback if socket event is missed)
       if (response.success && response.data) {
         setExecutionResult(response.data);
         setIsExecuting(false);
+        setProgressPercentage(100);
         await loadStatus(selectedHouseId);
         toastSuccess(response.data.success 
           ? `Auto-assignment completed: ${response.data.assignmentsCreated} assignments created` 
           : 'Auto-assignment completed with errors'
         );
       }
-    } catch (error) {
+    } catch (error: any) {
       setIsExecuting(false);
-      toastError('Failed to start auto-assignment');
+      setProgressPercentage(0);
+      
+      // Better error message
+      if (error.message?.includes('timeout')) {
+        toastError('Execution taking longer than expected - check server logs');
+      } else {
+        toastError(error.message || 'Failed to start auto-assignment');
+      }
     }
   };
   
@@ -310,11 +351,25 @@ export default function AutoAssignmentPage() {
       setExecutionResult(null);
       setProgressPercentage(0);
       setProgressMessage('Starting preview (dry run)...');
+      setCurrentStage('Initializing');
       
       // Join conference house room for progress updates
       if (socket) {
         socket.emit('join', selectedHouseId);
+      } else {
+        console.warn('⚠️ Socket not connected - progress updates may not work');
+        toastWarning('Real-time updates unavailable - results will show when complete');
       }
+      
+      // Start a fallback timer for progress simulation if no WebSocket updates
+      let fallbackProgress = 0;
+      const fallbackInterval = setInterval(() => {
+        fallbackProgress += 2;
+        if (fallbackProgress <= 90) {
+          setProgressPercentage(fallbackProgress);
+          setProgressMessage('Processing assignments...');
+        }
+      }, 1000);
       
       console.log('🚀 Starting preview request...');
       const response = await autoAssignmentApi.preview({
@@ -322,6 +377,9 @@ export default function AutoAssignmentPage() {
         buildingIds: selectedBuildingIds,
         dryRun: true,
       });
+      
+      // Clear fallback timer
+      clearInterval(fallbackInterval);
       
       console.log('✅ Preview response:', response);
       console.log('📊 Response data:', response.data);
@@ -337,6 +395,7 @@ export default function AutoAssignmentPage() {
         
         setExecutionResult(response.data);
         setIsPreviewing(false);
+        setProgressPercentage(100);
         await loadStatus(selectedHouseId);
         
         toastSuccess('Preview completed - opening full results page...');
@@ -346,11 +405,20 @@ export default function AutoAssignmentPage() {
       } else {
         console.warn('⚠️ Preview response not successful or missing data:', response);
         setIsPreviewing(false);
+        setProgressPercentage(0);
+        toastError('Preview failed - no data returned');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Preview error:', error);
       setIsPreviewing(false);
-      toastError('Failed to start preview');
+      setProgressPercentage(0);
+      
+      // Better error message
+      if (error.message?.includes('timeout')) {
+        toastError('Preview taking longer than expected - check server logs');
+      } else {
+        toastError(error.message || 'Failed to start preview');
+      }
     }
   };
 
@@ -361,11 +429,23 @@ export default function AutoAssignmentPage() {
       setIsExecuting(true);
       setProgressPercentage(0);
       setProgressMessage('Executing assignments and saving to database...');
+      setCurrentStage('Saving to database');
       
       // Join conference house room for progress updates
       if (socket) {
         socket.emit('join', selectedHouseId);
+      } else {
+        console.warn('⚠️ Socket not connected - progress updates may not work');
       }
+      
+      // Start a fallback timer for progress simulation if no WebSocket updates
+      let fallbackProgress = 0;
+      const fallbackInterval = setInterval(() => {
+        fallbackProgress += 2;
+        if (fallbackProgress <= 90) {
+          setProgressPercentage(fallbackProgress);
+        }
+      }, 1000);
       
       const response = await autoAssignmentApi.execute({
         conferenceHouseId: selectedHouseId,
@@ -373,16 +453,27 @@ export default function AutoAssignmentPage() {
         dryRun: false,  // Actually save to database
       });
       
+      // Clear fallback timer
+      clearInterval(fallbackInterval);
+      
       // Handle result from HTTP response
       if (response.success && response.data) {
         setExecutionResult(response.data);
         setIsExecuting(false);
+        setProgressPercentage(100);
         await loadStatus(selectedHouseId);
         toastSuccess(`Successfully created ${response.data.assignmentsCreated} assignments!`);
       }
-    } catch (error) {
+    } catch (error: any) {
       setIsExecuting(false);
-      toastError('Failed to execute assignments');
+      setProgressPercentage(0);
+      
+      // Better error message
+      if (error.message?.includes('timeout')) {
+        toastError('Execution taking longer than expected - check server logs');
+      } else {
+        toastError(error.message || 'Failed to execute assignments');
+      }
     }
   };
   

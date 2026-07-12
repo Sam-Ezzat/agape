@@ -5,8 +5,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Plus, Edit, Trash2, RefreshCw } from 'lucide-react';
+import { Plus, Edit, Trash2, RefreshCw, Upload, Download, FileSpreadsheet } from 'lucide-react';
 import { toastSuccess, toastError } from '@/services/toast.service';
+import { excelApi } from '@/services/api.service';
 import type { ConferenceHouse } from '@/types/api';
 
 export default function HousesPage() {
@@ -14,6 +15,10 @@ export default function HousesPage() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingHouse, setEditingHouse] = useState<ConferenceHouse | null>(null);
+  
+  // State for import modal UI & progress tracking
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [selectedHouseIdForImport, setSelectedHouseIdForImport] = useState<string | null>(null);
 
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
@@ -57,6 +62,19 @@ export default function HousesPage() {
   const openEditModal = (house: ConferenceHouse) => {
     setEditingHouse(house);
     setShowModal(true);
+  };
+
+  const handleDownloadTemplate = () => {
+    window.open(`${baseUrl}/excel/rooms/template`, '_blank');
+  };
+
+  const handleExportRooms = (houseId: string) => {
+    window.open(`${baseUrl}/excel/rooms/export?conferenceHouseId=${houseId}`, '_blank');
+  };
+
+  const triggerImportRooms = (houseId: string) => {
+    setSelectedHouseIdForImport(houseId);
+    setShowImportModal(true);
   };
 
   return (
@@ -118,6 +136,37 @@ export default function HousesPage() {
               <div className="text-xs text-gray-500">
                 Created {new Date(house.createdAt).toLocaleDateString()}
               </div>
+
+              <div className="mt-4 pt-4 border-t flex flex-col gap-2">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  Rooms Layout (Excel)
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <button
+                    onClick={() => handleDownloadTemplate()}
+                    className="flex items-center gap-1 text-primary-600 hover:text-primary-800 font-medium py-1"
+                  >
+                    <Download size={14} />
+                    Template
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    onClick={() => handleExportRooms(house.id)}
+                    className="flex items-center gap-1 text-green-600 hover:text-green-800 font-medium py-1"
+                  >
+                    <FileSpreadsheet size={14} />
+                    Export
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    onClick={() => triggerImportRooms(house.id)}
+                    className="flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium py-1"
+                  >
+                    <Upload size={14} />
+                    Import
+                  </button>
+                </div>
+              </div>
             </div>
           ))
         )}
@@ -130,6 +179,20 @@ export default function HousesPage() {
           onClose={() => setShowModal(false)}
           onSave={() => {
             setShowModal(false);
+            loadHouses();
+          }}
+        />
+      )}
+
+      {/* Rooms Import Progress Modal */}
+      {showImportModal && selectedHouseIdForImport && (
+        <RoomsImportModal
+          houseId={selectedHouseIdForImport}
+          onClose={() => {
+            setShowImportModal(false);
+            setSelectedHouseIdForImport(null);
+          }}
+          onSuccess={() => {
             loadHouses();
           }}
         />
@@ -229,6 +292,229 @@ function HouseModal({ house, onClose, onSave }: {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// Import Errors Modal Component ended up being replaced by RoomsImportModal inline table listing.
+
+// Rooms Import Progress Modal Component
+interface RoomsImportModalProps {
+  houseId: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+function RoomsImportModal({ houseId, onClose, onSuccess }: RoomsImportModalProps) {
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [progressPercentage, setProgressPercentage] = useState(0);
+  const [statusMessage, setProgressMessage] = useState('');
+  const [importErrors, setImportErrors] = useState<any[] | null>(null);
+  const [importSummary, setImportSummary] = useState<{ imported: number; failed: number } | null>(null);
+  const [generalError, setGeneralError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setGeneralError(null);
+    setImportErrors(null);
+    setImportSummary(null);
+    setProgressPercentage(0);
+    
+    if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0];
+      // Max file size limit: 10MB
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        setGeneralError('File size exceeds the 10MB limit. Please upload a smaller file.');
+        setFile(null);
+        return;
+      }
+      setFile(selectedFile);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!file) {
+      setGeneralError('Please select a file to import.');
+      return;
+    }
+
+    try {
+      setUploading(true);
+      setGeneralError(null);
+      setImportErrors(null);
+      setImportSummary(null);
+      setProgressPercentage(5);
+      setProgressMessage('Uploading Spreadsheet File...');
+
+      // Dynamic progress emulation block timer
+      let simVal = 5;
+      const simTimer = setInterval(() => {
+        if (simVal < 90) {
+          simVal += Math.floor(Math.random() * 8) + 2;
+          setProgressPercentage(Math.min(90, simVal));
+        }
+      }, 300);
+
+      const response = await excelApi.importRooms(file, houseId, (progressEvent) => {
+        const total = progressEvent.total || file.size;
+        const uploadProgress = Math.round((progressEvent.loaded * 100) / total);
+        // Map upload to 0% - 60%
+        const mappedUploadProgress = Math.round((uploadProgress * 60) / 100);
+        if (mappedUploadProgress > simVal) {
+          simVal = mappedUploadProgress;
+          setProgressPercentage(mappedUploadProgress);
+        }
+        if (uploadProgress >= 100) {
+          setProgressMessage('Deducting building & floor configurations in database...');
+        }
+      });
+      
+      clearInterval(simTimer);
+      setProgressPercentage(100);
+      setProgressMessage('Complete!');
+
+      if (response.success) {
+        const { imported, failed, errors } = response.data || {};
+        setImportSummary({ imported: imported || 0, failed: failed || 0 });
+        if (failed > 0) {
+          setImportErrors(errors || []);
+        } else {
+          // Silent success handled - no toast alert shown
+        }
+      } else {
+        setGeneralError(response.message || 'Import failed unexpectedly.');
+      }
+    } catch (error: any) {
+      setGeneralError(error.message || 'Server timeout or exceeded file size limits. Please verify database connectivity.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white flex flex-col max-h-[85vh]">
+        <div className="flex items-center justify-between mb-4 border-b pb-2">
+          <h3 className="text-lg font-medium text-gray-900">Import Rooms & Floors Layout</h3>
+          {!uploading && (
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-500">
+              <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {uploading ? (
+          <div className="flex flex-col items-center justify-center p-8 space-y-4">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+            <div className="w-full bg-gray-200 rounded-full h-3">
+              <div 
+                className="bg-primary-600 h-3 rounded-full transition-all duration-300"
+                style={{ width: `${progressPercentage}%` }}
+              ></div>
+            </div>
+            <div className="text-sm font-semibold text-gray-700">{progressPercentage}%</div>
+            <p className="text-xs text-gray-500 animate-pulse">{statusMessage}</p>
+          </div>
+        ) : importSummary ? (
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <div className="bg-green-50 border border-green-200 text-green-900 rounded-lg p-3 text-sm mb-4">
+              <strong>Import Operation Finished Successfully (Silent Mode):</strong> {importSummary.imported} rooms & structural floors successfully configured.
+            </div>
+
+            {importErrors && importErrors.length > 0 && (
+              <>
+                <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg p-3 text-sm mb-4">
+                  <strong>Warning:</strong> {importSummary.failed} record rows failed validation. See table below:
+                </div>
+
+                <div className="overflow-auto flex-1 border rounded-lg mb-4">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Row</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Field</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Value</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {importErrors.map((err, idx) => (
+                        <tr key={idx} className="hover:bg-red-50 hover:bg-opacity-30">
+                          <td className="px-4 py-2 font-medium text-gray-900">{err.row}</td>
+                          <td className="px-4 py-2 text-red-600 font-medium">{err.field || 'general'}</td>
+                          <td className="px-4 py-2 text-gray-500">{err.value !== null && err.value !== undefined ? String(err.value) : 'N/A'}</td>
+                          <td className="px-4 py-2 text-gray-700">{err.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t">
+              <button 
+                type="button" 
+                onClick={() => {
+                  onSuccess();
+                  onClose();
+                }} 
+                className="btn-primary"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {generalError && (
+              <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
+                <strong>Upload Error:</strong> {generalError}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Select Rooms Spreadsheet File <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleFileChange}
+                className="block w-full text-sm text-gray-500
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-md file:border-0
+                  file:text-sm file:font-semibold
+                  file:bg-primary-50 file:text-primary-700
+                  hover:file:bg-primary-100"
+              />
+              {file && (
+                <p className="text-xs text-gray-600 mt-1">Selected: {file.name} ({Math.round(file.size / 1024)} KB)</p>
+              )}
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <p className="text-sm text-blue-800">
+                <strong>Note:</strong> Download the template first to ensure your Excel file has the correct format.
+                The import operation runs in silent mode and will seamlessly record your space dimensions.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t">
+              <button type="button" onClick={onClose} className="btn-secondary">
+                Cancel
+              </button>
+              <button type="submit" disabled={!file} className="btn-primary">
+                Import Layout
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );

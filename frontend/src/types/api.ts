@@ -289,10 +289,13 @@ export interface UpdateAutoAssignmentConfigDTO {
 export interface AssignmentPreview {
   attendeeId: string;
   attendeeName: string;
+  gender?: string;                     // Attendee gender for display
+  age?: number;                        // Attendee age for display
   roomId: string;
   roomNumber: string;
   buildingName: string;
   floorNumber: number;
+  roomCapacity?: number;              // Room capacity for availability calculations
   score: number;
   appliedRules: string[];
   reason?: string;                    // Explanation of why this assignment was made
