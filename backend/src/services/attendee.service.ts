@@ -288,4 +288,12 @@ export class AttendeeService {
   async getUnassigned(params?: UnassignedFilterParams) {
     return this.attendeeRepository.findUnassigned(params?.search, params?.dualSearch);
   }
+
+  /**
+   * Search assigned attendees with dual-language support
+   * WHY: For swap modal - find attendees to swap
+   */
+  async searchAssigned(query: string) {
+    return this.attendeeRepository.searchAssigned(query);
+  }
 }

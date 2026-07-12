@@ -191,6 +191,51 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
   }
 
   /**
+   * Search assigned attendees with dual-language support
+   * WHY: For swap modal - includes room assignments and uses scoring
+   */
+  async searchAssigned(query: string) {
+    // Get all assigned attendees with room details
+    const attendees = await this.prisma.attendee.findMany({
+      where: {
+        deletedAt: null,
+        assignment: { isNot: null },
+      },
+      include: {
+        assignment: {
+          include: {
+            room: {
+              include: {
+                floor: {
+                  include: {
+                    building: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { fullName: 'asc' },
+    });
+
+    // If no query, return all
+    if (!query || query.trim().length === 0) {
+      return attendees;
+    }
+
+    // Use dual-language search with scoring
+    const results = this.dualLanguageSearch.searchWithScoring(
+      query,
+      attendees,
+      (attendee) => attendee.fullName
+    );
+
+    // Return sorted by relevance score (highest first)
+    return results.map(result => result.item);
+  }
+
+  /**
    * Count attendees by status
    * WHY: Dashboard statistics
    */

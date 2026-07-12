@@ -150,4 +150,20 @@ export class AttendeeController {
       message: 'Attendee checked out successfully',
     });
   }
+
+  /**
+   * GET /api/attendees/search-assigned
+   * Search assigned attendees with dual-language support
+   * For swap modal usage
+   */
+  async searchAssigned(req: Request, res: Response) {
+    const { query } = req.query;
+    const searchQuery = typeof query === 'string' ? query : '';
+    
+    const attendees = await this.attendeeService.searchAssigned(searchQuery);
+    res.json({
+      success: true,
+      data: attendees,
+    });
+  }
 }

@@ -147,7 +147,7 @@ describe('AutoAssignmentService', () => {
       expect(result.stages[0].name).toBe('Load Configuration');
       expect(result.stages[1].name).toBe('Load Data');
       expect(result.stages[2].name).toBe('Classify Notes');
-      expect(result.stages[3].name).toBe('Detect Groups');
+      expect(result.stages[3].name).toBe('Hierarchical Grouping');
       expect(result.stages[4].name).toBe('AI Group Enhancement');
       expect(result.stages[5].name).toBe('Prioritize Groups');
       expect(result.stages[6].name).toBe('Initialize Rules');
@@ -212,7 +212,7 @@ describe('AutoAssignmentService', () => {
 
       const result = await service.execute(params);
 
-      const detectGroupsStage = result.stages.find(s => s.name === 'Detect Groups');
+      const detectGroupsStage = result.stages.find(s => s.name === 'Hierarchical Grouping');
       expect(detectGroupsStage).toBeDefined();
       expect(detectGroupsStage?.status).toBe('completed');
       expect(detectGroupsStage?.itemsProcessed).toBeGreaterThanOrEqual(0);

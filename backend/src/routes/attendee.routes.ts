@@ -60,6 +60,17 @@ router.get(
 );
 
 /**
+ * @route   GET /api/attendees/search-assigned
+ * @desc    Search assigned attendees with dual-language support
+ * @access  Public
+ * @note    Must be before /:id route to avoid conflict
+ */
+router.get(
+  '/search-assigned',
+  asyncHandler(attendeeController.searchAssigned.bind(attendeeController))
+);
+
+/**
  * @route   GET /api/attendees/stats
  * @desc    Get attendee statistics
  * @access  Public

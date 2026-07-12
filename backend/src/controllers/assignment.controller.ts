@@ -7,6 +7,7 @@
 
 import { Request, Response } from 'express';
 import { AssignmentService } from '@/services/assignment.service';
+import { SwapValidationService } from '@/services/assignment/SwapValidationService';
 import {
   CreateAssignmentDTO,
   UpdateAssignmentDTO,
@@ -15,7 +16,10 @@ import {
 } from '@/validators/assignment.schemas';
 
 export class AssignmentController {
-  constructor(private assignmentService: AssignmentService) {}
+  constructor(
+    private assignmentService: AssignmentService,
+    private swapValidationService?: SwapValidationService
+  ) {}
 
   /**
    * POST /api/assignments
@@ -125,6 +129,93 @@ export class AssignmentController {
       success: true,
       data: result,
       message: `Batch assignment complete: ${result.successful.length} successful, ${result.failed.length} failed`,
+    });
+  }
+
+  /**
+   * POST /api/assignments/swap/validate
+   * Validate room assignment swap between attendees
+   */
+  async validateSwap(req: Request, res: Response) {
+    if (!this.swapValidationService) {
+      return res.status(501).json({
+        success: false,
+        error: 'Swap validation service not available',
+      });
+    }
+
+    const { groupA, groupB } = req.body;
+
+    if (!Array.isArray(groupA) || !Array.isArray(groupB)) {
+      return res.status(400).json({
+        success: false,
+        error: 'groupA and groupB must be arrays of attendee IDs',
+      });
+    }
+
+    if (groupA.length === 0 || groupB.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Both groups must have at least one attendee',
+      });
+    }
+
+    const validation = await this.swapValidationService.validateSwap({
+      groupA,
+      groupB,
+    });
+
+    res.json({
+      success: true,
+      data: validation,
+    });
+  }
+
+  /**
+   * POST /api/assignments/swap
+   * Execute room assignment swap between attendees
+   */
+  async executeSwap(req: Request, res: Response) {
+    if (!this.swapValidationService) {
+      return res.status(501).json({
+        success: false,
+        error: 'Swap validation service not available',
+      });
+    }
+
+    const { groupA, groupB } = req.body;
+
+    if (!Array.isArray(groupA) || !Array.isArray(groupB)) {
+      return res.status(400).json({
+        success: false,
+        error: 'groupA and groupB must be arrays of attendee IDs',
+      });
+    }
+
+    // Validate first
+    const validation = await this.swapValidationService.validateSwap({
+      groupA,
+      groupB,
+    });
+
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Swap validation failed',
+        validation,
+      });
+    }
+
+    // Execute swap
+    await this.swapValidationService.executeSwap({
+      groupA,
+      groupB,
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully swapped ${groupA.length + groupB.length} attendees`,
+      validation,
     });
   }
 }

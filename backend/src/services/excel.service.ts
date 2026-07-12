@@ -38,6 +38,14 @@ export interface AssignmentExcelRow {
   roomNumber: string;
 }
 
+export interface RoomExcelRow {
+  building: string;
+  floorValue: string | number; // Accept string, number or word representation
+  roomNumber: string;
+  individualBeds: number;
+  bunkBeds: number;
+}
+
 export interface ValidationError {
   row: number;
   field: string;
@@ -80,6 +88,9 @@ export class ExcelService {
       }
 
       // Map Excel columns to our schema
+      const rawTransactionNumberRaw = row['Transaction Number'] || row['transactionNumber'];
+      const rawTransactionNumber = rawTransactionNumberRaw !== undefined && rawTransactionNumberRaw !== null ? String(rawTransactionNumberRaw).trim() : undefined;
+
       const attendee: AttendeeExcelRow = {
         ticketId: row['Ticket ID'] || row['ticketId'] || undefined,
         fullName: row['Full Name'] || row['fullName'],
@@ -94,7 +105,7 @@ export class ExcelService {
         busPickupPoint: row['Bus Pickup Point'] || row['busPickupPoint'] || undefined,
         paymentMethod: row['Payment Method'] || row['paymentMethod'] || undefined,
         paymentStatus: this.parsePaymentStatus(row['Payment Review Status'] || row['paymentStatus']),
-        transactionNumber: row['Transaction Number'] || row['transactionNumber'] || undefined,
+        transactionNumber: rawTransactionNumber,
         conferenceRole: this.parseRole(row['Role'] || row['conferenceRole']),
         notes: row['Notes'] || row['notes'] || undefined,
         roomingNotes: row['Rooming Notes'] || row['roomingNotes'] || undefined,
@@ -405,5 +416,254 @@ export class ExcelService {
   private isValidEmail(email: string): boolean {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
+  }
+
+  /**
+   * Parse rooms from Excel buffer
+   * WHY: Import rooms and floor layout in bulk from Excel format
+   */
+  parseRoomsFromExcel(buffer: Buffer): { data: RoomExcelRow[]; errors: ValidationError[] } {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0] || '';
+    if (!sheetName) {
+      return { data: [], errors: [{ row: 0, field: 'sheet', value: '', message: 'Sheet not found' }] };
+    }
+    const sheet = workbook.Sheets[sheetName];
+    const rawData: any[] = XLSX.utils.sheet_to_json(sheet);
+    
+    const data: RoomExcelRow[] = [];
+    const errors: ValidationError[] = [];
+
+    rawData.forEach((row, index) => {
+      const rowNumber = index + 2; // Excel is 1-indexed and has header row
+      
+      const buildingRaw = row['Building'] || row['building'];
+      
+      // Support either separate "Floor Number" and "Floor Name" columns, or a single "Floor" column
+      const floorRaw = row['Floor'] || row['floor'] || row['Floor Name'] || row['floorName'] || row['floor_name'];
+      const floorNumberRaw = row['Floor Number'] || row['floorNumber'] || row['floor_number'] || row['FloorNumber'];
+      
+      const roomNumberRaw = row['Room'] || row['room'] || row['Room Number'] || row['roomNumber'] || row['RoomNumber'];
+      const individualBedsRaw = row['Individual Beds'] || row['individual beds'] || row['individual_beds'] || row['individualBeds'] || row['IndividualBeds'];
+      const bunkBedsRaw = row['Bunk Beds'] || row['bunk beds'] || row['bunk_beds'] || row['bunkBeds'] || row['BunkBeds'];
+
+      if (!buildingRaw) {
+        errors.push({
+          row: rowNumber,
+          field: 'building',
+          value: null,
+          message: 'Building name is required',
+        });
+        return;
+      }
+
+      if ((floorRaw === undefined || floorRaw === null || floorRaw === '') && 
+          (floorNumberRaw === undefined || floorNumberRaw === null || floorNumberRaw === '')) {
+        errors.push({
+          row: rowNumber,
+          field: 'floor',
+          value: null,
+          message: 'Floor information is required (Floor or Floor Number)',
+        });
+        return;
+      }
+
+      if (!roomNumberRaw) {
+        errors.push({
+          row: rowNumber,
+          field: 'roomNumber',
+          value: null,
+          message: 'Room number is required',
+        });
+        return;
+      }
+
+      // Parse floor number and optional name. Accept any integer or string layout: e.g., Ground, First, Floor 1, 10
+      let floorNum = 0;
+      let floorName = '';
+      
+      // Priority 1: Read explicit statistical Floor Number column
+      if (floorNumberRaw !== undefined && floorNumberRaw !== null && floorNumberRaw !== '') {
+        const parsedFloorNumber = parseInt(String(floorNumberRaw).trim(), 10);
+        if (!isNaN(parsedFloorNumber)) {
+          floorNum = parsedFloorNumber;
+        }
+      }
+      
+      // Determine descriptive Name/Representation of the floor
+      const baseFloorRaw = floorRaw !== undefined && floorRaw !== null && floorRaw !== '' ? floorRaw : floorNumberRaw;
+      const parsedFloorNumberFromBase = parseInt(String(baseFloorRaw).replace(/[^\d]/g, ''), 10);
+      
+      if (floorNumberRaw === undefined || floorNumberRaw === null || floorNumberRaw === '') {
+        // If no explicit "Floor Number" column was passed, parse it from the "Floor" column
+        if (!isNaN(parsedFloorNumberFromBase)) {
+          floorNum = parsedFloorNumberFromBase;
+          floorName = String(baseFloorRaw).trim();
+        } else {
+          // Fallback checks for word/string representations of floors
+          const normalizedFloorStr = String(baseFloorRaw).toLowerCase().trim();
+          if (normalizedFloorStr.includes('ground') || normalizedFloorStr.includes('ارضي') || normalizedFloorStr.includes('أرضي')) {
+            floorNum = 0;
+            floorName = String(baseFloorRaw).trim();
+          } else if (normalizedFloorStr.includes('first') || normalizedFloorStr.includes('اول') || normalizedFloorStr.includes('أول')) {
+            floorNum = 1;
+            floorName = String(baseFloorRaw).trim();
+          } else if (normalizedFloorStr.includes('second') || normalizedFloorStr.includes('ثاني') || normalizedFloorStr.includes('ثانى')) {
+            floorNum = 2;
+            floorName = String(baseFloorRaw).trim();
+          } else if (normalizedFloorStr.includes('third') || normalizedFloorStr.includes('ثالث')) {
+            floorNum = 3;
+            floorName = String(baseFloorRaw).trim();
+          } else if (normalizedFloorStr.includes('fourth') || normalizedFloorStr.includes('رابع')) {
+            floorNum = 4;
+            floorName = String(baseFloorRaw).trim();
+          } else if (normalizedFloorStr.includes('fifth') || normalizedFloorStr.includes('خامس')) {
+            floorNum = 5;
+            floorName = String(baseFloorRaw).trim();
+          } else {
+            floorNum = 0;
+            floorName = String(baseFloorRaw).trim();
+          }
+        }
+      } else {
+        // We have an explicit floor number. Read descriptive name from the floor column.
+        floorName = floorRaw !== undefined && floorRaw !== null && floorRaw !== '' ? String(floorRaw).trim() : `Floor ${floorNum}`;
+      }
+
+      if (!floorName) {
+        floorName = `Floor ${floorNum}`;
+      }
+
+      // Parse room name or number - accepts any string or integer completely
+      const roomNumStr = String(roomNumberRaw).trim();
+
+      // Clean bed count inputs to support empty cells / blank values seamlessly
+      let individualBeds = 0;
+      if (individualBedsRaw !== undefined && individualBedsRaw !== null && String(individualBedsRaw).trim() !== '') {
+        individualBeds = parseInt(String(individualBedsRaw).trim(), 10);
+      }
+
+      let bunkBeds = 0;
+      if (bunkBedsRaw !== undefined && bunkBedsRaw !== null && String(bunkBedsRaw).trim() !== '') {
+        bunkBeds = parseInt(String(bunkBedsRaw).trim(), 10);
+      }
+
+      if (isNaN(individualBeds) || individualBeds < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'individualBeds',
+          value: individualBedsRaw,
+          message: 'Individual Beds must be a non-negative integer',
+        });
+        return;
+      }
+
+      if (isNaN(bunkBeds) || bunkBeds < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'bunkBeds',
+          value: bunkBedsRaw,
+          message: 'Bunk Beds must be a non-negative integer',
+        });
+        return;
+      }
+
+      if (individualBeds === 0 && bunkBeds === 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'capacity',
+          value: 0,
+          message: 'Room must have at least one individual or bunk bed',
+        });
+        return;
+      }
+
+      data.push({
+        building: String(buildingRaw).trim(),
+        floorValue: floorName, // pass floorName which describes the string/int representation
+        roomNumber: roomNumStr,
+        individualBeds,
+        bunkBeds,
+      });
+    });
+
+    return { data, errors };
+  }
+
+  /**
+   * Generate excel file from rooms data
+   * WHY: Export rooms layout to Excel format
+   */
+  generateRoomsExcel(rooms: any[]): Buffer {
+    const excelData = rooms.map(room => ({
+      'Building': room.floor?.building?.name || '',
+      'Floor': room.floor?.floorNumber !== undefined ? room.floor.floorNumber : '',
+      'Room': room.roomNumber || '',
+      'Individual Beds': room.individualBeds || 0,
+      'Bunk Beds': room.bunkBeds || 0,
+      'Capacity': room.capacity || 0,
+      'Room Type': room.roomType || 'GENERAL',
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Rooms');
+
+    // Set column widths
+    worksheet['!cols'] = [
+      { wch: 20 }, // Building
+      { wch: 10 }, // Floor
+      { wch: 15 }, // Room
+      { wch: 18 }, // Individual Beds
+      { wch: 15 }, // Bunk Beds
+      { wch: 12 }, // Capacity
+      { wch: 15 }, // Room Type
+    ];
+
+    return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  }
+
+  /**
+   * Generate Excel template for room import
+   * WHY: Provide users with a template for rooms import
+   */
+  generateRoomTemplate(): Buffer {
+    const templateData = [
+      {
+        'Building': 'Building A',
+        'Floor': 1,
+        'Room': '101',
+        'Individual Beds': 2,
+        'Bunk Beds': 1,
+      },
+      {
+        'Building': 'Building A',
+        'Floor': 1,
+        'Room': '102',
+        'Individual Beds': 4,
+        'Bunk Beds': 0,
+      },
+      {
+        'Building': 'Building B',
+        'Floor': 2,
+        'Room': '201',
+        'Individual Beds': 0,
+        'Bunk Beds': 3,
+      },
+    ];
+
+    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Rooms');
+
+    worksheet['!cols'] = [
+      { wch: 20 }, // Building
+      { wch: 10 }, // Floor
+      { wch: 15 }, // Room
+      { wch: 20 }, // Individual Beds
+      { wch: 15 }, // Bunk Beds
+    ];
+
+    return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 }

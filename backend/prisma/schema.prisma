@@ -71,14 +71,16 @@ model Floor {
 
 // WHY: Individual rooms where attendees are assigned
 model Room {
-  id          String   @id @default(uuid())
-  floorId     String   @map("floor_id")
-  roomNumber  String   @map("room_number")
-  capacity    Int      // Maximum number of people
-  roomType    RoomType @default(GENERAL) @map("room_type")
-  amenities   Json?    // Flexible JSONB for features: ["AC", "Wheelchair accessible", "مكيف"]
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(uuid())
+  floorId        String   @map("floor_id")
+  roomNumber     String   @map("room_number")
+  capacity       Int      // Maximum number of people (calculated from individualBeds + 2 * bunkBeds)
+  individualBeds Int      @default(0) @map("individual_beds")
+  bunkBeds       Int      @default(0) @map("bunk_beds")
+  roomType       RoomType @default(GENERAL) @map("room_type")
+  amenities      Json?    // Flexible JSONB for features: ["AC", "Wheelchair accessible", "مكيف"]
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
   
   // Relations
   floor       Floor    @relation(fields: [floorId], references: [id], onDelete: Cascade)

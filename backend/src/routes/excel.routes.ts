@@ -97,4 +97,35 @@ router.get(
   asyncHandler(excelController.exportAssignments.bind(excelController))
 );
 
+/**
+ * @route   GET /api/excel/rooms/template
+ * @desc    Download Excel template for rooms import
+ * @access  Public
+ */
+router.get(
+  '/rooms/template',
+  asyncHandler(excelController.downloadRoomsTemplate.bind(excelController))
+);
+
+/**
+ * @route   GET /api/excel/rooms/export
+ * @desc    Export rooms layout to Excel file
+ * @access  Public
+ */
+router.get(
+  '/rooms/export',
+  asyncHandler(excelController.exportRooms.bind(excelController))
+);
+
+/**
+ * @route   POST /api/excel/rooms/import
+ * @desc    Import rooms layout from Excel file
+ * @access  Public
+ */
+router.post(
+  '/rooms/import',
+  upload.single('file'),
+  asyncHandler(excelController.importRooms.bind(excelController))
+);
+
 export default router;

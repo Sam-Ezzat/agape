@@ -16,6 +16,7 @@ import auditLogRoutes from './auditLog.routes';
 import dashboardRoutes from './dashboard.routes';
 import excelRoutes from './excel.routes';
 import autoAssignmentRoutes from './autoAssignment.routes';
+import searchRoutes from './search.routes';
 
 const router = Router();
 
@@ -38,6 +39,9 @@ router.use('/excel', excelRoutes);
 
 // Phase 4: Auto-Assignment Routes
 router.use('/auto-assignment', autoAssignmentRoutes);
+
+// Search utilities
+router.use('/search', searchRoutes);
 
 // API info endpoint
 router.get('/', (req, res) => {

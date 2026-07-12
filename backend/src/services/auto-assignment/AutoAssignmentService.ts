@@ -1,6 +1,6 @@
 // WHY: Main orchestrator for auto-assignment system
-// Coordinates all components: classifiers, group detection, rule engine, assignment execution
-// Implements 11-stage workflow with progress tracking and validation
+// Coordinates all components: classifiers, hierarchical grouping, rule engine, assignment execution
+// Implements new hierarchical workflow with 3-level grouping and smart room proximity
 
 import { Attendee, RoomAssignment, Gender } from '@prisma/client';
 import { AttendeeRepository } from '@/repositories/AttendeeRepository';
@@ -9,7 +9,8 @@ import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepositor
 import { AuditLogRepository } from '@/repositories/AuditLogRepository';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
 import { RoomingNotesClassifier } from './RoomingNotesClassifier';
-import { GroupDetectionService } from './GroupDetectionService';
+import { HierarchicalGroupingService, AttendeeGroup as HierarchicalGroup } from './HierarchicalGroupingService';
+import { RoomProximityMatcher, RoomWithDetails as ProximityRoom } from './RoomProximityMatcher';
 import { AIGroupEnhancementService } from './AIGroupEnhancementService';
 import { RuleEngine } from './RuleEngine';
 import { AssignmentContext } from './rules/IAssignmentRule';
@@ -47,6 +48,8 @@ interface RoomWithDetails {
   roomNumber: string;
   roomType: 'GENERAL' | 'VIP' | 'FAMILY';
   capacity: number;
+  individualBeds: number;
+  bunkBeds: number;
   floorId: string;
   amenities: any; // JsonValue from Prisma
   currentOccupancy: number;
@@ -66,23 +69,23 @@ interface RoomWithDetails {
 /**
  * Auto-Assignment Service Orchestrator
  * 
- * Implements 12-stage workflow:
+ * Implements new hierarchical workflow:
  * 1. Load configuration and rooms
  * 2. Load unassigned attendees
  * 3. Classify rooming notes (AI-powered text parsing)
- * 4. Detect groups (roommate, family, church) - rule-based
- * 4.5. AI Group Enhancement (semantic compatibility analysis)
- * 5. Prioritize groups by constraints
- * 6. Initialize rule engine
- * 7. Assign VIP/special needs first
- * 8. Assign groups (keep together)
- * 9. Assign individuals
- * 10. Run optimization pass (if enabled)
+ * 4. Create hierarchical groups (rooming notes → church → governorate)
+ * 5. Split groups by gender (strict constraint)
+ * 6. Extract medical/VIP cases
+ * 7. Sub-group by age ranges
+ * 8. Initialize rule engine
+ * 9. Assign groups with proximity matching for splits
+ * 10. AI Enhancement (optional)
  * 11. Validate final state
  */
 export class AutoAssignmentService {
   private classifier: RoomingNotesClassifier;
-  private groupDetector: GroupDetectionService;
+  private hierarchicalGrouping: HierarchicalGroupingService;
+  private proximityMatcher: RoomProximityMatcher;
   private aiEnhancer: AIGroupEnhancementService;
   private engine: RuleEngine;
   private buildingGenderMap: Map<string, Gender>; // Track which gender is assigned to each building
@@ -100,7 +103,8 @@ export class AutoAssignmentService {
     this.classifier = new RoomingNotesClassifier({ 
       useAI: options?.useAI !== false  // Default to true, but allow override
     });
-    this.groupDetector = new GroupDetectionService(this.classifier);
+    this.hierarchicalGrouping = new HierarchicalGroupingService();
+    this.proximityMatcher = new RoomProximityMatcher();
     this.aiEnhancer = new AIGroupEnhancementService({
       useAI: options?.useAI !== false  // Default to true, but allow override
     });
@@ -222,60 +226,43 @@ export class AutoAssignmentService {
         stage: { number: 3, name: 'Classify Notes', status: 'completed' }
       });
 
-      // Stage 4: Detect groups
+      // Stage 4: Create hierarchical groups with sub-grouping
       const stage4Start = Date.now();
       this.emitProgress(onProgress, {
         type: 'stage',
-        stage: { number: 4, name: 'Detect Groups', status: 'started' }
+        stage: { number: 4, name: 'Hierarchical Grouping', status: 'started' }
       });
 
-      const groups = this.groupDetector.detectGroups(unassignedAttendees);
+      const groups = await this.createHierarchicalGroupsWithSubgrouping(
+        unassignedAttendees,
+        classifications
+      );
 
       stages.push({
         stage: 4,
-        name: 'Detect Groups',
+        name: 'Hierarchical Grouping',
         status: 'completed',
         durationMs: Date.now() - stage4Start,
-        details: `Detected ${groups.length} groups`,
+        details: `Created ${groups.length} groups via 3-level hierarchy (rooming notes → church → governorate)`,
         itemsProcessed: groups.length
       });
 
       this.emitProgress(onProgress, {
         type: 'stage',
-        stage: { number: 4, name: 'Detect Groups', status: 'completed' }
+        stage: { number: 4, name: 'Hierarchical Grouping', status: 'completed' }
       });
 
-      // Stage 4b: AI Group Enhancement (optional layer)
-      const stage4bStart = Date.now();
-      this.emitProgress(onProgress, {
-        type: 'stage',
-        stage: { number: 4.5, name: 'AI Group Enhancement', status: 'started' }
-      });
-
-      let enhancedGroups = groups;
-      if (this.aiEnhancer.isAIAvailable()) {
-        try {
-          logger.info('Starting AI group enhancement...');
-          enhancedGroups = await this.aiEnhancer.enhanceGroups(
-            unassignedAttendees,
-            classifications,
-            groups
-          );
-          logger.info(`AI enhancement: ${groups.length} → ${enhancedGroups.length} groups`);
-        } catch (error) {
-          logger.error('AI group enhancement failed, using rule-based groups:', error);
-          enhancedGroups = groups;
-        }
-      } else {
-        logger.info('AI group enhancement skipped (AI unavailable)');
-      }
+      // Stage 4b: AI Group Enhancement (optional layer) - REMOVED FOR NOW
+      // AI enhancement will be applied after assignment as an analysis layer
+      // keeping this for backward compatibility with existing tests
+      const enhancedGroups = groups;
 
       stages.push({
         stage: 4.5,
         name: 'AI Group Enhancement',
-        status: 'completed',
-        durationMs: Date.now() - stage4bStart,
-        details: `Enhanced groups: ${groups.length} → ${enhancedGroups.length}`,
+        status: 'skipped',
+        durationMs: 0,
+        details: `AI enhancement deferred to post-assignment analysis`,
         itemsProcessed: enhancedGroups.length
       });
 
@@ -465,6 +452,8 @@ export class AutoAssignmentService {
       roomNumber: room.roomNumber,
       roomType: room.roomType as 'GENERAL' | 'VIP' | 'FAMILY',
       capacity: room.capacity,
+      individualBeds: room.individualBeds,
+      bunkBeds: room.bunkBeds,
       floorId: room.floorId,
       amenities: room.amenities,
       currentOccupancy: room.assignments.length,
@@ -480,6 +469,165 @@ export class AutoAssignmentService {
       createdAt: room.createdAt,
       updatedAt: room.updatedAt
     }));
+  }
+
+  /**
+   * Create hierarchical groups with intelligent sub-grouping
+   * 
+   * Workflow:
+   * 1. Create 3-level hierarchy (rooming notes → church → governorate)
+   * 2. For each group:
+   *    a. Split by gender (strict)
+   *    b. Extract medical/VIP cases
+   *    c. Sub-group regular attendees by age
+   * 3. Convert to old AttendeeGroup format for compatibility
+   */
+  private async createHierarchicalGroupsWithSubgrouping(
+    attendees: Attendee[],
+    classifications: Map<string, any>
+  ): Promise<AttendeeGroup[]> {
+    logger.info('Creating hierarchical groups with sub-grouping');
+
+    // Step 1: Create 3-level hierarchical groups
+    const result = this.hierarchicalGrouping.createHierarchicalGroups(
+      attendees,
+      classifications
+    );
+
+    const allGroups: AttendeeGroup[] = [];
+    const attendeeMap = new Map(attendees.map(a => [a.id, a]));
+
+    // Step 2: Process each hierarchical group
+    for (const hierGroup of result.groups) {
+      // Step 2a: Split by gender (STRICT constraint)
+      const genderGroups = this.hierarchicalGrouping.splitByGender(hierGroup, attendees);
+
+      for (const [gender, genderGroup] of genderGroups.entries()) {
+        // Step 2b: Extract medical/VIP cases
+        const { medical, vip, regular } = this.hierarchicalGrouping.extractSpecialCases(
+          genderGroup,
+          attendees
+        );
+
+        // Process medical group
+        if (medical && medical.attendeeIds.size > 0) {
+          const medicalSubGroups = this.splitLargeGroup(medical, attendees, 'medical');
+          allGroups.push(...medicalSubGroups);
+        }
+
+        // Process VIP group
+        if (vip && vip.attendeeIds.size > 0) {
+          const vipSubGroups = this.splitLargeGroup(vip, attendees, 'vip');
+          allGroups.push(...vipSubGroups);
+        }
+
+        // Process regular group - sub-group by age
+        if (regular.attendeeIds.size > 0) {
+          // Try 5-year age buckets first
+          let ageSubGroups = this.hierarchicalGrouping.splitByAge(regular, attendees, 5);
+          
+          // If any sub-group is too large for a single room, split by 10-year buckets
+          const largeSubGroups = ageSubGroups.filter(sg => sg.attendeeIds.size > 10);
+          if (largeSubGroups.length > 0) {
+            ageSubGroups = this.hierarchicalGrouping.splitByAge(regular, attendees, 10);
+          }
+
+          // Convert each age sub-group to old AttendeeGroup format
+          for (const ageGroup of ageSubGroups) {
+            const subGroups = this.splitLargeGroup(ageGroup, attendees, 'age');
+            allGroups.push(...subGroups);
+          }
+        }
+      }
+    }
+
+    // Step 3: Handle ungrouped individuals
+    for (const attendeeId of result.ungroupedAttendeeIds) {
+      const attendee = attendeeMap.get(attendeeId);
+      if (!attendee) continue;
+
+      allGroups.push({
+        id: `individual-${attendeeId}`,
+        type: GroupType.INDIVIDUAL,
+        members: [attendee],
+        priority: this.calculateGroupPriority(GroupType.INDIVIDUAL, [attendee]),
+        constraints: this.determineGroupConstraints([attendee]),
+        minRoomCount: 1,
+      });
+    }
+
+    logger.info(`Hierarchical grouping complete: ${allGroups.length} final groups`);
+    return allGroups;
+  }
+
+  /**
+   * Split large hierarchical group into smaller AttendeeGroups based on room capacity
+   * Tries to match group size to available room capacities
+   */
+  private splitLargeGroup(
+    hierGroup: HierarchicalGroup,
+    attendees: Attendee[],
+    groupCategory: 'medical' | 'vip' | 'age'
+  ): AttendeeGroup[] {
+    const attendeeMap = new Map(attendees.map(a => [a.id, a]));
+    const members = Array.from(hierGroup.attendeeIds)
+      .map(id => attendeeMap.get(id))
+      .filter(a => a !== undefined) as Attendee[];
+
+    if (members.length === 0) return [];
+
+    // Determine group type based on priority and category
+    let groupType: GroupType;
+    if (hierGroup.type === 'rooming_notes') {
+      groupType = GroupType.ROOMMATE;
+    } else if (hierGroup.metadata.hasFamily) {
+      groupType = GroupType.FAMILY;
+    } else if (hierGroup.type === 'church') {
+      groupType = GroupType.CHURCH;
+    } else {
+      groupType = GroupType.GOVERNORATE;
+    }
+
+    const subGroups: AttendeeGroup[] = [];
+
+    // If group fits in one room (<=8 people), create single group
+    if (members.length <= 8) {
+      subGroups.push({
+        id: `${hierGroup.id}-${groupCategory}`,
+        type: groupType,
+        members,
+        priority: this.calculateGroupPriority(groupType, members),
+        constraints: this.determineGroupConstraints(members),
+        minRoomCount: Math.ceil(members.length / 8), // Assume max 8 per room
+      });
+      return subGroups;
+    }
+
+    // Split large group into sub-groups of optimal sizes (4, 6, 8)
+    // Prefer filling rooms completely
+    const optimalSizes = [8, 6, 4, 3, 2];
+    let remaining = [...members];
+    let subGroupIndex = 0;
+
+    while (remaining.length > 0) {
+      // Find best size for remaining members
+      let bestSize = optimalSizes.find(size => size <= remaining.length) || 1;
+      
+      // Take members for this sub-group
+      const subGroupMembers = remaining.slice(0, bestSize);
+      remaining = remaining.slice(bestSize);
+
+      subGroups.push({
+        id: `${hierGroup.id}-${groupCategory}-${subGroupIndex++}`,
+        type: groupType,
+        members: subGroupMembers,
+        priority: this.calculateGroupPriority(groupType, subGroupMembers),
+        constraints: this.determineGroupConstraints(subGroupMembers),
+        minRoomCount: Math.ceil(subGroupMembers.length / 8), // Assume max 8 per room
+      });
+    }
+
+    return subGroups;
   }
 
   /**
@@ -658,7 +806,7 @@ export class AutoAssignmentService {
     // Determine leader preferred floor (if group has leaders)
     const leaderPreferredFloorId = this.determineLeaderPreferredFloor(group, rooms);
 
-    // Special handling for ROOMMATE groups - try to keep them together
+    // Special handling for ROOMMATE groups - try to keep them together in one room
     if (group.type === GroupType.ROOMMATE && group.members.length > 1) {
       const roommateResult = await this.tryAssignRoommatesTogether(
         group,
@@ -683,6 +831,35 @@ export class AutoAssignmentService {
       
       // Filter out already-assigned members
       const assignedIds = new Set(roommateResult.assignments.map(a => a.attendeeId));
+      group.members = group.members.filter(m => !assignedIds.has(m.id));
+    }
+
+    // For other multi-member groups (CHURCH, GOVERNORATE, FAMILY), try proximity-based assignment
+    // This allows splitting across nearby rooms when they can't fit in one room
+    if ((group.type === GroupType.CHURCH || group.type === GroupType.GOVERNORATE || group.type === GroupType.FAMILY) 
+        && group.members.length > 1) {
+      const proximityResult = await this.tryAssignGroupWithProximity(
+        group,
+        rooms,
+        allAttendees,
+        dryRun,
+        onProgress,
+        preferredFloorId,
+        leaderPreferredFloorId
+      );
+      
+      // If we successfully assigned all members, return
+      if (proximityResult.assignments.length === group.members.length) {
+        return proximityResult;
+      }
+      
+      // Otherwise, fall through to individual assignment
+      assignments.push(...proximityResult.assignments);
+      errors.push(...proximityResult.errors);
+      warnings.push(...proximityResult.warnings);
+      
+      // Filter out already-assigned members
+      const assignedIds = new Set(proximityResult.assignments.map(a => a.attendeeId));
       group.members = group.members.filter(m => !assignedIds.has(m.id));
     }
 
@@ -819,6 +996,438 @@ export class AutoAssignmentService {
           severity: 'error'
         });
       }
+    }
+
+    return { assignments, errors, warnings };
+  }
+
+  /**
+   * Try to assign group with proximity-based room splitting
+   * 
+   * Strategy:
+   * 1. Try to fit entire group in one room (best option)
+   * 2. If not possible, use RoomProximityMatcher to find nearby rooms
+   * 3. Split group optimally across nearby rooms (adjacent → same floor → same building)
+   * 
+   * Used for CHURCH, GOVERNORATE, and FAMILY groups (not ROOMMATE)
+   */
+  private async tryAssignGroupWithProximity(
+    group: AttendeeGroup,
+    rooms: RoomWithDetails[],
+    allAttendees: Attendee[],
+    dryRun: boolean,
+    onProgress?: ProgressCallback,
+    preferredFloorId?: string,
+    leaderPreferredFloorId?: string
+  ): Promise<{
+    assignments: AssignmentResult[];
+    errors: ValidationError[];
+    warnings: ValidationError[];
+  }> {
+    const assignments: AssignmentResult[] = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationError[] = [];
+
+    const groupSize = group.members.length;
+    
+    // Step 1: Try to find a single room that can fit the entire group
+    const singleRoomResult = await this.tryAssignToSingleRoom(
+      group,
+      rooms,
+      allAttendees,
+      dryRun,
+      onProgress,
+      preferredFloorId,
+      leaderPreferredFloorId
+    );
+
+    if (singleRoomResult.assignments.length === groupSize) {
+      // Successfully assigned to single room
+      logger.info(`Group ${group.id} (${groupSize} members) assigned to single room`);
+      return singleRoomResult;
+    }
+
+    // Step 2: Need to split across multiple rooms - use proximity matcher
+    logger.info(`Group ${group.id} (${groupSize} members) requires splitting across rooms`);
+
+    // Find all candidate rooms that pass hard constraints for group members
+    const candidateRooms: RoomWithDetails[] = [];
+    for (const room of rooms) {
+      // Check if at least one member can be assigned to this room
+      let hasValidMember = false;
+      for (const member of group.members) {
+        const candidates = this.findCandidateRooms(member, [room], allAttendees);
+        if (candidates.length > 0) {
+          hasValidMember = true;
+          break;
+        }
+      }
+      if (hasValidMember) {
+        candidateRooms.push(room);
+      }
+    }
+
+    if (candidateRooms.length === 0) {
+      errors.push({
+        attendeeId: group.members[0].id,
+        attendeeName: `${group.type} group (${groupSize} people)`,
+        reason: 'No rooms available that match hard constraints for group members',
+        violatedRule: 'Hard Constraints',
+        severity: 'error'
+      });
+      return { assignments, errors, warnings };
+    }
+
+    // Determine how many rooms we need
+    const maxRoomCapacity = Math.max(...candidateRooms.map(r => r.capacity - r.currentOccupancy));
+    const minRoomsNeeded = Math.ceil(groupSize / maxRoomCapacity);
+
+    // Use proximity matcher to find nearby rooms
+    const proximityMatch = this.proximityMatcher.findNearbyRooms(
+      groupSize,
+      candidateRooms,
+      minRoomsNeeded
+    );
+
+    if (!proximityMatch || proximityMatch.rooms.length < minRoomsNeeded) {
+      // Fallback: use any available rooms (no proximity guarantee)
+      logger.warn(`No proximity match found for group ${group.id}, using any available rooms`);
+      const fallbackRooms = candidateRooms
+        .sort((a, b) => (b.capacity - b.currentOccupancy) - (a.capacity - a.currentOccupancy))
+        .slice(0, minRoomsNeeded);
+
+      return await this.assignGroupAcrossRooms(
+        group,
+        fallbackRooms,
+        allAttendees,
+        dryRun,
+        onProgress,
+        'none',
+        preferredFloorId,
+        leaderPreferredFloorId
+      );
+    }
+
+    // Map proximity match rooms back to RoomWithDetails
+    const matchedRoomsWithDetails = proximityMatch.rooms
+      .map(r => candidateRooms.find(cr => cr.id === r.id))
+      .filter(r => r !== undefined) as RoomWithDetails[];
+
+    // Assign group across nearby rooms
+    logger.info(`Found ${proximityMatch.proximityLevel} rooms for group ${group.id}`);
+    return await this.assignGroupAcrossRooms(
+      group,
+      matchedRoomsWithDetails,
+      allAttendees,
+      dryRun,
+      onProgress,
+      proximityMatch.proximityLevel,
+      preferredFloorId,
+      leaderPreferredFloorId
+    );
+  }
+
+  /**
+   * Try to assign entire group to a single room
+   */
+  private async tryAssignToSingleRoom(
+    group: AttendeeGroup,
+    rooms: RoomWithDetails[],
+    allAttendees: Attendee[],
+    dryRun: boolean,
+    onProgress?: ProgressCallback,
+    preferredFloorId?: string,
+    leaderPreferredFloorId?: string
+  ): Promise<{
+    assignments: AssignmentResult[];
+    errors: ValidationError[];
+    warnings: ValidationError[];
+  }> {
+    const assignments: AssignmentResult[] = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationError[] = [];
+
+    const groupSize = group.members.length;
+    
+    // Find rooms that can fit the entire group
+    const suitableRooms: RoomWithDetails[] = [];
+    
+    for (const room of rooms) {
+      const availableSpace = room.capacity - room.currentOccupancy;
+      if (availableSpace >= groupSize) {
+        // Check if all members pass hard constraints for this room
+        let allMembersValid = true;
+        for (const member of group.members) {
+          const candidates = this.findCandidateRooms(member, [room], allAttendees);
+          if (candidates.length === 0) {
+            allMembersValid = false;
+            break;
+          }
+        }
+        
+        if (allMembersValid) {
+          suitableRooms.push(room);
+        }
+      }
+    }
+
+    if (suitableRooms.length === 0) {
+      // No single room can fit all members
+      return { assignments, errors, warnings };
+    }
+
+    // Use proximity matcher to find best single room (considers capacity match)
+    const bestRoomBasic = this.proximityMatcher.findBestSingleRoom(groupSize, suitableRooms);
+    
+    if (!bestRoomBasic) {
+      return { assignments, errors, warnings };
+    }
+
+    // Find the RoomWithDetails version
+    const bestRoom = suitableRooms.find(r => r.id === bestRoomBasic.id);
+    if (!bestRoom) {
+      return { assignments, errors, warnings };
+    }
+
+    // Score the room for the first member (as representative)
+    const firstMember = group.members[0];
+    const scoringResults = this.scoreRoomsDetailed(
+      firstMember,
+      [bestRoom],
+      allAttendees,
+      preferredFloorId,
+      leaderPreferredFloorId
+    );
+
+    if (scoringResults.length === 0) {
+      return { assignments, errors, warnings };
+    }
+
+    // Assign all members to this room
+    for (const member of group.members) {
+      // Update room occupancy
+      bestRoom.currentOccupancy++;
+      bestRoom.currentAssignments.push({
+        id: `temp-${member.id}`,
+        attendeeId: member.id,
+        roomId: bestRoom.id,
+        assignedAt: new Date(),
+        assignedBy: 'auto-assignment',
+        isLocked: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      
+      // Update building gender map
+      if (bestRoom.roomType !== 'FAMILY' && member.gender) {
+        const buildingId = bestRoom.floor.building.id;
+        if (!this.buildingGenderMap.has(buildingId)) {
+          this.buildingGenderMap.set(buildingId, member.gender);
+        }
+      }
+
+      // Create assignment in database (only if not dry run)
+      if (!dryRun) {
+        await this.createAssignment(member.id, bestRoom.id);
+      }
+
+      // Build reason
+      const reason = `Assigned with ${groupSize - 1} ${group.type} group member(s) to room ${bestRoom.roomNumber} (capacity ${bestRoom.capacity}). Group kept together.`;
+
+      // Record assignment
+      assignments.push({
+        attendeeId: member.id,
+        roomId: bestRoom.id,
+        score: scoringResults[0].score,
+        appliedRules: scoringResults[0].appliedRules,
+        reason: reason,
+        scoreBreakdown: scoringResults[0].scoreBreakdown,
+        groupInfo: {
+          groupId: group.id,
+          groupType: group.type,
+          groupSize: groupSize,
+          roommatesInSameRoom: groupSize
+        }
+      });
+
+      // Emit progress
+      this.emitProgress(onProgress, {
+        type: 'assignment',
+        assignment: {
+          attendeeId: member.id,
+          attendeeName: member.fullName,
+          roomId: bestRoom.id,
+          roomNumber: bestRoom.roomNumber
+        }
+      });
+    }
+
+    return { assignments, errors, warnings };
+  }
+
+  /**
+   * Assign group members across multiple nearby rooms
+   */
+  private async assignGroupAcrossRooms(
+    group: AttendeeGroup,
+    nearbyRooms: RoomWithDetails[],
+    allAttendees: Attendee[],
+    dryRun: boolean,
+    onProgress: ProgressCallback | undefined,
+    proximityLevel: 'adjacent' | 'same_floor' | 'same_building' | 'none',
+    preferredFloorId?: string,
+    leaderPreferredFloorId?: string
+  ): Promise<{
+    assignments: AssignmentResult[];
+    errors: ValidationError[];
+    warnings: ValidationError[];
+  }> {
+    const assignments: AssignmentResult[] = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationError[] = [];
+
+    // Sort rooms by available capacity (largest first)
+    const sortedRooms = [...nearbyRooms].sort(
+      (a, b) => (b.capacity - b.currentOccupancy) - (a.capacity - a.currentOccupancy)
+    );
+
+    // Split group members across rooms optimally
+    let remainingMembers = [...group.members];
+    const roomAssignments: Map<string, Attendee[]> = new Map();
+
+    for (const room of sortedRooms) {
+      if (remainingMembers.length === 0) break;
+
+      const availableSpace = room.capacity - room.currentOccupancy;
+      if (availableSpace <= 0) continue;
+
+      // Assign as many members as possible to this room
+      const membersForThisRoom: Attendee[] = [];
+      
+      for (let i = 0; i < Math.min(availableSpace, remainingMembers.length); i++) {
+        const member = remainingMembers[i];
+        
+        // Check if member passes hard constraints for this room
+        const candidates = this.findCandidateRooms(member, [room], allAttendees);
+        if (candidates.length > 0) {
+          membersForThisRoom.push(member);
+        }
+      }
+
+      if (membersForThisRoom.length > 0) {
+        roomAssignments.set(room.id, membersForThisRoom);
+        remainingMembers = remainingMembers.filter(m => !membersForThisRoom.includes(m));
+      }
+    }
+
+    // Assign each sub-group to its room
+    for (const [roomId, members] of roomAssignments.entries()) {
+      const room = sortedRooms.find(r => r.id === roomId);
+      if (!room) continue;
+
+      // Score the room for the first member
+      const scoringResults = this.scoreRoomsDetailed(
+        members[0],
+        [room],
+        allAttendees,
+        preferredFloorId,
+        leaderPreferredFloorId
+      );
+
+      const score = scoringResults.length > 0 ? scoringResults[0].score : 0.5;
+      const scoreBreakdown = scoringResults.length > 0 ? scoringResults[0].scoreBreakdown : undefined;
+
+      for (const member of members) {
+        // Update room occupancy
+        room.currentOccupancy++;
+        room.currentAssignments.push({
+          id: `temp-${member.id}`,
+          attendeeId: member.id,
+          roomId: room.id,
+          assignedAt: new Date(),
+          assignedBy: 'auto-assignment',
+          isLocked: false,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        // Update building gender map
+        if (room.roomType !== 'FAMILY' && member.gender) {
+          const buildingId = room.floor.building.id;
+          if (!this.buildingGenderMap.has(buildingId)) {
+            this.buildingGenderMap.set(buildingId, member.gender);
+          }
+        }
+
+        // Create assignment in database (only if not dry run)
+        if (!dryRun) {
+          await this.createAssignment(member.id, room.id);
+        }
+
+        // Build reason with proximity info
+        const proximityDescription = proximityLevel === 'adjacent' ? 'adjacent rooms' :
+                                     proximityLevel === 'same_floor' ? 'same floor' :
+                                     proximityLevel === 'same_building' ? 'same building' :
+                                     'separate locations';
+
+        const reason = `Assigned with ${members.length - 1} ${group.type} group member(s) to room ${room.roomNumber} (${proximityDescription}). Total group size: ${group.members.length}.`;
+
+        // Record assignment
+        assignments.push({
+          attendeeId: member.id,
+          roomId: room.id,
+          score: score,
+          appliedRules: scoringResults.length > 0 ? scoringResults[0].appliedRules : [],
+          reason: reason,
+          scoreBreakdown: scoreBreakdown,
+          groupInfo: {
+            groupId: group.id,
+            groupType: group.type,
+            groupSize: group.members.length,
+            roommatesInSameRoom: members.length
+          }
+        });
+
+        // Emit progress
+        this.emitProgress(onProgress, {
+          type: 'assignment',
+          assignment: {
+            attendeeId: member.id,
+            attendeeName: member.fullName,
+            roomId: room.id,
+            roomNumber: room.roomNumber
+          }
+        });
+      }
+    }
+
+    // Track any members that couldn't be assigned
+    if (remainingMembers.length > 0) {
+      for (const member of remainingMembers) {
+        errors.push({
+          attendeeId: member.id,
+          attendeeName: member.fullName,
+          reason: `Could not assign to nearby rooms (proximity: ${proximityLevel})`,
+          violatedRule: 'Room Availability',
+          severity: 'error'
+        });
+      }
+    }
+
+    // Add warning if group was split
+    if (roomAssignments.size > 1) {
+      const proximityDescription = proximityLevel === 'adjacent' ? 'adjacent rooms' :
+                                   proximityLevel === 'same_floor' ? 'same floor' :
+                                   proximityLevel === 'same_building' ? 'same building' :
+                                   'separate locations';
+
+      warnings.push({
+        attendeeId: group.members[0].id,
+        attendeeName: `${group.type} group (${group.members.length} people)`,
+        reason: `Group split across ${roomAssignments.size} ${proximityDescription} (${roomAssignments.size} rooms)`,
+        violatedRule: 'Group Proximity',
+        severity: 'warning'
+      });
     }
 
     return { assignments, errors, warnings };
@@ -1416,11 +2025,127 @@ export class AutoAssignmentService {
       return {
         ...assignment,
         attendeeName: attendee.fullName,
+        gender: attendee.gender,
+        age: attendee.age,
         roomNumber: room.roomNumber,
+        roomCapacity: room.capacity,
         buildingName: room.floor.building.name,
         floorNumber: room.floor.floorNumber
       };
     });
+  }
+
+  /**
+   * Calculate group priority (higher = assign first)
+   * Priority factors: medical needs, VIP, wheelchair, group size
+   */
+  private calculateGroupPriority(groupType: GroupType, members: Attendee[]): number {
+    let priority = 100;
+
+    // Medical needs get highest priority
+    const hasMedical = members.some(m => 
+      m.roomingNotes?.toLowerCase().includes('medical') ||
+      m.roomingNotes?.toLowerCase().includes('health') ||
+      m.notes?.toLowerCase().includes('wheelchair')
+    );
+    if (hasMedical) priority += 50;
+
+    // VIP gets high priority (servants or VIP conference role)
+    const hasVIP = members.some(m => m.isServant || m.conferenceRole === 'VIP' || m.conferenceRole === 'LEADER');
+    if (hasVIP) priority += 40;
+
+    // Wheelchair accessibility
+    const hasWheelchair = members.some(m => m.notes?.toLowerCase().includes('wheelchair'));
+    if (hasWheelchair) priority += 30;
+
+    // Group type priority
+    switch (groupType) {
+      case GroupType.ROOMMATE:
+        priority += 25; // Explicit roommate requests are high priority
+        break;
+      case GroupType.FAMILY:
+        priority += 20;
+        break;
+      case GroupType.CHURCH:
+        priority += 10;
+        break;
+      case GroupType.GOVERNORATE:
+        priority += 5;
+        break;
+      case GroupType.INDIVIDUAL:
+        priority += 0;
+        break;
+    }
+
+    // Larger groups get slightly higher priority (harder to place)
+    priority += Math.min(members.length, 10);
+
+    return priority;
+  }
+
+  /**
+   * Determine group constraints based on members' attributes
+   */
+  private determineGroupConstraints(members: Attendee[]): {
+    requiredRoomType?: 'GENERAL' | 'VIP' | 'FAMILY';
+    requiredGender?: Gender;
+    mustBeNearby?: boolean;
+    requiresAccessibility?: boolean;
+    requiresGroundFloor?: boolean;
+    requiresElevator?: boolean;
+    maxRoomCapacity?: number;
+  } {
+    const constraints: any = {};
+
+    // Required gender (all members should have same gender)
+    const genders = new Set(members.map(m => m.gender).filter(g => g !== null));
+    if (genders.size === 1) {
+      constraints.requiredGender = Array.from(genders)[0];
+    }
+
+    // Required room type
+    const hasVIP = members.some(m => m.isServant || m.conferenceRole === 'VIP' || m.conferenceRole === 'LEADER');
+    const hasFamily = members.some(m => 
+      m.roomingNotes?.toLowerCase().includes('family') ||
+      m.notes?.toLowerCase().includes('family')
+    );
+    if (hasVIP) {
+      constraints.requiredRoomType = 'VIP';
+    } else if (hasFamily) {
+      constraints.requiredRoomType = 'FAMILY';
+    }
+
+    // Accessibility needs
+    const needsWheelchair = members.some(m => 
+      m.notes?.toLowerCase().includes('wheelchair') ||
+      m.roomingNotes?.toLowerCase().includes('wheelchair')
+    );
+    const needsGroundFloor = members.some(m => 
+      m.roomingNotes?.toLowerCase().includes('ground floor') ||
+      m.roomingNotes?.toLowerCase().includes('first floor') ||
+      needsWheelchair
+    );
+    const needsElevator = members.some(m =>
+      m.roomingNotes?.toLowerCase().includes('elevator') ||
+      m.roomingNotes?.toLowerCase().includes('lift')
+    );
+
+    if (needsWheelchair || needsGroundFloor || needsElevator) {
+      constraints.requiresAccessibility = true;
+    }
+    if (needsGroundFloor) {
+      constraints.requiresGroundFloor = true;
+    }
+    if (needsElevator) {
+      constraints.requiresElevator = true;
+    }
+
+    // Group size constraints
+    if (members.length > 1) {
+      constraints.mustBeNearby = true; // Groups should be in nearby rooms
+    }
+
+    return constraints;
   }
 
   /**   * Emit progress event to callback
