@@ -36,6 +36,33 @@ const DEFAULT_RULE_WEIGHTS = {
   leader_proximity: 0.10,
 };
 
+// Helper to calculate room statistics recursively for a building
+const getBuildingStats = (building: Building) => {
+  let totalCapacity = 0;
+  let totalRooms = 0;
+  let availableRooms = 0;
+  let assignedBeds = 0;
+
+  building.floors?.forEach(floor => {
+    floor.rooms?.forEach(room => {
+      totalRooms++;
+      totalCapacity += room.capacity || 0;
+      const assignmentsCount = room.assignments?.length || 0;
+      assignedBeds += assignmentsCount;
+      if (assignmentsCount < (room.capacity || 0)) {
+        availableRooms++;
+      }
+    });
+  });
+
+  return {
+    totalCapacity,
+    totalRooms,
+    availableRooms,
+    availableBeds: totalCapacity - assignedBeds,
+  };
+};
+
 export default function AutoAssignmentPage() {
   const navigate = useNavigate();
   
@@ -670,21 +697,49 @@ export default function AutoAssignmentPage() {
               Building Selection
             </h2>
             
+            {/* Table Header/Columns */}
+            <div className="grid grid-cols-12 gap-4 px-3 py-2 text-xs font-semibold text-gray-500 uppercase bg-gray-50 rounded-lg mb-2">
+              <div className="col-span-3">Building Name</div>
+              <div className="col-span-2 text-right">Floors</div>
+              <div className="col-span-2 text-right">Available Rooms</div>
+              <div className="col-span-3 text-right">Available Beds</div>
+              <div className="col-span-2 text-right">Total Capacity</div>
+            </div>
+            
             <div className="space-y-2">
               {buildings
                 .filter(b => b.conferenceHouseId === selectedHouseId)
-                .map(building => (
-                  <label key={building.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedBuildingIds.includes(building.id)}
-                      onChange={() => handleBuildingToggle(building.id)}
-                      className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
-                    />
-                    <span className="flex-1 font-medium text-gray-900">{building.name}</span>
-                    <span className="text-sm text-gray-500">{building.floorCount} floors</span>
-                  </label>
-                ))}
+                .map(building => {
+                  const stats = getBuildingStats(building);
+                  return (
+                    <label key={building.id} className="grid grid-cols-12 gap-4 items-center p-3 rounded-lg hover:bg-gray-50 cursor-pointer border border-gray-100 transition-colors">
+                      <div className="col-span-3 flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedBuildingIds.includes(building.id)}
+                          onChange={() => handleBuildingToggle(building.id)}
+                          className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
+                        />
+                        <span className="font-semibold text-gray-900">{building.name}</span>
+                      </div>
+                      <div className="col-span-2 text-right text-sm text-gray-600">
+                        {building.floorCount} floors
+                      </div>
+                      <div className="col-span-2 text-right text-sm text-gray-600">
+                        <span className="font-semibold text-primary-600">{stats.availableRooms}</span>
+                        <span className="text-xs text-gray-400"> / {stats.totalRooms} rms</span>
+                      </div>
+                      <div className="col-span-3 text-right text-sm text-gray-600">
+                        <span className="font-semibold text-green-600">{stats.availableBeds}</span>
+                        <span className="text-xs text-gray-400"> / {stats.totalCapacity} empty</span>
+                      </div>
+                      <div className="col-span-2 text-right text-sm text-gray-600">
+                        <span className="font-semibold text-gray-950">{stats.totalCapacity}</span>
+                        <span className="text-xs text-gray-400"> beds</span>
+                      </div>
+                    </label>
+                  );
+                })}
             </div>
           </div>
           

@@ -24,8 +24,19 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
   async findByConferenceHouseId(conferenceHouseId: string): Promise<Building[]> {
     return this.model.findMany({
       where: { conferenceHouseId },
+      include: {
+        floors: {
+          include: {
+            rooms: {
+              include: {
+                assignments: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { name: 'asc' },
-    });
+    }) as unknown as Building[];
   }
 
   /**
@@ -34,8 +45,19 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
    */
   async findAll(): Promise<Building[]> {
     return this.model.findMany({
+      include: {
+        floors: {
+          include: {
+            rooms: {
+              include: {
+                assignments: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { name: 'asc' },
-    });
+    }) as unknown as Building[];
   }
 
   /**
