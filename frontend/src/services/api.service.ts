@@ -159,9 +159,22 @@ export const attendeeApi = {
    * DELETE /api/attendees/:id
    * Delete attendee (soft delete)
    */
-  delete: async (id: string): Promise<ApiResponse<Attendee>> => {
+  delete: async (id: string, reason?: string): Promise<ApiResponse<Attendee>> => {
     try {
-      const { data } = await apiClient.delete(`/attendees/${id}`);
+      const { data } = await apiClient.delete(`/attendees/${id}`, { data: { reason } });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * POST /api/attendees/:id/reactivate
+   * Reactivate attendee
+   */
+  reactivate: async (id: string): Promise<ApiResponse<Attendee>> => {
+    try {
+      const { data } = await apiClient.post(`/attendees/${id}/reactivate`);
       return data;
     } catch (error) {
       return handleApiError(error as Error);

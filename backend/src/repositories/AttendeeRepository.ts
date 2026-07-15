@@ -50,11 +50,11 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
   /* Supports dual-language search (English ↔ Arabic)
    */
   async search(params: AttendeeFilterParams) {
-    const { search, role, gender, checkedIn, hasAssignment, page, limit, dualSearch } = params;
+    const { search, role, gender, checkedIn, hasAssignment, page, limit, dualSearch, onlyDeleted } = params;
     const skip = (page - 1) * limit;
 
     const where: Prisma.AttendeeWhereInput = {
-      deletedAt: null, // Only non-deleted attendees
+      deletedAt: onlyDeleted ? { not: null } : null,
     };
 
     // Full-text search on name with optional dual-language support
@@ -276,12 +276,43 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
 
   /**
    * Soft delete attendee
-   * WHY: Preserves data for audit trail
+   * WHY: Preserves data for audit trail and logs deletion reasons
    */
-  async softDelete(id: string) {
+  async softDelete(id: string, reason?: string) {
+    const data: Prisma.AttendeeUpdateInput = { deletedAt: new Date() };
+    if (reason) {
+      const existing = await this.prisma.attendee.findUnique({
+        where: { id },
+        select: { internalNotes: true },
+      });
+      const separator = existing?.internalNotes ? '\n' : '';
+      data.internalNotes = `${existing?.internalNotes || ''}${separator}[Cancellation Reason: ${reason}]`;
+    }
     return this.prisma.attendee.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data,
+    });
+  }
+
+  /**
+   * Reactivate soft-deleted attendee
+   * WHY: Restores and logs returning attendees
+   */
+  async reactivate(id: string) {
+    const existing = await this.prisma.attendee.findUnique({
+      where: { id },
+      select: { internalNotes: true },
+    });
+    const separator = existing?.internalNotes ? '\n' : '';
+    const timestamp = new Date().toLocaleString('en-US');
+    const newNotes = `${existing?.internalNotes || ''}${separator}[Reactivated: ${timestamp}]`;
+
+    return this.prisma.attendee.update({
+      where: { id },
+      data: {
+        deletedAt: null,
+        internalNotes: newNotes,
+      },
     });
   }
 

@@ -134,6 +134,16 @@ router.delete(
 );
 
 /**
+ * @route   POST /api/attendees/:id/reactivate
+ * @desc    Reactivate soft-deleted attendee
+ * @access  Public (future: protected)
+ */
+router.post(
+  '/:id/reactivate',
+  asyncHandler(attendeeController.reactivate.bind(attendeeController))
+);
+
+/**
  * @route   POST /api/attendees/:id/check-in
  * @desc    Check in attendee
  * @access  Public (future: protected)

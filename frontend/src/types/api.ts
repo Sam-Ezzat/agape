@@ -206,6 +206,7 @@ export interface AttendeeFilters extends PaginationParams {
   checkedIn?: 'true' | 'false';
   hasAssignment?: 'true' | 'false';
   dualSearch?: 'true' | 'false'; // Dual-language search (Arabic ↔ English)
+  onlyDeleted?: 'true' | 'false';
 }
 
 export interface UnassignedFilters {

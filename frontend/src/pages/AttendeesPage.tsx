@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { attendeeApi, excelApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useSocket } from '@/hooks/useSocket';
@@ -23,6 +24,7 @@ export default function AttendeesPage() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
+  const [deletingAttendee, setDeletingAttendee] = useState<{ id: string; name: string } | null>(null);
   const socket = useSocket();
   
   // Filters
@@ -115,12 +117,16 @@ export default function AttendeesPage() {
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete ${name}?`)) return;
-    
+  const handleDelete = (id: string, name: string) => {
+    setDeletingAttendee({ id, name });
+  };
+
+  const handleConfirmDelete = async (reason: string) => {
+    if (!deletingAttendee) return;
     try {
-      await attendeeApi.delete(id);
-      toastSuccess(`${name} deleted successfully`);
+      await attendeeApi.delete(deletingAttendee.id, reason);
+      toastSuccess(`${deletingAttendee.name} deleted successfully`);
+      setDeletingAttendee(null);
       loadAttendees();
     } catch (error) {
       // Error already shown by API service
@@ -227,6 +233,12 @@ export default function AttendeesPage() {
           <p className="text-gray-600 mt-1">Manage conference attendees</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/attendees/cancellations" className="btn-secondary flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 font-semibold">
+            <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.364A9 9 0 015.636 5.636m12.728 12.364L5.636 5.636" />
+            </svg>
+            Cancellations
+          </Link>
           <button onClick={handleDownloadTemplate} className="btn-secondary flex items-center gap-2">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -482,6 +494,15 @@ export default function AttendeesPage() {
           onClose={closeDetailsModal}
           onEdit={openEditFromDetails}
           onDelete={handleDeleteFromDetails}
+        />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingAttendee && (
+        <DeleteConfirmationModal
+          attendeeName={deletingAttendee.name}
+          onClose={() => setDeletingAttendee(null)}
+          onConfirm={handleConfirmDelete}
         />
       )}
     </div>
@@ -919,12 +940,14 @@ function ImportModal({ onClose, onSuccess }: ImportModalProps) {
   const [statusMessage, setProgressMessage] = useState('');
   const [importErrors, setImportErrors] = useState<any[] | null>(null);
   const [importSummary, setImportSummary] = useState<{ imported: number; failed: number } | null>(null);
+  const [softDeletedMatched, setSoftDeletedMatched] = useState<any[]>([]);
   const [generalError, setGeneralError] = useState<string | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setGeneralError(null);
     setImportErrors(null);
     setImportSummary(null);
+    setSoftDeletedMatched([]);
     setProgressPercentage(0);
     
     if (e.target.files && e.target.files[0]) {
@@ -937,6 +960,22 @@ function ImportModal({ onClose, onSuccess }: ImportModalProps) {
       }
       setFile(selectedFile);
     }
+  };
+
+  const handleReactivateMatched = async (id: string, name: string) => {
+    try {
+      await attendeeApi.reactivate(id);
+      toastSuccess(`${name} reactivated successfully`);
+      setSoftDeletedMatched((prev) => prev.filter((a) => a.id !== id));
+    } catch (error) {
+      // Handled
+    }
+  };
+
+  const getReasonFromNotes = (notes: string | null | undefined): string => {
+    if (!notes) return 'No reason provided';
+    const match = notes.match(/\[Cancellation Reason:\s*([^\]]+)\]/);
+    return match && match[1] ? match[1] : 'No reason provided';
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -952,6 +991,7 @@ function ImportModal({ onClose, onSuccess }: ImportModalProps) {
       setGeneralError(null);
       setImportErrors(null);
       setImportSummary(null);
+      setSoftDeletedMatched([]);
       setProgressPercentage(5);
       setProgressMessage('Uploading Spreadsheet File...');
 
@@ -983,12 +1023,13 @@ function ImportModal({ onClose, onSuccess }: ImportModalProps) {
       setProgressMessage('Complete!');
 
       if (response.success) {
-        const { imported, failed, errors } = response.data || {};
+        const { imported, failed, errors, softDeletedMatched: matched } = response.data || {};
         setImportSummary({ imported: imported || 0, failed: failed || 0 });
         if (failed > 0) {
           setImportErrors(errors || []);
-        } else {
-          // Silent success handled - no toast alert shown
+        }
+        if (matched && matched.length > 0) {
+          setSoftDeletedMatched(matched);
         }
       } else {
         setGeneralError(response.message || 'Import failed unexpectedly.');
@@ -1031,6 +1072,44 @@ function ImportModal({ onClose, onSuccess }: ImportModalProps) {
             <div className="bg-green-50 border border-green-200 text-green-900 rounded-lg p-3 text-sm mb-4">
               <strong>Import Operation Finished Successfully (Silent Mode):</strong> {importSummary.imported} attendees successfully imported / updated.
             </div>
+
+            {softDeletedMatched.length > 0 && (
+              <div className="flex flex-col mb-4 overflow-hidden max-h-[40vh] border rounded-lg p-3 bg-red-50 border-red-200">
+                <div className="text-sm font-semibold text-red-950 mb-2">
+                  ⚠️ Previously Cancelled/Deleted Attendees Detected on Spreadsheet:
+                </div>
+                <div className="overflow-auto flex-1">
+                  <table className="min-w-full divide-y divide-red-200 text-xs">
+                    <thead className="bg-red-100 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900">Name</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900">Ticket ID</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900">Cancellation Reason</th>
+                        <th className="px-3 py-2 text-center font-semibold text-red-900">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-red-200">
+                      {softDeletedMatched.map((match) => (
+                        <tr key={match.id} className="hover:bg-red-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{match.fullName}</td>
+                          <td className="px-3 py-2 text-gray-600 font-mono">{match.ticketId || '-'}</td>
+                          <td className="px-3 py-2 text-red-700 italic">{getReasonFromNotes(match.internalNotes)}</td>
+                          <td className="px-3 py-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleReactivateMatched(match.id, match.fullName)}
+                              className="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-semibold text-[11px] uppercase transition-colors"
+                            >
+                              Reactivate
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {importErrors && importErrors.length > 0 && (
               <>
@@ -1293,6 +1372,99 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
             Edit
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Delete Confirmation Modal
+ */
+interface DeleteConfirmationModalProps {
+  attendeeName: string;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}
+
+function DeleteConfirmationModal({ attendeeName, onClose, onConfirm }: DeleteConfirmationModalProps) {
+  const [selectedReason, setSelectedReason] = useState('Emergency Cancellation');
+  const [otherText, setOtherText] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalReason = selectedReason === 'Other' ? otherText.trim() : selectedReason;
+    if (selectedReason === 'Other' && !otherText.trim()) {
+      toastError('Please describe the reason');
+      return;
+    }
+    onConfirm(finalReason || 'Unspecified Cancellation');
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 pb-2 border-b">
+          <h3 className="text-lg font-bold text-gray-900">Delete Attendee</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-500 font-bold text-xl">
+            ×
+          </button>
+        </div>
+
+        <div className="mb-4">
+          <p className="text-sm text-gray-600">
+            Are you sure you want to delete <strong className="text-gray-900">{attendeeName}</strong>? Please select a cancellation reason for auditing:
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-3">
+            {[
+              'Emergency Cancellation',
+              'Not interesting',
+              'plan to another something',
+              'Other',
+            ].map((reason) => (
+              <label key={reason} className="flex items-center gap-3 cursor-pointer p-3 bg-gray-50 hover:bg-gray-100 rounded border transition-colors">
+                <input
+                  type="radio"
+                  name="cancellationReason"
+                  value={reason}
+                  checked={selectedReason === reason}
+                  onChange={(e) => setSelectedReason(e.target.value)}
+                  className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300"
+                />
+                <span className="text-sm font-medium text-gray-700 capitalize">
+                  {reason === 'plan to another something' ? 'Plan to another something' : reason === 'Not interesting' ? 'Not interesting' : reason}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {selectedReason === 'Other' && (
+            <div className="animate-fade-in pt-1">
+              <label className="block text-xs font-semibold text-gray-700 mb-1">
+                Describe Reason <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                required
+                rows={2}
+                value={otherText}
+                onChange={(e) => setOtherText(e.target.value)}
+                placeholder="Describe why deletion is required..."
+                className="input w-full text-sm border rounded p-2 focus:ring-red-500"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t mt-4">
+            <button type="button" onClick={onClose} className="btn-secondary text-sm px-4 py-2">
+              Cancel
+            </button>
+            <button type="submit" className="px-5 py-2 rounded bg-red-600 hover:bg-red-700 text-white font-semibold text-sm transition-colors shadow">
+              Confirm Delete
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

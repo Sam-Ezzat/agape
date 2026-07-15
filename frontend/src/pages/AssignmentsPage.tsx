@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { ArrowLeftRight } from 'lucide-react';
+import { ArrowLeftRight, Search, X } from 'lucide-react';
 import { assignmentApi, attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import SwapAttendeesModal from '@/components/SwapAttendeesModal';
@@ -35,6 +35,7 @@ export default function AssignmentsPage() {
   const [selectedHouseId, setSelectedHouseId] = useState('');
   const [selectedBuildingId, setSelectedBuildingId] = useState('');
   const [selectedFloorId, setSelectedFloorId] = useState('');
+  const [roomSearchQuery, setRoomSearchQuery] = useState('');
 
   // Drag state
   const [draggedAttendee, setDraggedAttendee] = useState<Attendee | null>(null);
@@ -72,11 +73,21 @@ export default function AssignmentsPage() {
       // Load unassigned attendees with search and dual-language support
       await loadUnassignedAttendees();
 
-      // Build assigned attendees from assignments
+      // Build assigned attendees from assignments with full nested structure
       const assigned: Attendee[] = allAssignments
-        .filter(a => a.attendee)
-        .map(a => a.attendee!)
-        .filter((a): a is Attendee => a !== undefined);
+        .filter(a => a.attendee && a.room)
+        .map(a => ({
+          ...a.attendee!,
+          assignment: {
+            id: a.id,
+            attendeeId: a.attendeeId,
+            roomId: a.roomId,
+            assignedAt: a.assignedAt,
+            createdAt: a.createdAt,
+            updatedAt: a.updatedAt,
+            room: a.room!,
+          },
+        }));
       setAssignedAttendees(assigned);
     } catch (error) {
       toastError('Failed to load attendees');
@@ -195,6 +206,23 @@ export default function AssignmentsPage() {
     ? rooms.filter(r => filteredFloors.some(f => f.id === r.floorId))
     : rooms;
 
+  // Apply room search filter
+  const searchFilteredRooms = roomSearchQuery.trim() === ''
+    ? filteredRooms
+    : filteredRooms.filter(room => {
+        const query = roomSearchQuery.toLowerCase();
+        const floor = floors.find(f => f.id === room.floorId);
+        const building = floor ? buildings.find(b => b.id === floor.buildingId) : null;
+        
+        // Search by room number, building name, or floor number
+        return (
+          room.roomNumber.toLowerCase().includes(query) ||
+          building?.name.toLowerCase().includes(query) ||
+          floor?.floorNumber.toString().includes(query) ||
+          room.roomType.toLowerCase().includes(query)
+        );
+      });
+
   // Compute occupancy per room
   const getRoomOccupancy = (roomId: string): number => {
     return assignments.filter(a => a.roomId === roomId).length;
@@ -223,6 +251,7 @@ export default function AssignmentsPage() {
     setSelectedHouseId('');
     setSelectedBuildingId('');
     setSelectedFloorId('');
+    setRoomSearchQuery('');
   };
 
   return (
@@ -513,6 +542,33 @@ export default function AssignmentsPage() {
         <div className="p-4 border-b">
           <h2 className="text-lg font-semibold text-gray-900 mb-3">Rooms</h2>
           
+          {/* Search Bar */}
+          <div className="mb-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                type="text"
+                placeholder="Search rooms by number, building, floor, or type (General/VIP/Family)..."
+                value={roomSearchQuery}
+                onChange={(e) => setRoomSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              {roomSearchQuery && (
+                <button
+                  onClick={() => setRoomSearchQuery('')}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            {roomSearchQuery && (
+              <p className="mt-1 text-xs text-gray-600">
+                Found {searchFilteredRooms.length} of {filteredRooms.length} rooms
+              </p>
+            )}
+          </div>
+          
           {/* Filter cascade */}
           <div className="grid grid-cols-4 gap-3">
             <div>
@@ -573,16 +629,18 @@ export default function AssignmentsPage() {
               <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
               <p className="mt-2 text-gray-600 text-sm">Loading rooms...</p>
             </div>
-          ) : filteredRooms.length === 0 ? (
+          ) : searchFilteredRooms.length === 0 ? (
             <div className="text-center py-12">
               <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
               </svg>
-              <p className="mt-2 text-gray-500">No rooms found with current filters</p>
+              <p className="mt-2 text-gray-500">
+                {roomSearchQuery ? `No rooms matching "${roomSearchQuery}"` : 'No rooms found with current filters'}
+              </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {filteredRooms.map(room => {
+              {searchFilteredRooms.map(room => {
                 const occupancy = getRoomOccupancy(room.id);
                 const roomAssignments = getRoomAssignments(room.id);
                 const floor = floors.find(f => f.id === room.floorId);

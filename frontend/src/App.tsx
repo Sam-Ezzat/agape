@@ -14,6 +14,7 @@ import { useSocket } from '@/hooks/useSocket';
 import Sidebar from '@/components/Sidebar';
 import DashboardPage from '@/pages/DashboardPage';
 import AttendeesPage from '@/pages/AttendeesPage';
+import CancellationsPage from '@/pages/CancellationsPage';
 import CheckInPage from '@/pages/CheckInPage';
 import AssignmentsPage from '@/pages/AssignmentsPage';
 import AutoAssignmentPage from '@/pages/AutoAssignmentPage';
@@ -71,6 +72,7 @@ function App() {
             
             {/* Attendees Management */}
             <Route path="/attendees" element={<AttendeesPage />} />
+            <Route path="/attendees/cancellations" element={<CancellationsPage />} />
             
             {/* Check-in/Check-out Interface */}
             <Route path="/check-in" element={<CheckInPage />} />

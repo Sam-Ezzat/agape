@@ -56,6 +56,7 @@ export default function SwapAttendeesModal({
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<Attendee[] | null>(null);
   const [searchCandidates, setSearchCandidates] = useState<string[]>([]);
+  const [selectedRoomFilter, setSelectedRoomFilter] = useState<string>('all');
 
   // Use dual-language search API when query changes
   useEffect(() => {
@@ -240,6 +241,7 @@ export default function SwapAttendeesModal({
     setSearchQuery('');
     setSearchResults(null);
     setSearchCandidates([]);
+    setSelectedRoomFilter('all');
     onClose();
   };
 
@@ -293,7 +295,7 @@ export default function SwapAttendeesModal({
   // Use search results from API if available, otherwise filter locally
   const displayAttendees = searchResults || filterAttendees(attendees);
   const filteredAttendees = displayAttendees;
-  const attendeesByRoom = displayAttendees.reduce((acc, attendee) => {
+  const allAttendeesByRoom = displayAttendees.reduce((acc, attendee) => {
     const roomId = attendee.assignment?.roomId || 'unassigned';
     if (!acc[roomId]) {
       acc[roomId] = [];
@@ -301,6 +303,23 @@ export default function SwapAttendeesModal({
     acc[roomId].push(attendee);
     return acc;
   }, {} as Record<string, Attendee[]>);
+
+  // Apply room filter
+  const attendeesByRoom = selectedRoomFilter === 'all' 
+    ? allAttendeesByRoom
+    : Object.fromEntries(
+        Object.entries(allAttendeesByRoom).filter(([roomId]) => roomId === selectedRoomFilter)
+      );
+
+  // Get list of all unique rooms for the filter dropdown
+  const availableRooms = Object.entries(allAttendeesByRoom)
+    .map(([roomId, roomAttendees]) => ({
+      id: roomId,
+      number: roomAttendees[0]?.assignment?.room?.roomNumber || 'Unassigned',
+      count: roomAttendees.length,
+      capacity: roomAttendees[0]?.assignment?.room?.capacity || 0,
+    }))
+    .sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -327,36 +346,70 @@ export default function SwapAttendeesModal({
           </p>
         </div>
 
-        {/* Search Bar */}
+        {/* Search Bar & Room Filter */}
         <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
-            <input
-              type="text"
-              placeholder="Search by name (supports Arabic ↔ English)..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            {isSearching && (
-              <div className="absolute right-10 top-1/2 transform -translate-y-1/2">
-                <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-500 border-t-transparent"></div>
-              </div>
-            )}
-            {searchQuery && !isSearching && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            {/* Search Input */}
+            <div className="col-span-2 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
+              <input
+                type="text"
+                placeholder="Search by name (supports Arabic ↔ English)..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              {isSearching && (
+                <div className="absolute right-10 top-1/2 transform -translate-y-1/2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-500 border-t-transparent"></div>
+                </div>
+              )}
+              {searchQuery && !isSearching && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            
+            {/* Room Filter */}
+            <div>
+              <select
+                value={selectedRoomFilter}
+                onChange={(e) => setSelectedRoomFilter(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
               >
-                <X size={16} />
-              </button>
-            )}
+                <option value="all">All Rooms ({availableRooms.length})</option>
+                {availableRooms.map((room) => (
+                  <option key={room.id} value={room.id}>
+                    Room {room.number} ({room.count}/{room.capacity})
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
+          
           {searchQuery && (
-            <p className="mt-2 text-sm text-gray-600">
+            <p className="text-sm text-gray-600">
               {isSearching ? 'Searching...' : `Found ${filteredAttendees.length} of ${attendees.length} attendees`}
               <span className="text-blue-600 ml-1">(dual-language search)</span>
             </p>
+          )}
+          
+          {selectedRoomFilter !== 'all' && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-sm text-blue-600 font-medium">
+                Filtered: {availableRooms.find(r => r.id === selectedRoomFilter)?.number}
+              </span>
+              <button
+                onClick={() => setSelectedRoomFilter('all')}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+              >
+                Clear filter
+              </button>
+            </div>
           )}
         </div>
 
@@ -465,7 +518,19 @@ export default function SwapAttendeesModal({
 
           {/* Attendee List by Room */}
           <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Select Attendees by Room</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">
+                Select Attendees by Room
+                {selectedRoomFilter !== 'all' && (
+                  <span className="ml-2 text-sm font-normal text-blue-600">
+                    (Filtered)
+                  </span>
+                )}
+              </h3>
+              <span className="text-sm text-gray-500">
+                Showing {Object.keys(attendeesByRoom).length} of {availableRooms.length} rooms
+              </span>
+            </div>
             
             {Object.entries(attendeesByRoom).length === 0 ? (
               <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">

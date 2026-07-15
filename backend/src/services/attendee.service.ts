@@ -126,7 +126,7 @@ export class AttendeeService {
    * Delete attendee (soft delete)
    * WHY: Remove attendee while preserving audit trail
    */
-  async delete(id: string): Promise<void> {
+  async delete(id: string, reason?: string): Promise<void> {
     const attendee = await this.attendeeRepository.findById(id);
     if (!attendee || attendee.deletedAt) {
       throw new AppError(404, 'Attendee not found');
@@ -141,14 +141,14 @@ export class AttendeeService {
       );
     }
 
-    await this.attendeeRepository.softDelete(id);
+    await this.attendeeRepository.softDelete(id, reason);
 
     // Create audit log
     await this.auditLogRepository.createLog({
       action: 'delete',
       entityType: 'attendee',
       entityId: id,
-      details: { fullName: attendee.fullName },
+      details: { fullName: attendee.fullName, reason },
     });
 
     // Notify clients
@@ -159,11 +159,48 @@ export class AttendeeService {
         NotificationType.WARNING,
         `Attendee "${attendee.fullName}" deleted`,
         'Attendee Deleted',
-        { attendeeId: id, fullName: attendee.fullName }
+        { attendeeId: id, fullName: attendee.fullName, reason }
       );
     } catch (error) {
       console.error('Failed to send notification:', error);
     }
+  }
+
+  /**
+   * Reactivate attendee
+   * WHY: Restore previously deleted/cancelled attendee
+   */
+  async reactivate(id: string): Promise<Attendee> {
+    const attendee = await this.attendeeRepository.findById(id);
+    if (!attendee || !attendee.deletedAt) {
+      throw new AppError(400, 'Attendee is not deleted or does not exist');
+    }
+
+    const reactivated = await this.attendeeRepository.reactivate(id);
+
+    // Create audit log
+    await this.auditLogRepository.createLog({
+      action: 'update',
+      entityType: 'attendee',
+      entityId: id,
+      details: { fullName: reactivated.fullName, status: 'reactivated' },
+    });
+
+    // Notify clients
+    try {
+      const notificationService = getNotificationService();
+      notificationService.broadcast(
+        NotificationEvent.ATTENDEE_CREATED,
+        NotificationType.SUCCESS,
+        `Attendee "${reactivated.fullName}" reactivated`,
+        'Attendee Reactivated',
+        { attendeeId: id, fullName: reactivated.fullName }
+      );
+    } catch (error) {
+      console.error('Failed to send notification:', error);
+    }
+
+    return reactivated;
   }
 
   /**

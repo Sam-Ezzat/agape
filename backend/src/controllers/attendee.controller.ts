@@ -116,10 +116,25 @@ export class AttendeeController {
    */
   async delete(req: Request, res: Response) {
     const { id } = req.params;
-    await this.attendeeService.delete(id);
+    const { reason } = req.body;
+    await this.attendeeService.delete(id, reason);
     res.json({
       success: true,
       message: 'Attendee deleted successfully',
+    });
+  }
+
+  /**
+   * POST /api/attendees/:id/reactivate
+   * Reactivate soft-deleted attendee
+   */
+  async reactivate(req: Request, res: Response) {
+    const { id } = req.params;
+    const attendee = await this.attendeeService.reactivate(id);
+    res.json({
+      success: true,
+      data: attendee,
+      message: 'Attendee reactivated successfully',
     });
   }
 

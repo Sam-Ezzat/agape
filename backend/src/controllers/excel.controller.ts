@@ -33,6 +33,7 @@ export class ExcelController {
     // Import attendees that passed validation
     const imported = [];
     const failed = [...errors];
+    const softDeletedMatched = [];
 
     for (let i = 0; i < data.length; i++) {
       try {
@@ -47,6 +48,20 @@ export class ExcelController {
           });
 
           if (existing) {
+            if (existing.deletedAt !== null) {
+              // Soft-deleted attendee found in Excel sheet. Report but do not reactivate automatically.
+              softDeletedMatched.push({
+                id: existing.id,
+                fullName: existing.fullName,
+                ticketId: existing.ticketId,
+                phone: existing.phone,
+                email: existing.email,
+                role: existing.conferenceRole,
+                internalNotes: existing.internalNotes || '',
+              });
+              continue;
+            }
+
             // Update the existing attendee's registration profile details instead of failing
             attendee = await prisma.attendee.update({
               where: { id: existing.id },
@@ -97,6 +112,7 @@ export class ExcelController {
         failed: failed.length,
         attendees: imported,
         errors: failed,
+        softDeletedMatched,
       },
       message: `Imported ${imported.length} attendees, ${failed.length} failed`,
     });

@@ -59,6 +59,7 @@ export const attendeeFilterSchema = z.object({
   checkedIn: z.enum(['true', 'false']).optional().transform((val) => val === undefined ? undefined : val === 'true'),
   hasAssignment: z.enum(['true', 'false']).optional().transform((val) => val === undefined ? undefined : val === 'true'),
   dualSearch: z.enum(['true', 'false']).optional().default('false').transform((val) => val === 'true'), // Dual-language search
+  onlyDeleted: z.enum(['true', 'false']).optional().transform((val) => val === undefined ? undefined : val === 'true'),
   page: z.string().optional().default('1').transform(Number),
   limit: z.string().optional().default('20').transform(Number),
 });
