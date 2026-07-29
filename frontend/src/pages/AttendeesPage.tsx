@@ -6,10 +6,11 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { attendeeApi, excelApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useSocket } from '@/hooks/useSocket';
+import { normalizePhoneToE164 } from '@/utils/phone';
 import type { Attendee, AttendeeFilters, ConferenceRole, Gender } from '@/types/api';
 
 export default function AttendeesPage() {
@@ -26,7 +27,13 @@ export default function AttendeesPage() {
   const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
   const [deletingAttendee, setDeletingAttendee] = useState<{ id: string; name: string } | null>(null);
   const socket = useSocket();
-  
+  const navigate = useNavigate();
+
+  // Selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
   // Filters
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<ConferenceRole | ''>('');
@@ -131,6 +138,53 @@ export default function AttendeesPage() {
     } catch (error) {
       // Error already shown by API service
     }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (attendees.every((a) => prev.has(a.id))) {
+        return new Set();
+      }
+      return new Set(attendees.map((a) => a.id));
+    });
+  };
+
+  const handleConfirmBulkDelete = async (reason: string) => {
+    const ids = Array.from(selectedIds);
+    try {
+      setBulkDeleting(true);
+      const response = await attendeeApi.bulkDelete(ids, reason);
+      const { deleted, failed } = response.data;
+      if (deleted.length > 0) {
+        toastSuccess(`${deleted.length} attendee(s) deleted successfully`);
+      }
+      if (failed.length > 0) {
+        toastError(`${failed.length} attendee(s) could not be deleted`);
+      }
+      setShowBulkDeleteModal(false);
+      setSelectedIds(new Set());
+      loadAttendees();
+    } catch (error) {
+      // Error already shown by API service
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const handleSendWhatsAppToSelected = () => {
+    navigate('/communication/campaigns', { state: { attendeeIds: Array.from(selectedIds) } });
   };
 
   const openDetailsModal = (attendee: Attendee) => {
@@ -335,6 +389,41 @@ export default function AttendeesPage() {
         </div>
       </div>
 
+      {/* Bulk Actions Toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="card bg-primary-50 border-primary-200 flex items-center justify-between">
+          <p className="text-sm font-medium text-primary-900">
+            {selectedIds.size} attendee{selectedIds.size > 1 ? 's' : ''} selected
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSendWhatsAppToSelected}
+              className="btn-secondary flex items-center gap-2 text-green-700 bg-green-50 border border-green-200 hover:bg-green-100"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.79 14.14c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.09.24-3.66-.79-3.14-1.26-5.15-4.49-5.3-4.7-.16-.21-1.26-1.68-1.26-3.2 0-1.52.8-2.27 1.08-2.58.28-.31.6-.38.8-.38.2 0 .4 0 .58.01.19.01.44-.07.68.53.25.6.85 2.08.92 2.23.07.15.12.33.02.53-.1.2-.15.33-.3.5-.15.18-.31.4-.44.53-.15.15-.3.31-.13.6.17.3.76 1.26 1.64 2.04 1.13 1 2.08 1.32 2.38 1.47.3.15.47.13.65-.08.18-.2.75-.87.95-1.17.2-.3.4-.24.68-.14.28.1 1.77.83 2.07 1 .3.15.5.23.57.35.08.13.08.72-.16 1.4z" />
+              </svg>
+              Send WhatsApp Message
+            </button>
+            <button
+              onClick={() => setShowBulkDeleteModal(true)}
+              className="btn-secondary flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 hover:bg-red-100"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Delete Selected
+            </button>
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="text-sm text-gray-500 hover:text-gray-700 px-2"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Attendees Table */}
       <div className="card">
         {loading ? (
@@ -358,6 +447,14 @@ export default function AttendeesPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-6 py-3 text-left w-10">
+                      <input
+                        type="checkbox"
+                        checked={attendees.length > 0 && attendees.every((a) => selectedIds.has(a.id))}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                      />
+                    </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
@@ -367,9 +464,17 @@ export default function AttendeesPage() {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {attendees.map((attendee) => (
-                    <tr key={attendee.id} className="hover:bg-gray-50">
+                    <tr key={attendee.id} className={`hover:bg-gray-50 ${selectedIds.has(attendee.id) ? 'bg-primary-50' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div 
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(attendee.id)}
+                          onChange={() => toggleSelect(attendee.id)}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div
                           onClick={() => openDetailsModal(attendee)}
                           className="cursor-pointer hover:text-primary-600"
                         >
@@ -500,9 +605,30 @@ export default function AttendeesPage() {
       {/* Delete Confirmation Modal */}
       {deletingAttendee && (
         <DeleteConfirmationModal
-          attendeeName={deletingAttendee.name}
+          title="Delete Attendee"
+          description={
+            <>
+              Are you sure you want to delete <strong className="text-gray-900">{deletingAttendee.name}</strong>? Please select a cancellation reason for auditing:
+            </>
+          }
           onClose={() => setDeletingAttendee(null)}
           onConfirm={handleConfirmDelete}
+        />
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <DeleteConfirmationModal
+          title="Delete Selected Attendees"
+          description={
+            <>
+              Are you sure you want to delete <strong className="text-gray-900">{selectedIds.size}</strong> selected attendee{selectedIds.size > 1 ? 's' : ''}? Please select a cancellation reason for auditing (applied to all):
+            </>
+          }
+          confirmLabel={bulkDeleting ? 'Deleting...' : 'Confirm Delete'}
+          disabled={bulkDeleting}
+          onClose={() => setShowBulkDeleteModal(false)}
+          onConfirm={handleConfirmBulkDelete}
         />
       )}
     </div>
@@ -575,12 +701,24 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
       }
     }
 
+    // Phone must include a valid country code (e.g. +201271384211) — normalize
+    // local formats (0127...) and reject anything that still doesn't look valid.
+    let normalizedPhone: string | undefined;
+    if (formData.phone.trim()) {
+      const result = normalizePhoneToE164(formData.phone.trim());
+      if (!result) {
+        toastError('Phone number must include a valid country code, e.g. +201271384211');
+        return;
+      }
+      normalizedPhone = result;
+    }
+
     try {
       setSaving(true);
       const data = {
         ticketId: formData.ticketId.trim() || undefined,
         fullName: formData.fullName.trim(),
-        phone: formData.phone.trim() || undefined,
+        phone: normalizedPhone,
         email: formData.email.trim() || undefined,
         age: formData.age ? parseInt(formData.age) : undefined,
         gender: formData.gender || undefined,
@@ -663,7 +801,9 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                   className="input w-full"
+                  placeholder="+201271384211"
                 />
+                <p className="text-xs text-gray-500 mt-1">Include country code (e.g. +20 for Egypt)</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -1381,12 +1521,15 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
  * Delete Confirmation Modal
  */
 interface DeleteConfirmationModalProps {
-  attendeeName: string;
+  title: string;
+  description: React.ReactNode;
+  confirmLabel?: string;
+  disabled?: boolean;
   onClose: () => void;
   onConfirm: (reason: string) => void;
 }
 
-function DeleteConfirmationModal({ attendeeName, onClose, onConfirm }: DeleteConfirmationModalProps) {
+function DeleteConfirmationModal({ title, description, confirmLabel = 'Confirm Delete', disabled, onClose, onConfirm }: DeleteConfirmationModalProps) {
   const [selectedReason, setSelectedReason] = useState('Emergency Cancellation');
   const [otherText, setOtherText] = useState('');
 
@@ -1404,16 +1547,14 @@ function DeleteConfirmationModal({ attendeeName, onClose, onConfirm }: DeleteCon
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
       <div className="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white animate-fade-in" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4 pb-2 border-b">
-          <h3 className="text-lg font-bold text-gray-900">Delete Attendee</h3>
+          <h3 className="text-lg font-bold text-gray-900">{title}</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-500 font-bold text-xl">
             ×
           </button>
         </div>
 
         <div className="mb-4">
-          <p className="text-sm text-gray-600">
-            Are you sure you want to delete <strong className="text-gray-900">{attendeeName}</strong>? Please select a cancellation reason for auditing:
-          </p>
+          <p className="text-sm text-gray-600">{description}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -1457,11 +1598,11 @@ function DeleteConfirmationModal({ attendeeName, onClose, onConfirm }: DeleteCon
           )}
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t mt-4">
-            <button type="button" onClick={onClose} className="btn-secondary text-sm px-4 py-2">
+            <button type="button" onClick={onClose} disabled={disabled} className="btn-secondary text-sm px-4 py-2">
               Cancel
             </button>
-            <button type="submit" className="px-5 py-2 rounded bg-red-600 hover:bg-red-700 text-white font-semibold text-sm transition-colors shadow">
-              Confirm Delete
+            <button type="submit" disabled={disabled} className="px-5 py-2 rounded bg-red-600 hover:bg-red-700 text-white font-semibold text-sm transition-colors shadow disabled:opacity-50">
+              {confirmLabel}
             </button>
           </div>
         </form>

@@ -34,6 +34,24 @@ import type {
   AutoAssignmentExecutionResult,
   AutoAssignmentStatus,
 } from '@/types/api';
+import type {
+  MessageTemplate,
+  MessageCampaign,
+  Message,
+  WhatsAppStatus,
+  CampaignStats,
+  MessageStats,
+  TemplateStats,
+  TemplatePreview,
+  CreateTemplateDTO,
+  UpdateTemplateDTO,
+  CreateCampaignDTO,
+  UpdateCampaignDTO,
+  PreviewTemplateDTO,
+  PreviewRecipientsDTO,
+  SendTestMessageDTO,
+  CheckNumberDTO,
+} from '@/types/communication';
 
 // WHY: Single source of truth for API base URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
@@ -162,6 +180,22 @@ export const attendeeApi = {
   delete: async (id: string, reason?: string): Promise<ApiResponse<Attendee>> => {
     try {
       const { data } = await apiClient.delete(`/attendees/${id}`, { data: { reason } });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * POST /api/attendees/bulk-delete
+   * Delete multiple attendees (soft delete)
+   */
+  bulkDelete: async (
+    ids: string[],
+    reason?: string
+  ): Promise<ApiResponse<{ deleted: string[]; failed: { id: string; error: string }[] }>> => {
+    try {
+      const { data } = await apiClient.post('/attendees/bulk-delete', { ids, reason });
       return data;
     } catch (error) {
       return handleApiError(error as Error);
@@ -675,6 +709,288 @@ export const searchApi = {
     } catch (error) {
       return handleApiError(error as Error);
     }
+  },
+};
+
+/**
+ * Communication API
+ * Backend routes: /api/communication/*
+ */
+export const communicationApi = {
+  // Template APIs
+  templates: {
+    list: async (filters?: { category?: string; isActive?: boolean; language?: string }): Promise<ApiResponse<MessageTemplate[]>> => {
+      try {
+        const { data } = await apiClient.get('/communication/templates', { params: filters });
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getById: async (id: string): Promise<ApiResponse<MessageTemplate>> => {
+      try {
+        const { data } = await apiClient.get(`/communication/templates/${id}`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    create: async (dto: CreateTemplateDTO): Promise<ApiResponse<MessageTemplate>> => {
+      try {
+        const { data } = await apiClient.post('/communication/templates', dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    update: async (id: string, dto: UpdateTemplateDTO): Promise<ApiResponse<MessageTemplate>> => {
+      try {
+        const { data } = await apiClient.put(`/communication/templates/${id}`, dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    delete: async (id: string): Promise<ApiResponse<void>> => {
+      try {
+        const { data } = await apiClient.delete(`/communication/templates/${id}`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    preview: async (id: string, dto: PreviewTemplateDTO): Promise<ApiResponse<TemplatePreview>> => {
+      try {
+        const { data } = await apiClient.post(`/communication/templates/${id}/preview`, dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getStats: async (id: string): Promise<ApiResponse<TemplateStats>> => {
+      try {
+        const { data } = await apiClient.get(`/communication/templates/${id}/stats`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+  },
+  
+  // Campaign APIs
+  campaigns: {
+    list: async (filters?: { status?: string; channel?: string }): Promise<ApiResponse<MessageCampaign[]>> => {
+      try {
+        const { data } = await apiClient.get('/communication/campaigns', { params: filters });
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getById: async (id: string): Promise<ApiResponse<MessageCampaign>> => {
+      try {
+        const { data } = await apiClient.get(`/communication/campaigns/${id}`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    create: async (dto: CreateCampaignDTO): Promise<ApiResponse<MessageCampaign>> => {
+      try {
+        const { data } = await apiClient.post('/communication/campaigns', dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    update: async (id: string, dto: UpdateCampaignDTO): Promise<ApiResponse<MessageCampaign>> => {
+      try {
+        const { data } = await apiClient.put(`/communication/campaigns/${id}`, dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    delete: async (id: string): Promise<ApiResponse<void>> => {
+      try {
+        const { data } = await apiClient.delete(`/communication/campaigns/${id}`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    start: async (id: string): Promise<ApiResponse<MessageCampaign>> => {
+      try {
+        const { data } = await apiClient.post(`/communication/campaigns/${id}/start`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    pause: async (id: string): Promise<ApiResponse<MessageCampaign>> => {
+      try {
+        const { data } = await apiClient.post(`/communication/campaigns/${id}/pause`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    resume: async (id: string): Promise<ApiResponse<MessageCampaign>> => {
+      try {
+        const { data } = await apiClient.post(`/communication/campaigns/${id}/resume`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    cancel: async (id: string): Promise<ApiResponse<MessageCampaign>> => {
+      try {
+        const { data } = await apiClient.post(`/communication/campaigns/${id}/cancel`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getStats: async (id: string): Promise<ApiResponse<CampaignStats>> => {
+      try {
+        const { data } = await apiClient.get(`/communication/campaigns/${id}/stats`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getMessages: async (
+      id: string,
+      filters?: { status?: string; limit?: number; offset?: number }
+    ): Promise<ApiResponse<Message[]> & { total?: number }> => {
+      try {
+        const { data } = await apiClient.get(`/communication/campaigns/${id}/messages`, { params: filters });
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    previewRecipients: async (dto: PreviewRecipientsDTO): Promise<ApiResponse<any[]>> => {
+      try {
+        const { data } = await apiClient.post('/communication/campaigns/preview', dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+  },
+  
+  // Message APIs
+  messages: {
+    list: async (filters?: { status?: string; campaignId?: string; attendeeId?: string; limit?: number; offset?: number }): Promise<ApiResponse<Message[]>> => {
+      try {
+        const { data } = await apiClient.get('/communication/messages', { params: filters });
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getById: async (id: string): Promise<ApiResponse<Message>> => {
+      try {
+        const { data } = await apiClient.get(`/communication/messages/${id}`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    retry: async (id: string): Promise<ApiResponse<void>> => {
+      try {
+        const { data } = await apiClient.post(`/communication/messages/${id}/retry`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getStats: async (): Promise<ApiResponse<MessageStats>> => {
+      try {
+        const { data } = await apiClient.get('/communication/messages/stats');
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+  },
+  
+  // WhatsApp APIs
+  whatsapp: {
+    initialize: async (): Promise<ApiResponse<void>> => {
+      try {
+        const { data } = await apiClient.post('/communication/whatsapp/initialize');
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getQR: async (): Promise<ApiResponse<{ qr?: string; status?: string }>> => {
+      try {
+        const { data } = await apiClient.get('/communication/whatsapp/qr');
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    getStatus: async (): Promise<ApiResponse<WhatsAppStatus>> => {
+      try {
+        const { data } = await apiClient.get('/communication/whatsapp/status');
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    disconnect: async (): Promise<ApiResponse<void>> => {
+      try {
+        const { data } = await apiClient.post('/communication/whatsapp/disconnect');
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    sendTest: async (dto: SendTestMessageDTO): Promise<ApiResponse<void>> => {
+      try {
+        const { data } = await apiClient.post('/communication/whatsapp/test', dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+    
+    checkNumber: async (dto: CheckNumberDTO): Promise<ApiResponse<{ phone: string; isRegistered: boolean }>> => {
+      try {
+        const { data } = await apiClient.post('/communication/whatsapp/check-number', dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
   },
 };
 

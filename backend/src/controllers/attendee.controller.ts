@@ -125,6 +125,22 @@ export class AttendeeController {
   }
 
   /**
+   * POST /api/attendees/bulk-delete
+   * Soft delete multiple attendees
+   */
+  async bulkDelete(req: Request, res: Response) {
+    const { ids, reason } = req.body;
+    const result = await this.attendeeService.bulkDelete(ids, reason);
+    res.json({
+      success: true,
+      data: result,
+      message: `${result.deleted.length} attendee(s) deleted successfully${
+        result.failed.length > 0 ? `, ${result.failed.length} failed` : ''
+      }`,
+    });
+  }
+
+  /**
    * POST /api/attendees/:id/reactivate
    * Reactivate soft-deleted attendee
    */

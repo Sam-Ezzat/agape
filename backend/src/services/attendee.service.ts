@@ -167,6 +167,33 @@ export class AttendeeService {
   }
 
   /**
+   * Bulk delete attendees (soft delete)
+   * WHY: Support selection-based bulk removal from the UI while preserving
+   * the same business rules and audit trail as a single delete
+   */
+  async bulkDelete(
+    ids: string[],
+    reason?: string
+  ): Promise<{ deleted: string[]; failed: { id: string; error: string }[] }> {
+    const deleted: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        await this.delete(id, reason);
+        deleted.push(id);
+      } catch (error) {
+        failed.push({
+          id,
+          error: error instanceof AppError ? error.message : 'Failed to delete attendee',
+        });
+      }
+    }
+
+    return { deleted, failed };
+  }
+
+  /**
    * Reactivate attendee
    * WHY: Restore previously deleted/cancelled attendee
    */

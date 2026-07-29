@@ -7,7 +7,7 @@
  * Run with: npm run prisma:seed
  */
 
-import { PrismaClient, ConferenceRole, Gender, RoomType } from '@prisma/client';
+import { PrismaClient, ConferenceRole, Gender, RoomType, TemplateCategory } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -17,6 +17,10 @@ async function main(): Promise<void> {
   // WHY: Clear existing data for clean slate (only in development)
   if (process.env.NODE_ENV === 'development') {
     console.log('🧹 Cleaning existing data...');
+    await prisma.message.deleteMany();
+    await prisma.messageCampaign.deleteMany();
+    await prisma.messageTemplate.deleteMany();
+    await prisma.communicationSettings.deleteMany();
     await prisma.auditLog.deleteMany();
     await prisma.roomAssignment.deleteMany();
     await prisma.attendee.deleteMany();
@@ -275,6 +279,148 @@ async function main(): Promise<void> {
     }
   });
 
+  // Create Communication Settings
+  console.log('💬 Creating communication settings...');
+  await prisma.communicationSettings.create({
+    data: {
+      whatsappEnabled: true,
+      whatsappSessionActive: false,
+      whatsappDelayMin: 3000,
+      whatsappDelayMax: 8000,
+      whatsappBatchSize: 10,
+      whatsappBatchDelay: 120000, // 2 minutes between batches
+      maxMessagesPerHour: 50, // Conservative for low volume
+      maxMessagesPerDay: 200, // Matches user's requirement
+    }
+  });
+
+  // Create Default Message Templates
+  console.log('📝 Creating default message templates...');
+  const templates = await Promise.all([
+    prisma.messageTemplate.create({
+      data: {
+        name: 'Room Assignment Notification (Arabic)',
+        description: 'Notify attendee about their room assignment',
+        category: 'ROOM_ASSIGNMENT',
+        body: `مرحباً {{fullName}}! 🏠
+
+تم تخصيص غرفتك بنجاح:
+📍 المبنى: {{buildingName}}
+🔢 الطابق: {{floorName}}
+🚪 رقم الغرفة: {{roomNumber}}
+🛏️ نوع الغرفة: {{roomType}}
+
+تفاصيل إضافية:
+- سعة الغرفة: {{roomCapacity}} أشخاص
+- أسرة فردية: {{individualBeds}}
+- أسرة بطابقين: {{bunkBeds}}
+
+نتمنى لك إقامة سعيدة! 🌟`,
+        variables: [
+          'fullName',
+          'buildingName',
+          'floorName',
+          'roomNumber',
+          'roomType',
+          'roomCapacity',
+          'individualBeds',
+          'bunkBeds'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+    prisma.messageTemplate.create({
+      data: {
+        name: 'Check-in Reminder (Arabic)',
+        description: 'Remind attendee about check-in',
+        category: 'CHECK_IN',
+        body: `عزيزي {{fullName}},
+
+تذكير بموعد تسجيل الوصول! ✅
+
+معلومات هامة:
+⏰ موعد تسجيل الوصول قريباً
+🚌 وسيلة المواصلات: {{arrivalMethod}}
+{{#if busPickupPoint}}📍 نقطة التجمع: {{busPickupPoint}}{{/if}}
+
+غرفتك:
+🏠 المبنى {{buildingName}} - الطابق {{floorNumber}} - غرفة {{roomNumber}}
+
+نراك قريباً! 🙏`,
+        variables: [
+          'fullName',
+          'arrivalMethod',
+          'busPickupPoint',
+          'buildingName',
+          'floorNumber',
+          'roomNumber'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+    prisma.messageTemplate.create({
+      data: {
+        name: 'Payment Confirmation (Arabic)',
+        description: 'Confirm payment received',
+        category: 'PAYMENT',
+        body: `تم استلام دفعتك بنجاح! ✅
+
+مرحباً {{fullName}},
+
+تفاصيل الدفع:
+💰 الحالة: مؤكد ✓
+🔢 رقم المعاملة: {{transactionNumber}}
+💳 طريقة الدفع: {{paymentMethod}}
+
+معلومات التذكرة:
+🎫 رقم التذكرة: {{ticketId}}
+👤 الاسم: {{fullName}}
+📱 الهاتف: {{phone}}
+
+شكراً لك! 🙏`,
+        variables: [
+          'fullName',
+          'transactionNumber',
+          'paymentMethod',
+          'ticketId',
+          'phone'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+    prisma.messageTemplate.create({
+      data: {
+        name: 'Welcome Message (Arabic)',
+        description: 'Welcome new attendee',
+        category: 'WELCOME',
+        body: `مرحباً بك {{fullName}}! 🎉
+
+نحن سعداء بانضمامك إلى {{conferenceName}}!
+
+تم تأكيد تسجيلك بنجاح:
+🎫 رقم التذكرة: {{ticketId}}
+⛪ الكنيسة: {{church}}
+📍 المنطقة: {{area}}
+
+سنرسل لك المزيد من المعلومات قريباً.
+
+مع تحياتنا! 🙏`,
+        variables: [
+          'fullName',
+          'conferenceName',
+          'ticketId',
+          'church',
+          'area'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+  ]);
+
   console.log('✅ Seed completed successfully!');
   console.log(`   - Created 1 conference house`);
   console.log(`   - Created 2 buildings`);
@@ -282,6 +428,8 @@ async function main(): Promise<void> {
   console.log(`   - Created ${rooms.length} rooms`);
   console.log(`   - Created ${attendees.length} attendees`);
   console.log(`   - Created 1 auto-assignment configuration`);
+  console.log(`   - Created 1 communication settings`);
+  console.log(`   - Created ${templates.length} message templates`);
   console.log('\n🚀 Database is ready for development!');
 }
 

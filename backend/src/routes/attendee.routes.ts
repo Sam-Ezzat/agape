@@ -19,6 +19,7 @@ import {
   attendeeFilterSchema,
   unassignedFilterSchema,
   checkInOutSchema,
+  bulkDeleteAttendeeSchema,
 } from '@/validators/attendee.schemas';
 import prisma from '@/utils/prisma-client';
 
@@ -121,6 +122,18 @@ router.patch(
   '/:id',
   validate(updateAttendeeSchema, 'body'),
   asyncHandler(attendeeController.update.bind(attendeeController))
+);
+
+/**
+ * @route   POST /api/attendees/bulk-delete
+ * @desc    Soft delete multiple attendees
+ * @access  Public (future: protected)
+ * @note    Must be before /:id route to avoid conflict
+ */
+router.post(
+  '/bulk-delete',
+  validate(bulkDeleteAttendeeSchema, 'body'),
+  asyncHandler(attendeeController.bulkDelete.bind(attendeeController))
 );
 
 /**

@@ -17,6 +17,7 @@ import dashboardRoutes from './dashboard.routes';
 import excelRoutes from './excel.routes';
 import autoAssignmentRoutes from './autoAssignment.routes';
 import searchRoutes from './search.routes';
+import communicationRoutes from './communication';
 
 const router = Router();
 
@@ -39,6 +40,9 @@ router.use('/excel', excelRoutes);
 
 // Phase 4: Auto-Assignment Routes
 router.use('/auto-assignment', autoAssignmentRoutes);
+
+// Communication Routes
+router.use('/communication', communicationRoutes);
 
 // Search utilities
 router.use('/search', searchRoutes);
@@ -63,6 +67,12 @@ router.get('/', (req, res) => {
       dashboard: '/api/dashboard',
       excel: '/api/excel',
       autoAssignment: '/api/auto-assignment',
+      // Communication
+      communication: '/api/communication',
+      templates: '/api/communication/templates',
+      campaigns: '/api/communication/campaigns',
+      messages: '/api/communication/messages',
+      whatsapp: '/api/communication/whatsapp',
     },
     documentation: 'See README.md for API documentation',
   });

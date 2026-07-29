@@ -143,6 +143,7 @@ model Attendee {
   
   // Relations
   assignment        RoomAssignment?
+  messages          Message[]
   
   // WHY: Indexes for fast searches (supports Arabic text with trigram similarity)
   @@index([fullName])
@@ -240,4 +241,195 @@ model AutoAssignmentConfig {
   
   @@index([conferenceHouseId])
   @@map("auto_assignment_configs")
+}
+
+// ==========================================
+// COMMUNICATION SYSTEM MODELS
+// ==========================================
+
+// WHY: Reusable message templates with dynamic variables
+// Supports Arabic content and template personalization
+model MessageTemplate {
+  id            String           @id @default(uuid())
+  name          String           @unique
+  description   String?          @db.Text
+  category      TemplateCategory @default(GENERAL)
+  
+  // Template Content
+  subject       String?
+  body          String           @db.Text
+  variables     Json             @default("[]")
+  
+  // Media
+  hasAttachment Boolean          @default(false) @map("has_attachment")
+  attachmentUrl String?          @map("attachment_url")
+  attachmentType String?         @map("attachment_type")
+  
+  // Metadata
+  language      String           @default("ar")
+  isActive      Boolean          @default(true) @map("is_active")
+  usageCount    Int              @default(0) @map("usage_count")
+  
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  createdBy     String?          @map("created_by")
+  
+  // Relations
+  campaigns     MessageCampaign[]
+  
+  @@index([category])
+  @@index([isActive])
+  @@map("message_templates")
+}
+
+// WHY: Template categories for organizing messages by purpose
+enum TemplateCategory {
+  ROOM_ASSIGNMENT
+  CHECK_IN
+  PAYMENT
+  GENERAL
+  EMERGENCY
+  WELCOME
+  SCHEDULE
+  TRANSPORTATION
+}
+
+// WHY: Message campaigns for bulk messaging to filtered recipients
+model MessageCampaign {
+  id                    String         @id @default(uuid())
+  name                  String
+  description           String?        @db.Text
+  templateId            String         @map("template_id")
+  
+  // Target Audience
+  targetFilter          Json           @map("target_filter")
+  recipientCount        Int            @default(0) @map("recipient_count")
+  
+  // Scheduling
+  status                CampaignStatus @default(DRAFT)
+  scheduledFor          DateTime?      @map("scheduled_for")
+  startedAt             DateTime?      @map("started_at")
+  completedAt           DateTime?      @map("completed_at")
+  
+  // Delivery Settings
+  channel               MessageChannel @default(WHATSAPP)
+  delayBetweenMessages  Int            @default(5000) @map("delay_between_messages")
+  batchSize             Int            @default(10) @map("batch_size")
+  
+  // Statistics
+  totalSent             Int            @default(0) @map("total_sent")
+  totalFailed           Int            @default(0) @map("total_failed")
+  totalPending          Int            @default(0) @map("total_pending")
+  
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+  createdBy             String?        @map("created_by")
+  
+  // Relations
+  template              MessageTemplate @relation(fields: [templateId], references: [id])
+  messages              Message[]
+  
+  @@index([status])
+  @@index([scheduledFor])
+  @@map("message_campaigns")
+}
+
+// WHY: Campaign lifecycle statuses
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// WHY: Communication channels (WhatsApp only for now)
+enum MessageChannel {
+  WHATSAPP
+  EMAIL
+  SMS
+}
+
+// WHY: Individual messages sent to attendees with delivery tracking
+model Message {
+  id            String        @id @default(uuid())
+  campaignId    String        @map("campaign_id")
+  attendeeId    String        @map("attendee_id")
+  
+  // Message Content
+  recipient     String
+  subject       String?
+  body          String        @db.Text
+  attachmentUrl String?       @map("attachment_url")
+  
+  // Delivery Status
+  status        MessageStatus @default(PENDING)
+  channel       MessageChannel @default(WHATSAPP)
+  sentAt        DateTime?     @map("sent_at")
+  deliveredAt   DateTime?     @map("delivered_at")
+  readAt        DateTime?     @map("read_at")
+  failedAt      DateTime?     @map("failed_at")
+  errorMessage  String?       @db.Text @map("error_message")
+  
+  // Retry Logic
+  retryCount    Int           @default(0) @map("retry_count")
+  maxRetries    Int           @default(3) @map("max_retries")
+  
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  
+  // Relations
+  campaign      MessageCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  attendee      Attendee      @relation(fields: [attendeeId], references: [id], onDelete: Cascade)
+  
+  @@index([campaignId])
+  @@index([attendeeId])
+  @@index([status])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+// WHY: Message delivery statuses for tracking
+enum MessageStatus {
+  PENDING
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  CANCELLED
+}
+
+// WHY: Global communication settings for rate limiting and channel configuration
+model CommunicationSettings {
+  id                    String   @id @default(uuid())
+  
+  // WhatsApp Settings
+  whatsappEnabled       Boolean  @default(true) @map("whatsapp_enabled")
+  whatsappSessionActive Boolean  @default(false) @map("whatsapp_session_active")
+  whatsappDelayMin      Int      @default(3000) @map("whatsapp_delay_min")
+  whatsappDelayMax      Int      @default(8000) @map("whatsapp_delay_max")
+  whatsappBatchSize     Int      @default(10) @map("whatsapp_batch_size")
+  whatsappBatchDelay    Int      @default(60000) @map("whatsapp_batch_delay")
+  
+  // Email Settings (future)
+  emailEnabled          Boolean  @default(false) @map("email_enabled")
+  emailProvider         String?  @map("email_provider")
+  emailFrom             String?  @map("email_from")
+  
+  // SMS Settings (future)
+  smsEnabled            Boolean  @default(false) @map("sms_enabled")
+  smsProvider           String?  @map("sms_provider")
+  
+  // Rate Limiting
+  maxMessagesPerHour    Int      @default(100) @map("max_messages_per_hour")
+  maxMessagesPerDay     Int      @default(300) @map("max_messages_per_day")
+  
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+  
+  @@map("communication_settings")
 }

@@ -8,13 +8,33 @@
 
 import { z } from 'zod';
 import { Gender, ConferenceRole, PaymentStatus } from '@prisma/client';
+import { toE164 } from '@/utils/phone';
 
 /**
  * Helper to transform empty strings to undefined
  * WHY: Prevent unique constraint violations for optional fields
  */
-const emptyStringToUndefined = (val: string | undefined) => 
+const emptyStringToUndefined = (val: string | undefined) =>
   val === '' || val === null ? undefined : val;
+
+/**
+ * Normalize a phone number to E.164 ("+" + country code + subscriber number).
+ * WHY: Attendee phones are entered in mixed formats (local trunk-prefixed,
+ * already-international, missing country code entirely) — storing everything
+ * in one canonical format keeps WhatsApp sending and exports consistent.
+ */
+const phoneSchema = z.string().max(20).optional().transform(emptyStringToUndefined).transform((val, ctx) => {
+  if (val === undefined) return undefined;
+  try {
+    return toE164(val);
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : 'Invalid phone number',
+    });
+    return z.NEVER;
+  }
+});
 
 /**
  * Create Attendee Schema
@@ -23,7 +43,7 @@ const emptyStringToUndefined = (val: string | undefined) =>
 export const createAttendeeSchema = z.object({
   ticketId: z.string().max(50).optional().transform(emptyStringToUndefined),
   fullName: z.string().min(2, 'Full name must be at least 2 characters').max(200),
-  phone: z.string().max(20).optional().transform(emptyStringToUndefined),
+  phone: phoneSchema,
   email: z.string().email('Invalid email format').optional().or(z.literal('')).transform(emptyStringToUndefined),
   age: z.number().int().positive().max(150).optional(),
   gender: z.nativeEnum(Gender).optional(),
@@ -82,6 +102,15 @@ export const checkInOutSchema = z.object({
 });
 
 /**
+ * Bulk Delete Schema
+ * WHY: Validates the id list and shared cancellation reason for selection-based deletes
+ */
+export const bulkDeleteAttendeeSchema = z.object({
+  ids: z.array(z.string()).min(1, 'At least one attendee id is required'),
+  reason: z.string().optional(),
+});
+
+/**
  * TypeScript Types (inferred from Zod schemas)
  */
 export type CreateAttendeeDTO = z.infer<typeof createAttendeeSchema>;
@@ -89,3 +118,4 @@ export type UpdateAttendeeDTO = z.infer<typeof updateAttendeeSchema>;
 export type AttendeeFilterParams = z.infer<typeof attendeeFilterSchema>;
 export type UnassignedFilterParams = z.infer<typeof unassignedFilterSchema>;
 export type CheckInOutDTO = z.infer<typeof checkInOutSchema>;
+export type BulkDeleteAttendeeDTO = z.infer<typeof bulkDeleteAttendeeSchema>;

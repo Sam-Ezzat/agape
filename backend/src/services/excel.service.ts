@@ -8,6 +8,7 @@
 
 import * as XLSX from 'xlsx';
 import { Gender, ConferenceRole } from '@prisma/client';
+import { toE164 } from '@/utils/phone';
 
 export interface AttendeeExcelRow {
   ticketId?: string;
@@ -91,10 +92,21 @@ export class ExcelService {
       const rawTransactionNumberRaw = row['Transaction Number'] || row['transactionNumber'];
       const rawTransactionNumber = rawTransactionNumberRaw !== undefined && rawTransactionNumberRaw !== null ? String(rawTransactionNumberRaw).trim() : undefined;
 
+      const rawPhone = row['Phone'] || row['phone'];
+      let normalizedPhone: string | undefined;
+      let phoneError: string | undefined;
+      if (rawPhone !== undefined && rawPhone !== null && String(rawPhone).trim() !== '') {
+        try {
+          normalizedPhone = toE164(String(rawPhone));
+        } catch (error) {
+          phoneError = error instanceof Error ? error.message : 'Invalid phone number';
+        }
+      }
+
       const attendee: AttendeeExcelRow = {
         ticketId: row['Ticket ID'] || row['ticketId'] || undefined,
         fullName: row['Full Name'] || row['fullName'],
-        phone: this.normalizePhone(row['Phone'] || row['phone']),
+        phone: normalizedPhone,
         email: row['Email'] || row['email'] || undefined,
         age: row['Age'] || row['age'] ? parseInt(row['Age'] || row['age']) : undefined,
         gender: this.parseGender(row['Gender'] || row['gender']),
@@ -112,6 +124,17 @@ export class ExcelService {
         internalNotes: row['Internal Notes'] || row['internalNotes'] || undefined,
         checkedInBy: row['Checked-in By'] || row['checkedInBy'] || undefined,
       };
+
+      // Validate phone format if provided — must normalize to a full
+      // international number (country code + subscriber number)
+      if (phoneError) {
+        errors.push({
+          row: rowNumber,
+          field: 'phone',
+          value: rawPhone,
+          message: phoneError,
+        });
+      }
 
       // Validate email format if provided
       if (attendee.email && !this.isValidEmail(attendee.email)) {
@@ -150,7 +173,7 @@ export class ExcelService {
       'Email': attendee.email || '',
       'Full Name': attendee.fullName,
       'Gender': this.formatGender(attendee.gender),
-      'Phone': attendee.phone || '',
+      'Phone': this.formatPhoneForExport(attendee.phone),
       'Age': attendee.age || '',
       'Church': attendee.church || '',
       'Area': attendee.area || '',
@@ -216,7 +239,7 @@ export class ExcelService {
   generateAssignmentsExcel(assignments: any[]): Buffer {
     const excelData = assignments.map(assignment => ({
       'Attendee Name': assignment.attendee.fullName,
-      'Phone': assignment.attendee.phone || '',
+      'Phone': this.formatPhoneForExport(assignment.attendee.phone),
       'Email': assignment.attendee.email || '',
       'Gender': assignment.attendee.gender || '',
       'Role': assignment.attendee.conferenceRole || '',
@@ -265,7 +288,7 @@ export class ExcelService {
         'Email': 'john.doe@example.com',
         'Full Name': 'John Doe',
         'Gender': 'MALE',
-        'Phone': '01234567890',
+        'Phone': '+201234567890',
         'Age': 30,
         'Church': 'Sample Church',
         'Area': 'Sample Area',
@@ -285,7 +308,7 @@ export class ExcelService {
         'Email': 'jane.smith@example.com',
         'Full Name': 'Jane Smith',
         'Gender': 'FEMALE',
-        'Phone': '01098765432',
+        'Phone': '+201098765432',
         'Age': 28,
         'Church': 'Another Church',
         'Area': 'Downtown',
@@ -379,16 +402,19 @@ export class ExcelService {
   }
 
   /**
-   * Normalize phone number
-   * WHY: Handle phone numbers stored as numbers in Excel
+   * Format a stored phone number for export.
+   * WHY: Attendees are stored in E.164 (+countrycode...) format, but older
+   * records created before that was enforced may still be un-normalized —
+   * best-effort normalize on the way out rather than leaving a mix of formats
+   * in exported sheets.
    */
-  private normalizePhone(value: any): string | undefined {
-    if (!value) return undefined;
-    
-    // Convert to string and remove any spaces or special characters
-    const phone = String(value).replace(/\s+/g, '').replace(/[^\d+]/g, '');
-    
-    return phone || undefined;
+  private formatPhoneForExport(phone: string | null | undefined): string {
+    if (!phone) return '';
+    try {
+      return toE164(phone);
+    } catch {
+      return phone;
+    }
   }
 
   /**

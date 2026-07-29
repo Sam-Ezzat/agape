@@ -23,6 +23,9 @@ import HousesPage from '@/pages/HousesPage';
 import BuildingsPage from '@/pages/BuildingsPage';
 import FloorsPage from '@/pages/FloorsPage';
 import RoomsPage from '@/pages/RoomsPage';
+import WhatsAppSetupPage from '@/pages/WhatsAppSetupPage';
+import TemplatesPage from '@/pages/TemplatesPage';
+import CampaignsPage from '@/pages/CampaignsPage';
 
 function App() {
   // WHY: Initialize Socket.io connection for real-time notifications
@@ -91,6 +94,11 @@ function App() {
             <Route path="/buildings" element={<BuildingsPage />} />
             <Route path="/floors" element={<FloorsPage />} />
             <Route path="/rooms" element={<RoomsPage />} />
+            
+            {/* Communication - WhatsApp & Campaigns */}
+            <Route path="/communication/whatsapp" element={<WhatsAppSetupPage />} />
+            <Route path="/communication/templates" element={<TemplatesPage />} />
+            <Route path="/communication/campaigns" element={<CampaignsPage />} />
             
             {/* WHY: Catch-all route redirects to dashboard */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

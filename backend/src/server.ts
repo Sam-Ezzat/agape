@@ -14,6 +14,9 @@ import { createApp } from './app';
 import logger from '@/utils/logger';
 import prisma from '@/utils/prisma-client';
 import { initializeNotificationService } from '@/services/notification.service';
+import { createWhatsAppService } from '@/services/communication/whatsapp.service';
+import { createMessageProcessingService } from '@/services/communication/messageProcessing.service';
+import { setWhatsAppService } from '@/controllers/communication/whatsapp.controller';
 
 const PORT = process.env.PORT || 3000;
 
@@ -94,6 +97,19 @@ async function startServer(): Promise<void> {
       }, 2000);
     }
 
+    // Initialize Communication Services
+    logger.info('💬 Initializing communication services...');
+    
+    // Create WhatsApp service
+    const whatsappService = createWhatsAppService(io);
+    setWhatsAppService(whatsappService);
+    
+    // Create message processing service
+    const messageProcessingService = createMessageProcessingService(whatsappService, io);
+    
+    logger.info('✅ Communication services initialized');
+    logger.info('📱 WhatsApp: Ready to initialize (scan QR code when ready)');
+
     // Start HTTP server
     httpServer.listen(PORT, () => {
       logger.info(`🚀 Server running on port ${PORT}`);
@@ -109,6 +125,15 @@ async function startServer(): Promise<void> {
     // Ensures all connections are closed properly
     process.on('SIGTERM', async () => {
       logger.info('SIGTERM received, shutting down gracefully...');
+      
+      // Shutdown communication services
+      logger.info('Shutting down communication services...');
+      try {
+        await whatsappService.disconnect();
+        await messageProcessingService.shutdown();
+      } catch (error) {
+        logger.error('Error shutting down communication services:', error);
+      }
       
       httpServer.close(() => {
         logger.info('HTTP server closed');
