@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "postinstall": "npx puppeteer browsers install chrome",
+    "postinstall": "npx puppeteer browsers install chrome --path ./.cache/puppeteer",
     "build": "prisma generate && tsc && tsc-alias",
     "start": "node dist/server.js",
     "migrate": "prisma migrate deploy",

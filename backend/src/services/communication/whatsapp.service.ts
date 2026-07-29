@@ -7,10 +7,16 @@
 
 import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
 import puppeteer from 'puppeteer';
+import path from 'path';
 import { Server as SocketServer } from 'socket.io';
 import logger from '@/utils/logger';
 import { PrismaClient } from '@prisma/client';
 import { normalizePhoneNumber } from '@/utils/phone';
+
+// Matches the --path used in the "postinstall" script (package.json), so the
+// browser Puppeteer downloads at install time is always the one it launches,
+// regardless of any PUPPETEER_CACHE_DIR set (or not set) in the host environment.
+process.env.PUPPETEER_CACHE_DIR = path.join(process.cwd(), '.cache', 'puppeteer');
 
 const prisma = new PrismaClient();
 
