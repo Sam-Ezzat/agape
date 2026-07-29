@@ -109,6 +109,7 @@ export class WhatsAppService {
     this.loadingMessage = 'Starting WhatsApp client...';
 
     try {
+      const executablePath = await puppeteer.executablePath();
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: 'agape-conference',
@@ -116,7 +117,7 @@ export class WhatsAppService {
         }),
         puppeteer: {
           headless: true,
-          executablePath: puppeteer.executablePath(),
+          executablePath,
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
