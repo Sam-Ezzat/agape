@@ -6,6 +6,7 @@
  */
 
 import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
+import puppeteer from 'puppeteer';
 import { Server as SocketServer } from 'socket.io';
 import logger from '@/utils/logger';
 import { PrismaClient } from '@prisma/client';
@@ -115,6 +116,7 @@ export class WhatsAppService {
         }),
         puppeteer: {
           headless: true,
+          executablePath: puppeteer.executablePath(),
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
