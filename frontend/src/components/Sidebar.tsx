@@ -35,6 +35,11 @@ interface NavItem {
   children?: NavChild[];
 }
 
+// WhatsApp/communication needs headless Chrome, which currently OOMs the
+// production Render plan. Hidden from nav until the plan is upgraded (or the
+// backend moves off Puppeteer) - see WHATSAPP_TROUBLESHOOTING.md.
+const COMMUNICATION_ENABLED = false;
+
 export default function Sidebar() {
   const location = useLocation();
 
@@ -50,15 +55,19 @@ export default function Sidebar() {
     { path: '/buildings', icon: Building2, label: 'Buildings' },
     { path: '/floors', icon: Layers, label: 'Floors' },
     { path: '/rooms', icon: DoorOpen, label: 'Rooms' },
-    {
-      icon: MessageCircle,
-      label: 'WhatsApp',
-      children: [
-        { path: '/communication/whatsapp', icon: MessageCircle, label: 'WhatsApp Setup' },
-        { path: '/communication/templates', icon: FileText, label: 'Templates' },
-        { path: '/communication/campaigns', icon: Send, label: 'Campaigns' },
-      ],
-    },
+    ...(COMMUNICATION_ENABLED
+      ? [
+          {
+            icon: MessageCircle,
+            label: 'WhatsApp',
+            children: [
+              { path: '/communication/whatsapp', icon: MessageCircle, label: 'WhatsApp Setup' },
+              { path: '/communication/templates', icon: FileText, label: 'Templates' },
+              { path: '/communication/campaigns', icon: Send, label: 'Campaigns' },
+            ],
+          } satisfies NavItem,
+        ]
+      : []),
   ];
 
   const isGroupActive = (item: NavItem) =>
