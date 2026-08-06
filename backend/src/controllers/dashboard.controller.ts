@@ -1,6 +1,6 @@
 /**
  * Dashboard Controller
- * 
+ *
  * WHY: HTTP layer for dashboard operations
  * Provides aggregated statistics and metrics for overview displays
  */
@@ -16,7 +16,8 @@ export class DashboardController {
    * Get overall system statistics
    */
   async getStats(req: Request, res: Response) {
-    const stats = await this.dashboardService.getOverallStats();
+    const organizationId = req.user!.organizationId;
+    const stats = await this.dashboardService.getOverallStats(organizationId);
     res.json({
       success: true,
       data: stats,
@@ -28,7 +29,8 @@ export class DashboardController {
    * Get room occupancy breakdown by building/floor
    */
   async getOccupancy(req: Request, res: Response) {
-    const occupancy = await this.dashboardService.getOccupancyBreakdown();
+    const organizationId = req.user!.organizationId;
+    const occupancy = await this.dashboardService.getOccupancyBreakdown(organizationId);
     res.json({
       success: true,
       data: occupancy,
@@ -40,8 +42,9 @@ export class DashboardController {
    * Get recent system activity
    */
   async getRecentActivity(req: Request, res: Response) {
+    const organizationId = req.user!.organizationId;
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
-    const activity = await this.dashboardService.getRecentActivity(limit);
+    const activity = await this.dashboardService.getRecentActivity(organizationId, limit);
     res.json({
       success: true,
       data: activity,
@@ -53,7 +56,8 @@ export class DashboardController {
    * Get check-in/check-out report
    */
   async getCheckInReport(req: Request, res: Response) {
-    const report = await this.dashboardService.getCheckInReport();
+    const organizationId = req.user!.organizationId;
+    const report = await this.dashboardService.getCheckInReport(organizationId);
     res.json({
       success: true,
       data: report,

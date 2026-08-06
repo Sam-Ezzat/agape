@@ -20,6 +20,7 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
   /**
    * Find rooms by floor
    * WHY: Most common query - get all rooms on a floor
+   * NOTE: organizationId ownership of floorId must be verified by caller (service layer)
    */
   async findByFloorId(floorId: string): Promise<Room[]> {
     return this.model.findMany({
@@ -29,22 +30,58 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
   }
 
   /**
-   * Find all rooms
-   * WHY: List all rooms across all floors
+   * Find all rooms for an organization
+   * WHY: List all rooms across all floors, scoped to org
    */
-  async findAll(): Promise<Room[]> {
+  async findAllByOrganization(organizationId: string): Promise<Room[]> {
     return this.model.findMany({
+      where: { floor: { building: { conferenceHouse: { organizationId } } } },
       orderBy: { roomNumber: 'asc' },
     });
+  }
+
+  /**
+   * Find room by id scoped to organization (ownership check)
+   */
+  async findByIdScoped(id: string, organizationId: string): Promise<Room | null> {
+    return this.model.findFirst({
+      where: { id, floor: { building: { conferenceHouse: { organizationId } } } },
+    });
+  }
+
+  /**
+   * Update room scoped to organization
+   */
+  async updateScoped(id: string, organizationId: string, data: any): Promise<Room> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.update({ where: { id }, data });
+  }
+
+  /**
+   * Delete room scoped to organization
+   */
+  async deleteScoped(id: string, organizationId: string): Promise<Room> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.delete({ where: { id } });
+  }
+
+  private async assertOwnership(id: string, organizationId: string): Promise<void> {
+    const existing = await this.model.findFirst({
+      where: { id, floor: { building: { conferenceHouse: { organizationId } } } },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new Error('Room not found in organization');
+    }
   }
 
   /**
    * Find room with assignment
    * WHY: Often need to check if room is occupied
    */
-  async findByIdWithAssignment(id: string): Promise<Room | null> {
-    return this.model.findUnique({
-      where: { id },
+  async findByIdWithAssignment(id: string, organizationId: string): Promise<Room | null> {
+    return this.model.findFirst({
+      where: { id, floor: { building: { conferenceHouse: { organizationId } } } },
       include: {
         assignments: {
           include: {
@@ -69,6 +106,7 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
    * WHY: For room assignment workflow
    */
   async findAvailable(
+    organizationId: string,
     floorId?: string,
     minCapacity?: number,
     type?: RoomType,
@@ -78,6 +116,7 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
     return this.model.findMany({
       where: {
         floorId,
+        floor: { building: { conferenceHouse: { organizationId } } },
         capacity: minCapacity ? { gte: minCapacity } : undefined,
         roomType: type,
         assignments: { none: {} }, // WHY: No assignments means available
@@ -93,6 +132,7 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
    * WHY: Advanced search functionality
    */
   async findWithFilters(filters: {
+    organizationId: string;
     buildingId?: string;
     floorId?: string;
     type?: RoomType;
@@ -102,6 +142,7 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
     take?: number;
   }): Promise<Room[]> {
     const {
+      organizationId,
       buildingId,
       floorId,
       type,
@@ -114,7 +155,10 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
     return this.model.findMany({
       where: {
         floorId,
-        floor: buildingId ? { buildingId } : undefined,
+        floor: {
+          ...(buildingId ? { buildingId } : {}),
+          building: { conferenceHouse: { organizationId } },
+        },
         roomType: type,
         capacity: {
           gte: minCapacity,
@@ -142,13 +186,24 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
   /**
    * Count available rooms
    */
-  async countAvailable(floorId?: string, type?: RoomType): Promise<number> {
+  async countAvailable(organizationId: string, floorId?: string, type?: RoomType): Promise<number> {
     return this.model.count({
       where: {
         floorId,
+        floor: { building: { conferenceHouse: { organizationId } } },
         roomType: type,
         assignments: { none: {} },
       },
+    });
+  }
+
+  /**
+   * Count all rooms for an organization
+   * WHY: Dashboard statistics need a total room count scoped to org
+   */
+  async countByOrganization(organizationId: string): Promise<number> {
+    return this.model.count({
+      where: { floor: { building: { conferenceHouse: { organizationId } } } },
     });
   }
 
@@ -189,6 +244,7 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
    * @returns Rooms with floor, building, and assignment details
    */
   async findForAutoAssignment(
+    organizationId: string,
     buildingIds: string[],
     conferenceHouseId?: string
   ): Promise<Array<Room & {
@@ -217,6 +273,7 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
           building: {
             id: { in: buildingIds },
             ...(conferenceHouseId ? { conferenceHouseId } : {}),
+            conferenceHouse: { organizationId },
           },
         },
       },
@@ -261,12 +318,13 @@ export class RoomRepository extends BaseRepository<Room, Prisma.RoomDelegate> {
    * @param conferenceHouseId - Conference house to get stats for
    * @returns Room counts with assignment information
    */
-  async getRoomStatisticsByConferenceHouse(conferenceHouseId: string) {
+  async getRoomStatisticsByConferenceHouse(conferenceHouseId: string, organizationId: string) {
     const rooms = await this.model.findMany({
       where: {
         floor: {
           building: {
             conferenceHouseId,
+            conferenceHouse: { organizationId },
           },
         },
       },

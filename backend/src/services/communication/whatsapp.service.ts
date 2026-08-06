@@ -10,15 +10,13 @@ import puppeteer from 'puppeteer';
 import path from 'path';
 import { Server as SocketServer } from 'socket.io';
 import logger from '@/utils/logger';
-import { PrismaClient } from '@prisma/client';
+import prisma from '@/utils/prisma-client';
 import { normalizePhoneNumber } from '@/utils/phone';
 
 // Matches the --path used in the "postinstall" script (package.json), so the
 // browser Puppeteer downloads at install time is always the one it launches,
 // regardless of any PUPPETEER_CACHE_DIR set (or not set) in the host environment.
 process.env.PUPPETEER_CACHE_DIR = path.join(process.cwd(), '.cache', 'puppeteer');
-
-const prisma = new PrismaClient();
 
 export interface WhatsAppStatus {
   isConnected: boolean;
@@ -44,6 +42,7 @@ export interface RateLimitStatus {
 export class WhatsAppService {
   private client: Client | null = null;
   private io: SocketServer;
+  private organizationId: string;
   private isInitialized = false;
   private isReady = false;
   private qrCode: string | null = null;
@@ -69,18 +68,28 @@ export class WhatsAppService {
     maxPerDay: 300,
   };
   
-  constructor(io: SocketServer) {
+  constructor(io: SocketServer, organizationId: string) {
     this.io = io;
+    this.organizationId = organizationId;
     this.loadSettings();
     this.startRateLimitResetTimers();
   }
-  
+
+  /**
+   * Emit an event scoped to this WhatsApp instance's organization only.
+   */
+  private emit(event: string, payload?: unknown): void {
+    this.io.to(`org:${this.organizationId}`).emit(event, payload);
+  }
+
   /**
    * Load settings from database
    */
   private async loadSettings() {
     try {
-      const settings = await prisma.communicationSettings.findFirst();
+      const settings = await prisma.communicationSettings.findUnique({
+        where: { organizationId: this.organizationId },
+      });
       if (settings) {
         this.settings = {
           delayMin: settings.whatsappDelayMin,
@@ -118,8 +127,8 @@ export class WhatsAppService {
       const executablePath = await puppeteer.executablePath();
       this.client = new Client({
         authStrategy: new LocalAuth({
-          clientId: 'agape-conference',
-          dataPath: './whatsapp-session',
+          clientId: `org-${this.organizationId}`,
+          dataPath: path.join(process.cwd(), 'whatsapp-sessions', this.organizationId),
         }),
         puppeteer: {
           headless: true,
@@ -173,7 +182,7 @@ export class WhatsAppService {
       this.qrCode = qr;
       this.loadingPercent = null;
       this.loadingMessage = null;
-      this.io.emit('whatsapp:qr', { qr });
+      this.emit('whatsapp:qr', { qr });
     });
 
     // Ready event - client is ready to send messages
@@ -183,49 +192,49 @@ export class WhatsAppService {
       this.qrCode = null;
       this.loadingPercent = null;
       this.loadingMessage = null;
-      this.io.emit('whatsapp:ready');
+      this.emit('whatsapp:ready');
 
       // Update database
       await this.updateSessionStatus(true);
     });
-    
+
     // Authenticated event
     this.client.on('authenticated', () => {
       logger.info('WhatsApp authenticated');
-      this.io.emit('whatsapp:authenticated');
+      this.emit('whatsapp:authenticated');
     });
-    
+
     // Authentication failure
     this.client.on('auth_failure', (error) => {
       logger.error('WhatsApp authentication failed:', error);
       this.isReady = false;
       this.isInitialized = false;
-      this.io.emit('whatsapp:auth_failure', { 
-        error: typeof error === 'string' ? error : JSON.stringify(error) 
+      this.emit('whatsapp:auth_failure', {
+        error: typeof error === 'string' ? error : JSON.stringify(error)
       });
     });
-    
+
     // Disconnected
     this.client.on('disconnected', async (reason) => {
       logger.warn('WhatsApp disconnected:', reason);
       this.isReady = false;
       this.isInitialized = false;
       this.qrCode = null;
-      this.io.emit('whatsapp:disconnected', { reason });
-      
+      this.emit('whatsapp:disconnected', { reason });
+
       // Update database
       await this.updateSessionStatus(false);
-      
+
       // Notify user to reconnect
       logger.info('To reconnect, please initialize WhatsApp again from the UI');
     });
-    
+
     // Loading screen
     this.client.on('loading_screen', (percent, message) => {
       logger.debug(`WhatsApp loading: ${percent}%`);
       this.loadingPercent = typeof percent === 'number' ? percent : Number(percent) || 0;
       this.loadingMessage = message || null;
-      this.io.emit('whatsapp:loading', { percent, message });
+      this.emit('whatsapp:loading', { percent, message });
     });
   }
   
@@ -235,6 +244,7 @@ export class WhatsAppService {
   private async updateSessionStatus(active: boolean): Promise<void> {
     try {
       await prisma.communicationSettings.updateMany({
+        where: { organizationId: this.organizationId },
         data: {
           whatsappSessionActive: active,
         },
@@ -478,7 +488,8 @@ export class WhatsAppService {
   }
 }
 
-// Export singleton instance factory
-export const createWhatsAppService = (io: SocketServer): WhatsAppService => {
-  return new WhatsAppService(io);
+// WHY: Instances are now created per-organization via whatsapp.registry.ts's
+// getOrCreateWhatsAppService — this direct factory is kept only for tests.
+export const createWhatsAppService = (io: SocketServer, organizationId: string): WhatsAppService => {
+  return new WhatsAppService(io, organizationId);
 };

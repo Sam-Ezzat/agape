@@ -1,6 +1,6 @@
 /**
  * Room Assignment Controller
- * 
+ *
  * WHY: HTTP layer for room assignment operations
  * Thin controller that delegates to AssignmentService
  */
@@ -27,7 +27,8 @@ export class AssignmentController {
    */
   async create(req: Request, res: Response) {
     const data: CreateAssignmentDTO = req.body;
-    const assignment = await this.assignmentService.create(data);
+    const organizationId = req.user!.organizationId;
+    const assignment = await this.assignmentService.create(data, organizationId, req.user!.id);
     res.status(201).json({
       success: true,
       data: assignment,
@@ -40,7 +41,8 @@ export class AssignmentController {
    */
   async getById(req: Request, res: Response) {
     const { id } = req.params;
-    const assignment = await this.assignmentService.getById(id);
+    const organizationId = req.user!.organizationId;
+    const assignment = await this.assignmentService.getById(id, organizationId);
     res.json({
       success: true,
       data: assignment,
@@ -53,7 +55,8 @@ export class AssignmentController {
    */
   async getAll(req: Request, res: Response) {
     const params: AssignmentFilterParams = req.query as any;
-    const result = await this.assignmentService.list(params);
+    const organizationId = req.user!.organizationId;
+    const result = await this.assignmentService.list(params, organizationId);
     res.json({
       success: true,
       data: result.data,
@@ -71,7 +74,8 @@ export class AssignmentController {
    * Get room availability
    */
   async getAvailability(req: Request, res: Response) {
-    const availability = await this.assignmentService.getAvailability();
+    const organizationId = req.user!.organizationId;
+    const availability = await this.assignmentService.getAvailability(organizationId);
     res.json({
       success: true,
       data: availability,
@@ -84,7 +88,8 @@ export class AssignmentController {
    */
   async getByRoom(req: Request, res: Response) {
     const { roomId } = req.params;
-    const assignments = await this.assignmentService.getByRoomId(roomId);
+    const organizationId = req.user!.organizationId;
+    const assignments = await this.assignmentService.getByRoomId(roomId, organizationId);
     res.json({
       success: true,
       data: assignments,
@@ -98,7 +103,8 @@ export class AssignmentController {
   async update(req: Request, res: Response) {
     const { id } = req.params;
     const data: UpdateAssignmentDTO = req.body;
-    const assignment = await this.assignmentService.update(id, data);
+    const organizationId = req.user!.organizationId;
+    const assignment = await this.assignmentService.update(id, data, organizationId, req.user!.id);
     res.json({
       success: true,
       data: assignment,
@@ -111,7 +117,8 @@ export class AssignmentController {
    */
   async delete(req: Request, res: Response) {
     const { id } = req.params;
-    await this.assignmentService.delete(id);
+    const organizationId = req.user!.organizationId;
+    await this.assignmentService.delete(id, organizationId, req.user!.id);
     res.json({
       success: true,
       message: 'Assignment deleted successfully',
@@ -124,7 +131,8 @@ export class AssignmentController {
    */
   async batchAssign(req: Request, res: Response) {
     const data: BatchAssignmentDTO = req.body;
-    const result = await this.assignmentService.batchAssign(data);
+    const organizationId = req.user!.organizationId;
+    const result = await this.assignmentService.batchAssign(data, organizationId, req.user!.id);
     res.json({
       success: true,
       data: result,
@@ -145,6 +153,7 @@ export class AssignmentController {
     }
 
     const { groupA, groupB } = req.body;
+    const organizationId = req.user!.organizationId;
 
     if (!Array.isArray(groupA) || !Array.isArray(groupB)) {
       return res.status(400).json({
@@ -163,7 +172,7 @@ export class AssignmentController {
     const validation = await this.swapValidationService.validateSwap({
       groupA,
       groupB,
-    });
+    }, organizationId);
 
     res.json({
       success: true,
@@ -184,6 +193,7 @@ export class AssignmentController {
     }
 
     const { groupA, groupB } = req.body;
+    const organizationId = req.user!.organizationId;
 
     if (!Array.isArray(groupA) || !Array.isArray(groupB)) {
       return res.status(400).json({
@@ -196,7 +206,7 @@ export class AssignmentController {
     const validation = await this.swapValidationService.validateSwap({
       groupA,
       groupB,
-    });
+    }, organizationId);
 
     if (!validation.valid) {
       return res.status(400).json({
@@ -210,7 +220,7 @@ export class AssignmentController {
     await this.swapValidationService.executeSwap({
       groupA,
       groupB,
-    });
+    }, organizationId);
 
     res.json({
       success: true,

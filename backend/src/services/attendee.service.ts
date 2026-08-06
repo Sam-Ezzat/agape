@@ -1,6 +1,6 @@
 /**
  * Attendee Service
- * 
+ *
  * WHY: Business logic layer for attendee operations
  * Handles validation, lifecycle management, and notification broadcasting
  */
@@ -25,8 +25,8 @@ export class AttendeeService {
    * Create new attendee
    * WHY: Register person for conference
    */
-  async create(data: CreateAttendeeDTO): Promise<Attendee> {
-    const attendee = await this.attendeeRepository.create(data);
+  async create(data: CreateAttendeeDTO, organizationId: string, userId?: string): Promise<Attendee> {
+    const attendee = await this.attendeeRepository.create({ ...data, organizationId });
 
     // Create audit log
     await this.auditLogRepository.createLog({
@@ -34,12 +34,15 @@ export class AttendeeService {
       entityType: 'attendee',
       entityId: attendee.id,
       details: { fullName: attendee.fullName, role: attendee.conferenceRole },
+      organizationId,
+      userId,
     });
 
     // Notify clients
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ATTENDEE_CREATED,
         NotificationType.SUCCESS,
         `Attendee "${attendee.fullName}" registered`,
@@ -57,8 +60,8 @@ export class AttendeeService {
    * Get attendee by ID
    * WHY: View single attendee details
    */
-  async getById(id: string): Promise<Attendee> {
-    const attendee = await this.attendeeRepository.findById(id);
+  async getById(id: string, organizationId: string): Promise<Attendee> {
+    const attendee = await this.attendeeRepository.findByIdScoped(id, organizationId);
     if (!attendee || attendee.deletedAt) {
       throw new AppError(404, 'Attendee not found');
     }
@@ -69,8 +72,8 @@ export class AttendeeService {
    * Get attendee with full details (assignment + room)
    * WHY: Show complete attendee profile
    */
-  async getWithDetails(id: string) {
-    const attendee = await this.attendeeRepository.findByIdWithDetails(id);
+  async getWithDetails(id: string, organizationId: string) {
+    const attendee = await this.attendeeRepository.findByIdWithDetails(id, organizationId);
     if (!attendee || attendee.deletedAt) {
       throw new AppError(404, 'Attendee not found');
     }
@@ -81,21 +84,21 @@ export class AttendeeService {
    * List attendees with filters and pagination
    * WHY: Browse/search attendees
    */
-  async list(params: AttendeeFilterParams) {
-    return this.attendeeRepository.search(params);
+  async list(params: AttendeeFilterParams, organizationId: string) {
+    return this.attendeeRepository.search(params, organizationId);
   }
 
   /**
    * Update attendee
    * WHY: Edit attendee information
    */
-  async update(id: string, data: UpdateAttendeeDTO): Promise<Attendee> {
-    const existing = await this.attendeeRepository.findById(id);
+  async update(id: string, data: UpdateAttendeeDTO, organizationId: string, userId?: string): Promise<Attendee> {
+    const existing = await this.attendeeRepository.findByIdScoped(id, organizationId);
     if (!existing || existing.deletedAt) {
       throw new AppError(404, 'Attendee not found');
     }
 
-    const updated = await this.attendeeRepository.update(id, data);
+    const updated = await this.attendeeRepository.updateScoped(id, organizationId, data);
 
     // Create audit log
     await this.auditLogRepository.createLog({
@@ -103,12 +106,15 @@ export class AttendeeService {
       entityType: 'attendee',
       entityId: id,
       details: { changes: data },
+      organizationId,
+      userId,
     });
 
     // Notify clients
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ATTENDEE_UPDATED,
         NotificationType.INFO,
         `Attendee "${updated.fullName}" updated`,
@@ -126,14 +132,14 @@ export class AttendeeService {
    * Delete attendee (soft delete)
    * WHY: Remove attendee while preserving audit trail
    */
-  async delete(id: string, reason?: string): Promise<void> {
-    const attendee = await this.attendeeRepository.findById(id);
+  async delete(id: string, organizationId: string, reason?: string, userId?: string): Promise<void> {
+    const attendee = await this.attendeeRepository.findByIdScoped(id, organizationId);
     if (!attendee || attendee.deletedAt) {
       throw new AppError(404, 'Attendee not found');
     }
 
     // Business rule: Cannot delete attendee with active room assignment
-    const assignment = await this.assignmentRepository.findByAttendeeId(id);
+    const assignment = await this.assignmentRepository.findByAttendeeId(id, organizationId);
     if (assignment) {
       throw new AppError(
         409,
@@ -141,7 +147,7 @@ export class AttendeeService {
       );
     }
 
-    await this.attendeeRepository.softDelete(id, reason);
+    await this.attendeeRepository.softDelete(id, organizationId, reason);
 
     // Create audit log
     await this.auditLogRepository.createLog({
@@ -149,12 +155,15 @@ export class AttendeeService {
       entityType: 'attendee',
       entityId: id,
       details: { fullName: attendee.fullName, reason },
+      organizationId,
+      userId,
     });
 
     // Notify clients
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ATTENDEE_DELETED,
         NotificationType.WARNING,
         `Attendee "${attendee.fullName}" deleted`,
@@ -173,14 +182,16 @@ export class AttendeeService {
    */
   async bulkDelete(
     ids: string[],
-    reason?: string
+    organizationId: string,
+    reason?: string,
+    userId?: string
   ): Promise<{ deleted: string[]; failed: { id: string; error: string }[] }> {
     const deleted: string[] = [];
     const failed: { id: string; error: string }[] = [];
 
     for (const id of ids) {
       try {
-        await this.delete(id, reason);
+        await this.delete(id, organizationId, reason, userId);
         deleted.push(id);
       } catch (error) {
         failed.push({
@@ -197,13 +208,13 @@ export class AttendeeService {
    * Reactivate attendee
    * WHY: Restore previously deleted/cancelled attendee
    */
-  async reactivate(id: string): Promise<Attendee> {
-    const attendee = await this.attendeeRepository.findById(id);
+  async reactivate(id: string, organizationId: string, userId?: string): Promise<Attendee> {
+    const attendee = await this.attendeeRepository.findByIdScoped(id, organizationId);
     if (!attendee || !attendee.deletedAt) {
       throw new AppError(400, 'Attendee is not deleted or does not exist');
     }
 
-    const reactivated = await this.attendeeRepository.reactivate(id);
+    const reactivated = await this.attendeeRepository.reactivate(id, organizationId);
 
     // Create audit log
     await this.auditLogRepository.createLog({
@@ -211,12 +222,15 @@ export class AttendeeService {
       entityType: 'attendee',
       entityId: id,
       details: { fullName: reactivated.fullName, status: 'reactivated' },
+      organizationId,
+      userId,
     });
 
     // Notify clients
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ATTENDEE_CREATED,
         NotificationType.SUCCESS,
         `Attendee "${reactivated.fullName}" reactivated`,
@@ -234,8 +248,8 @@ export class AttendeeService {
    * Check in attendee
    * WHY: Mark attendee as present at conference
    */
-  async checkIn(id: string): Promise<Attendee> {
-    const attendee = await this.attendeeRepository.findById(id);
+  async checkIn(id: string, organizationId: string, userId?: string): Promise<Attendee> {
+    const attendee = await this.attendeeRepository.findByIdScoped(id, organizationId);
     if (!attendee || attendee.deletedAt) {
       throw new AppError(404, 'Attendee not found');
     }
@@ -246,12 +260,12 @@ export class AttendeeService {
     }
 
     // Optional: Require room assignment before check-in
-    // const assignment = await this.assignmentRepository.findByAttendeeId(id);
+    // const assignment = await this.assignmentRepository.findByAttendeeId(id, organizationId);
     // if (!assignment) {
     //   throw new AppError(409, 'Attendee must be assigned to a room before check-in');
     // }
 
-    const checkedIn = await this.attendeeRepository.checkIn(id);
+    const checkedIn = await this.attendeeRepository.checkIn(id, organizationId);
 
     // Create audit log
     await this.auditLogRepository.createLog({
@@ -259,12 +273,15 @@ export class AttendeeService {
       entityType: 'attendee',
       entityId: id,
       details: { fullName: checkedIn.fullName, timestamp: checkedIn.checkedInAt },
+      organizationId,
+      userId,
     });
 
     // Notify clients
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ATTENDEE_CHECKED_IN,
         NotificationType.SUCCESS,
         `${checkedIn.fullName} checked in`,
@@ -282,8 +299,8 @@ export class AttendeeService {
    * Check out attendee
    * WHY: Mark attendee as departed from conference
    */
-  async checkOut(id: string): Promise<Attendee> {
-    const attendee = await this.attendeeRepository.findById(id);
+  async checkOut(id: string, organizationId: string, userId?: string): Promise<Attendee> {
+    const attendee = await this.attendeeRepository.findByIdScoped(id, organizationId);
     if (!attendee || attendee.deletedAt) {
       throw new AppError(404, 'Attendee not found');
     }
@@ -297,17 +314,19 @@ export class AttendeeService {
       throw new AppError(409, 'Attendee is already checked out');
     }
 
-    const checkedOut = await this.attendeeRepository.checkOut(id);
+    const checkedOut = await this.attendeeRepository.checkOut(id, organizationId);
 
     // Optional: Auto-unassign from room on checkout
-    const assignment = await this.assignmentRepository.findByAttendeeId(id);
+    const assignment = await this.assignmentRepository.findByAttendeeId(id, organizationId);
     if (assignment) {
-      await this.assignmentRepository.delete(assignment.id);
+      await this.assignmentRepository.deleteScoped(assignment.id, organizationId);
       await this.auditLogRepository.createLog({
         action: 'unassign',
         entityType: 'room_assignment',
         entityId: assignment.id,
         details: { reason: 'auto_unassign_on_checkout' },
+        organizationId,
+        userId,
       });
     }
 
@@ -317,12 +336,15 @@ export class AttendeeService {
       entityType: 'attendee',
       entityId: id,
       details: { fullName: checkedOut.fullName, timestamp: checkedOut.checkedOutAt },
+      organizationId,
+      userId,
     });
 
     // Notify clients
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ATTENDEE_CHECKED_OUT,
         NotificationType.INFO,
         `${checkedOut.fullName} checked out`,
@@ -340,8 +362,8 @@ export class AttendeeService {
    * Get attendee statistics
    * WHY: Dashboard metrics
    */
-  async getStatistics() {
-    return this.attendeeRepository.getStatistics();
+  async getStatistics(organizationId: string) {
+    return this.attendeeRepository.getStatistics(organizationId);
   }
 
   /**
@@ -349,15 +371,15 @@ export class AttendeeService {
    * WHY: Show people who need room assignments
    * Supports optional search with dual-language
    */
-  async getUnassigned(params?: UnassignedFilterParams) {
-    return this.attendeeRepository.findUnassigned(params?.search, params?.dualSearch);
+  async getUnassigned(organizationId: string, params?: UnassignedFilterParams) {
+    return this.attendeeRepository.findUnassigned(organizationId, params?.search, params?.dualSearch);
   }
 
   /**
    * Search assigned attendees with dual-language support
    * WHY: For swap modal - find attendees to swap
    */
-  async searchAssigned(query: string) {
-    return this.attendeeRepository.searchAssigned(query);
+  async searchAssigned(query: string, organizationId: string) {
+    return this.attendeeRepository.searchAssigned(query, organizationId);
   }
 }

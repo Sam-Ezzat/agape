@@ -15,19 +15,68 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// WHY: Tenant boundary for multi-tenancy. Each organization (church/team) has
+// its own isolated data, users, and communication settings.
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users                  User[]
+  conferenceHouses       ConferenceHouse[]
+  attendees              Attendee[]
+  templates              MessageTemplate[]
+  campaigns              MessageCampaign[]
+  communicationSettings  CommunicationSettings[]
+  auditLogs              AuditLog[]
+
+  @@map("organizations")
+}
+
+// WHY: A user account belongs to exactly one organization. Auth is JWT-based;
+// this table only stores credentials + org/role membership.
+model User {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  name           String
+  role           UserRole @default(ADMIN)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  auditLogs      AuditLog[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+}
+
 // WHY: Top-level entity representing the entire conference venue
 // A conference house can have multiple buildings
 model ConferenceHouse {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  description String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  
+  id             String   @id @default(uuid())
+  organizationId String?  @map("organization_id")
+  name           String
+  description    String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
   // Relations
+  organization         Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   buildings            Building[]
   autoAssignmentConfig AutoAssignmentConfig?
-  
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
   @@map("conference_houses")
 }
 
@@ -105,6 +154,7 @@ enum RoomType {
 // Updated to match conference registration Excel structure
 model Attendee {
   id                String          @id @default(uuid())
+  organizationId    String?         @map("organization_id")
   ticketId          String?         @unique @map("ticket_id") // Conference ticket ID (e.g., TO-20260607-578181)
   fullName          String          @map("full_name")
   phone             String?
@@ -142,10 +192,12 @@ model Attendee {
   deletedAt         DateTime?       @map("deleted_at") // Soft delete
   
   // Relations
+  organization      Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assignment        RoomAssignment?
   messages          Message[]
-  
+
   // WHY: Indexes for fast searches (supports Arabic text with trigram similarity)
+  @@index([organizationId])
   @@index([fullName])
   @@index([ticketId])
   @@index([conferenceRole])
@@ -207,15 +259,22 @@ model RoomAssignment {
 // WHY: Complete audit trail for all assignment operations
 // Enables answering "who assigned whom, when, and why" for accountability
 model AuditLog {
-  id          String   @id @default(uuid())
-  action      String   // "assign", "unassign", "check_in", "check_out", "create", "update", "delete", "auto_assign"
-  entityType  String   @map("entity_type") // "attendee", "room", "assignment", "building"
-  entityId    String   @map("entity_id")
-  details     Json?    // Flexible JSONB for action-specific data
-  performedBy String?  @map("performed_by") // Future: user ID
-  createdAt   DateTime @default(now()) @map("created_at")
-  
+  id             String   @id @default(uuid())
+  organizationId String?  @map("organization_id")
+  action         String   // "assign", "unassign", "check_in", "check_out", "create", "update", "delete", "auto_assign"
+  entityType     String   @map("entity_type") // "attendee", "room", "assignment", "building"
+  entityId       String   @map("entity_id")
+  details        Json?    // Flexible JSONB for action-specific data
+  performedBy    String?  @map("performed_by") // Legacy free-text actor label
+  userId         String?  @map("user_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   // WHY: Fast queries by entity (e.g., "show me all actions on this attendee")
+  @@index([organizationId])
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("audit_logs")
@@ -250,8 +309,9 @@ model AutoAssignmentConfig {
 // WHY: Reusable message templates with dynamic variables
 // Supports Arabic content and template personalization
 model MessageTemplate {
-  id            String           @id @default(uuid())
-  name          String           @unique
+  id             String           @id @default(uuid())
+  organizationId String?          @map("organization_id")
+  name          String
   description   String?          @db.Text
   category      TemplateCategory @default(GENERAL)
   
@@ -275,8 +335,11 @@ model MessageTemplate {
   createdBy     String?          @map("created_by")
   
   // Relations
+  organization  Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   campaigns     MessageCampaign[]
-  
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
   @@index([category])
   @@index([isActive])
   @@map("message_templates")
@@ -297,6 +360,7 @@ enum TemplateCategory {
 // WHY: Message campaigns for bulk messaging to filtered recipients
 model MessageCampaign {
   id                    String         @id @default(uuid())
+  organizationId        String?        @map("organization_id")
   name                  String
   description           String?        @db.Text
   templateId            String         @map("template_id")
@@ -326,9 +390,11 @@ model MessageCampaign {
   createdBy             String?        @map("created_by")
   
   // Relations
+  organization          Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   template              MessageTemplate @relation(fields: [templateId], references: [id])
   messages              Message[]
-  
+
+  @@index([organizationId])
   @@index([status])
   @@index([scheduledFor])
   @@map("message_campaigns")
@@ -406,7 +472,8 @@ enum MessageStatus {
 // WHY: Global communication settings for rate limiting and channel configuration
 model CommunicationSettings {
   id                    String   @id @default(uuid())
-  
+  organizationId        String?  @unique @map("organization_id")
+
   // WhatsApp Settings
   whatsappEnabled       Boolean  @default(true) @map("whatsapp_enabled")
   whatsappSessionActive Boolean  @default(false) @map("whatsapp_session_active")
@@ -430,6 +497,9 @@ model CommunicationSettings {
   
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
-  
+
+  // Relations
+  organization          Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
   @@map("communication_settings")
 }

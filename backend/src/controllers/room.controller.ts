@@ -1,9 +1,9 @@
 /**
  * Room Controller
- * 
+ *
  * WHY: HTTP request handlers for room endpoints
  * Thin layer that delegates to service layer
- * 
+ *
  * SOLID Principles:
  * - Single Responsibility: Only handles HTTP request/response
  * - Dependency Injection: Receives service via constructor
@@ -26,7 +26,8 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const rooms = await this.roomService.listAll();
+      const organizationId = req.user!.organizationId;
+      const rooms = await this.roomService.listAll(organizationId);
       res.json({
         success: true,
         data: rooms,
@@ -46,7 +47,8 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const room = await this.roomService.create(req.body);
+      const organizationId = req.user!.organizationId;
+      const room = await this.roomService.create(req.body, organizationId);
       res.status(201).json({
         success: true,
         data: room,
@@ -66,7 +68,8 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const rooms = await this.roomService.listByFloor(req.params.floorId);
+      const organizationId = req.user!.organizationId;
+      const rooms = await this.roomService.listByFloor(req.params.floorId, organizationId);
       res.json({
         success: true,
         data: rooms,
@@ -86,8 +89,10 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
+      const organizationId = req.user!.organizationId;
       const { floorId, minCapacity, roomType, page, limit } = req.query;
       const result = await this.roomService.listAvailable(
+        organizationId,
         floorId,
         minCapacity,
         roomType,
@@ -114,7 +119,8 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const result = await this.roomService.search(req.query);
+      const organizationId = req.user!.organizationId;
+      const result = await this.roomService.search(req.query, organizationId);
       res.json({
         success: true,
         data: result.data,
@@ -135,8 +141,9 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
+      const organizationId = req.user!.organizationId;
       const includeAssignment = req.query.includeAssignment === 'true';
-      const room = await this.roomService.getById(req.params.id, includeAssignment);
+      const room = await this.roomService.getById(req.params.id, organizationId, includeAssignment);
       res.json({
         success: true,
         data: room,
@@ -156,7 +163,8 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const room = await this.roomService.update(req.params.id, req.body);
+      const organizationId = req.user!.organizationId;
+      const room = await this.roomService.update(req.params.id, req.body, organizationId);
       res.json({
         success: true,
         data: room,
@@ -176,7 +184,8 @@ export class RoomController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      await this.roomService.delete(req.params.id);
+      const organizationId = req.user!.organizationId;
+      await this.roomService.delete(req.params.id, organizationId);
       res.status(204).send();
     } catch (error) {
       next(error);

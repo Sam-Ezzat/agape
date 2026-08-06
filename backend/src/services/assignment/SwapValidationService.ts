@@ -53,7 +53,7 @@ export class SwapValidationService {
   /**
    * Validate if a swap between two groups of attendees is allowed
    */
-  async validateSwap(request: SwapRequest): Promise<SwapValidationResult> {
+  async validateSwap(request: SwapRequest, organizationId: string): Promise<SwapValidationResult> {
     const result: SwapValidationResult = {
       valid: true,
       errors: [],
@@ -62,8 +62,8 @@ export class SwapValidationService {
     };
 
     // Step 1: Load attendees
-    const groupAAttendees = await this.loadAttendees(request.groupA);
-    const groupBAttendees = await this.loadAttendees(request.groupB);
+    const groupAAttendees = await this.loadAttendees(request.groupA, organizationId);
+    const groupBAttendees = await this.loadAttendees(request.groupB, organizationId);
 
     if (groupAAttendees.length !== request.groupA.length) {
       result.valid = false;
@@ -78,8 +78,8 @@ export class SwapValidationService {
     }
 
     // Step 2: Get current room assignments
-    const groupARooms = await this.getRoomAssignments(request.groupA);
-    const groupBRooms = await this.getRoomAssignments(request.groupB);
+    const groupARooms = await this.getRoomAssignments(request.groupA, organizationId);
+    const groupBRooms = await this.getRoomAssignments(request.groupB, organizationId);
 
     if (groupARooms.length === 0) {
       result.valid = false;
@@ -99,7 +99,7 @@ export class SwapValidationService {
       ...groupBRooms.map(r => r.roomId),
     ]);
 
-    const rooms = await this.loadRoomsWithDetails(Array.from(uniqueRoomIds));
+    const rooms = await this.loadRoomsWithDetails(Array.from(uniqueRoomIds), organizationId);
     const roomMap = new Map(rooms.map(r => [r.id, r]));
 
     // Step 4: Validate each swap direction
@@ -262,10 +262,10 @@ export class SwapValidationService {
   /**
    * Load attendees by IDs
    */
-  private async loadAttendees(ids: string[]): Promise<Attendee[]> {
+  private async loadAttendees(ids: string[], organizationId: string): Promise<Attendee[]> {
     const attendees: Attendee[] = [];
     for (const id of ids) {
-      const attendee = await this.attendeeRepository.findById(id);
+      const attendee = await this.attendeeRepository.findByIdScoped(id, organizationId);
       if (attendee) attendees.push(attendee);
     }
     return attendees;
@@ -274,10 +274,10 @@ export class SwapValidationService {
   /**
    * Get room assignments for attendees
    */
-  private async getRoomAssignments(attendeeIds: string[]) {
+  private async getRoomAssignments(attendeeIds: string[], organizationId: string) {
     const assignments = [];
     for (const attendeeId of attendeeIds) {
-      const assignment = await this.assignmentRepository.findByAttendeeId(attendeeId);
+      const assignment = await this.assignmentRepository.findByAttendeeId(attendeeId, organizationId);
       if (assignment) assignments.push(assignment);
     }
     return assignments;
@@ -286,10 +286,10 @@ export class SwapValidationService {
   /**
    * Load rooms with full details including current occupants
    */
-  private async loadRoomsWithDetails(roomIds: string[]): Promise<RoomWithDetails[]> {
+  private async loadRoomsWithDetails(roomIds: string[], organizationId: string): Promise<RoomWithDetails[]> {
     const rooms: RoomWithDetails[] = [];
     for (const roomId of roomIds) {
-      const room = await this.roomRepository.findByIdWithAssignment(roomId);
+      const room = await this.roomRepository.findByIdWithAssignment(roomId, organizationId);
       if (room) {
         rooms.push(room as RoomWithDetails);
       }
@@ -300,16 +300,16 @@ export class SwapValidationService {
   /**
    * Execute the swap (update assignments in database)
    */
-  async executeSwap(request: SwapRequest): Promise<void> {
+  async executeSwap(request: SwapRequest, organizationId: string): Promise<void> {
     logger.info('Executing swap', { request });
 
     // Step 1: Get current assignments
-    const groupAAssignments = await this.getRoomAssignments(request.groupA);
-    const groupBAssignments = await this.getRoomAssignments(request.groupB);
+    const groupAAssignments = await this.getRoomAssignments(request.groupA, organizationId);
+    const groupBAssignments = await this.getRoomAssignments(request.groupB, organizationId);
 
     // Step 2: Delete existing assignments
     for (const assignment of [...groupAAssignments, ...groupBAssignments]) {
-      await this.assignmentRepository.delete(assignment.id);
+      await this.assignmentRepository.deleteScoped(assignment.id, organizationId);
     }
 
     // Step 3: Create new assignments (swap)

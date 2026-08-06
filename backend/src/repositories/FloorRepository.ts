@@ -20,6 +20,7 @@ export class FloorRepository extends BaseRepository<Floor, Prisma.FloorDelegate>
   /**
    * Find floors by building
    * WHY: Most common query - get all floors for a building
+   * NOTE: organizationId ownership of buildingId must be verified by caller (service layer)
    */
   async findByBuildingId(buildingId: string): Promise<Floor[]> {
     return this.model.findMany({
@@ -29,22 +30,23 @@ export class FloorRepository extends BaseRepository<Floor, Prisma.FloorDelegate>
   }
 
   /**
-   * Find all floors
-   * WHY: List all floors across all buildings
+   * Find all floors for an organization
+   * WHY: List all floors across all buildings, scoped to org
    */
-  async findAll(): Promise<Floor[]> {
+  async findAllByOrganization(organizationId: string): Promise<Floor[]> {
     return this.model.findMany({
+      where: { building: { conferenceHouse: { organizationId } } },
       orderBy: { floorNumber: 'asc' },
     });
   }
 
   /**
-   * Find floor with rooms
+   * Find floor with rooms, scoped to organization
    * WHY: Often need floor with its rooms
    */
-  async findByIdWithRooms(id: string): Promise<Floor | null> {
-    return this.model.findUnique({
-      where: { id },
+  async findByIdWithRooms(id: string, organizationId: string): Promise<Floor | null> {
+    return this.model.findFirst({
+      where: { id, building: { conferenceHouse: { organizationId } } },
       include: {
         rooms: {
           orderBy: { roomNumber: 'asc' },
@@ -54,12 +56,12 @@ export class FloorRepository extends BaseRepository<Floor, Prisma.FloorDelegate>
   }
 
   /**
-   * Find floor with full details (building + rooms)
+   * Find floor with full details (building + rooms), scoped to organization
    * WHY: For detailed floor view
    */
-  async findByIdWithFullDetails(id: string): Promise<Floor | null> {
-    return this.model.findUnique({
-      where: { id },
+  async findByIdWithFullDetails(id: string, organizationId: string): Promise<Floor | null> {
+    return this.model.findFirst({
+      where: { id, building: { conferenceHouse: { organizationId } } },
       include: {
         building: {
           include: {
@@ -78,6 +80,39 @@ export class FloorRepository extends BaseRepository<Floor, Prisma.FloorDelegate>
         },
       },
     });
+  }
+
+  /**
+   * Find floor by id scoped to organization (ownership check)
+   */
+  async findByIdScoped(id: string, organizationId: string): Promise<Floor | null> {
+    return this.model.findFirst({ where: { id, building: { conferenceHouse: { organizationId } } } });
+  }
+
+  /**
+   * Update floor scoped to organization
+   */
+  async updateScoped(id: string, organizationId: string, data: any): Promise<Floor> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.update({ where: { id }, data });
+  }
+
+  /**
+   * Delete floor scoped to organization
+   */
+  async deleteScoped(id: string, organizationId: string): Promise<Floor> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.delete({ where: { id } });
+  }
+
+  private async assertOwnership(id: string, organizationId: string): Promise<void> {
+    const existing = await this.model.findFirst({
+      where: { id, building: { conferenceHouse: { organizationId } } },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new Error('Floor not found in organization');
+    }
   }
 
   /**

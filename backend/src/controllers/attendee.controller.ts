@@ -1,6 +1,6 @@
 /**
  * Attendee Controller
- * 
+ *
  * WHY: HTTP layer for attendee operations
  * Thin controller that delegates to AttendeeService
  */
@@ -18,7 +18,8 @@ export class AttendeeController {
    */
   async create(req: Request, res: Response) {
     const data: CreateAttendeeDTO = req.body;
-    const attendee = await this.attendeeService.create(data);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.create(data, organizationId, req.user!.id);
     res.status(201).json({
       success: true,
       data: attendee,
@@ -31,7 +32,8 @@ export class AttendeeController {
    */
   async getById(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.getById(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.getById(id, organizationId);
     res.json({
       success: true,
       data: attendee,
@@ -44,7 +46,8 @@ export class AttendeeController {
    */
   async getDetails(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.getWithDetails(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.getWithDetails(id, organizationId);
     res.json({
       success: true,
       data: attendee,
@@ -57,7 +60,8 @@ export class AttendeeController {
    */
   async getAll(req: Request, res: Response) {
     const params: AttendeeFilterParams = req.query as any;
-    const result = await this.attendeeService.list(params);
+    const organizationId = req.user!.organizationId;
+    const result = await this.attendeeService.list(params, organizationId);
     res.json({
       success: true,
       data: result.data,
@@ -77,7 +81,8 @@ export class AttendeeController {
    */
   async getUnassigned(req: Request, res: Response) {
     const params: UnassignedFilterParams = req.query as any;
-    const attendees = await this.attendeeService.getUnassigned(params);
+    const organizationId = req.user!.organizationId;
+    const attendees = await this.attendeeService.getUnassigned(organizationId, params);
     res.json({
       success: true,
       data: attendees,
@@ -89,7 +94,8 @@ export class AttendeeController {
    * Get attendee statistics
    */
   async getStats(req: Request, res: Response) {
-    const stats = await this.attendeeService.getStatistics();
+    const organizationId = req.user!.organizationId;
+    const stats = await this.attendeeService.getStatistics(organizationId);
     res.json({
       success: true,
       data: stats,
@@ -103,7 +109,8 @@ export class AttendeeController {
   async update(req: Request, res: Response) {
     const { id } = req.params;
     const data: UpdateAttendeeDTO = req.body;
-    const attendee = await this.attendeeService.update(id, data);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.update(id, data, organizationId, req.user!.id);
     res.json({
       success: true,
       data: attendee,
@@ -117,7 +124,8 @@ export class AttendeeController {
   async delete(req: Request, res: Response) {
     const { id } = req.params;
     const { reason } = req.body;
-    await this.attendeeService.delete(id, reason);
+    const organizationId = req.user!.organizationId;
+    await this.attendeeService.delete(id, organizationId, reason, req.user!.id);
     res.json({
       success: true,
       message: 'Attendee deleted successfully',
@@ -130,7 +138,8 @@ export class AttendeeController {
    */
   async bulkDelete(req: Request, res: Response) {
     const { ids, reason } = req.body;
-    const result = await this.attendeeService.bulkDelete(ids, reason);
+    const organizationId = req.user!.organizationId;
+    const result = await this.attendeeService.bulkDelete(ids, organizationId, reason, req.user!.id);
     res.json({
       success: true,
       data: result,
@@ -146,7 +155,8 @@ export class AttendeeController {
    */
   async reactivate(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.reactivate(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.reactivate(id, organizationId, req.user!.id);
     res.json({
       success: true,
       data: attendee,
@@ -160,7 +170,8 @@ export class AttendeeController {
    */
   async checkIn(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.checkIn(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.checkIn(id, organizationId, req.user!.id);
     res.json({
       success: true,
       data: attendee,
@@ -174,7 +185,8 @@ export class AttendeeController {
    */
   async checkOut(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.checkOut(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.checkOut(id, organizationId, req.user!.id);
     res.json({
       success: true,
       data: attendee,
@@ -190,8 +202,9 @@ export class AttendeeController {
   async searchAssigned(req: Request, res: Response) {
     const { query } = req.query;
     const searchQuery = typeof query === 'string' ? query : '';
-    
-    const attendees = await this.attendeeService.searchAssigned(searchQuery);
+    const organizationId = req.user!.organizationId;
+
+    const attendees = await this.attendeeService.searchAssigned(searchQuery, organizationId);
     res.json({
       success: true,
       data: attendees,

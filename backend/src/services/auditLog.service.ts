@@ -1,6 +1,6 @@
 /**
  * Audit Log Service
- * 
+ *
  * WHY: Business logic layer for audit log operations
  * Provides access to system action history
  */
@@ -14,31 +14,31 @@ export class AuditLogService {
    * List audit logs with filters
    * WHY: Browse system action history
    */
-  async list(params: AuditLogFilterParams) {
-    return this.auditLogRepository.search(params);
+  async list(params: AuditLogFilterParams, organizationId: string) {
+    return this.auditLogRepository.search(params, organizationId);
   }
 
   /**
    * Get logs for specific entity
    * WHY: View complete history of a specific item
    */
-  async getByEntity(entityType: string, entityId: string) {
-    return this.auditLogRepository.findByEntity(entityType, entityId);
+  async getByEntity(entityType: string, entityId: string, organizationId: string) {
+    return this.auditLogRepository.findByEntity(entityType, entityId, organizationId);
   }
 
   /**
    * Get recent activity
    * WHY: Dashboard "Recent Actions" widget
    */
-  async getRecentActivity(limit: number = 20) {
-    return this.auditLogRepository.getRecentActivity(limit);
+  async getRecentActivity(organizationId: string, limit: number = 20) {
+    return this.auditLogRepository.getRecentActivity(organizationId, limit);
   }
 
   /**
    * Get statistics
    * WHY: Dashboard metrics
    */
-  async getStatistics() {
-    return this.auditLogRepository.getStatistics();
+  async getStatistics(organizationId: string) {
+    return this.auditLogRepository.getStatistics(organizationId);
   }
 }

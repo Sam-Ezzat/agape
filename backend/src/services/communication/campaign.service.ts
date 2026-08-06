@@ -1,6 +1,6 @@
 /**
  * Campaign Service
- * 
+ *
  * Handles message campaign management, recipient filtering, and campaign execution
  */
 
@@ -42,15 +42,15 @@ export class CampaignService {
   /**
    * Create a new campaign
    */
-  async createCampaign(data: CreateCampaignDto) {
+  async createCampaign(data: CreateCampaignDto, organizationId: string) {
     logger.info('Creating campaign:', data.name);
-    
-    // Verify template exists
-    await templateService.getTemplateById(data.templateId);
-    
-    // Get recipients based on filter
-    const recipients = await this.filterRecipients(data.targetFilter);
-    
+
+    // Verify template exists and belongs to org
+    await templateService.getTemplateById(data.templateId, organizationId);
+
+    // Get recipients based on filter (scoped to org)
+    const recipients = await this.filterRecipients(data.targetFilter, organizationId);
+
     const campaign = await prisma.messageCampaign.create({
       data: {
         name: data.name,
@@ -64,34 +64,38 @@ export class CampaignService {
         batchSize: data.batchSize || 10,
         status: data.scheduledFor ? CampaignStatus.SCHEDULED : CampaignStatus.DRAFT,
         totalPending: recipients.length,
+        organizationId,
       },
       include: {
         template: true,
       },
     });
-    
+
     logger.info('Campaign created:', campaign.id);
     return campaign;
   }
-  
+
   /**
    * Update campaign
    */
-  async updateCampaign(id: string, data: UpdateCampaignDto) {
+  async updateCampaign(id: string, data: UpdateCampaignDto, organizationId: string) {
     logger.info('Updating campaign:', id);
-    
-    // If template is changing, verify it exists
+
+    // Verify ownership
+    await this.getCampaignById(id, organizationId);
+
+    // If template is changing, verify it exists and belongs to org
     if (data.templateId) {
-      await templateService.getTemplateById(data.templateId);
+      await templateService.getTemplateById(data.templateId, organizationId);
     }
-    
+
     // If filter is changing, recalculate recipients
     let recipientCount;
     if (data.targetFilter) {
-      const recipients = await this.filterRecipients(data.targetFilter);
+      const recipients = await this.filterRecipients(data.targetFilter, organizationId);
       recipientCount = recipients.length;
     }
-    
+
     const campaign = await prisma.messageCampaign.update({
       where: { id },
       data: {
@@ -102,49 +106,52 @@ export class CampaignService {
         template: true,
       },
     });
-    
+
     logger.info('Campaign updated:', id);
     return campaign;
   }
-  
+
   /**
    * Delete campaign
    */
-  async deleteCampaign(id: string) {
+  async deleteCampaign(id: string, organizationId: string) {
     logger.info('Deleting campaign:', id);
-    
-    const campaign = await prisma.messageCampaign.findUnique({
-      where: { id },
+
+    const campaign = await prisma.messageCampaign.findFirst({
+      where: { id, organizationId },
     });
-    
+
     if (!campaign) {
       throw new Error(`Campaign not found: ${id}`);
     }
-    
+
     // Only allow deletion of draft or cancelled campaigns
     if (campaign.status === CampaignStatus.IN_PROGRESS) {
       throw new Error('Cannot delete campaign in progress. Pause or cancel it first.');
     }
-    
+
     await prisma.messageCampaign.delete({
       where: { id },
     });
-    
+
     logger.info('Campaign deleted:', id);
   }
-  
+
   /**
    * Get all campaigns with optional filters
    */
-  async getCampaigns(filters?: {
-    status?: CampaignStatus;
-    channel?: MessageChannel;
-  }) {
-    const where: any = {};
-    
+  async getCampaigns(
+    organizationId: string,
+    filters?: {
+      status?: CampaignStatus;
+      channel?: MessageChannel;
+    }
+  ) {
+    const where: any = { organizationId };
+
     if (filters?.status) where.status = filters.status;
     if (filters?.channel) where.channel = filters.channel;
-    
+
     return await prisma.messageCampaign.findMany({
       where,
       include: {
@@ -156,13 +163,13 @@ export class CampaignService {
       orderBy: { createdAt: 'desc' },
     });
   }
-  
+
   /**
    * Get campaign by ID
    */
-  async getCampaignById(id: string) {
-    const campaign = await prisma.messageCampaign.findUnique({
-      where: { id },
+  async getCampaignById(id: string, organizationId: string) {
+    const campaign = await prisma.messageCampaign.findFirst({
+      where: { id, organizationId },
       include: {
         template: true,
         messages: {
@@ -174,22 +181,26 @@ export class CampaignService {
         },
       },
     });
-    
+
     if (!campaign) {
       throw new Error(`Campaign not found: ${id}`);
     }
-    
+
     return campaign;
   }
-  
+
   /**
    * Get paginated messages for a campaign, optionally filtered by status
    */
   async getCampaignMessages(
     campaignId: string,
+    organizationId: string,
     options: { status?: MessageStatus; limit?: number; offset?: number } = {}
   ) {
     const { status, limit = 50, offset = 0 } = options;
+
+    // Verify ownership
+    await this.getCampaignById(campaignId, organizationId);
 
     const where: any = { campaignId };
     if (status) {
@@ -217,59 +228,60 @@ export class CampaignService {
   /**
    * Filter recipients based on criteria
    */
-  async filterRecipients(filter: any) {
+  async filterRecipients(filter: any, organizationId: string) {
     const where: any = {
+      organizationId,
       deletedAt: null, // Exclude soft-deleted attendees
     };
-    
+
     // Phone is required for WhatsApp
     where.phone = { not: null };
-    
+
     // Apply filters
     if (filter.conferenceRole) {
       where.conferenceRole = Array.isArray(filter.conferenceRole)
         ? { in: filter.conferenceRole }
         : filter.conferenceRole;
     }
-    
+
     if (filter.paymentStatus) {
       where.paymentStatus = Array.isArray(filter.paymentStatus)
         ? { in: filter.paymentStatus }
         : filter.paymentStatus;
     }
-    
+
     if (filter.gender) {
       where.gender = filter.gender;
     }
-    
+
     if (filter.church) {
       where.church = { contains: filter.church, mode: 'insensitive' };
     }
-    
+
     if (filter.area) {
       where.area = { contains: filter.area, mode: 'insensitive' };
     }
-    
+
     if (filter.governorate) {
       where.governorate = { contains: filter.governorate, mode: 'insensitive' };
     }
-    
+
     if (filter.hasRoomAssignment !== undefined) {
       where.assignment = filter.hasRoomAssignment
         ? { isNot: null }
         : { is: null };
     }
-    
+
     if (filter.checkedIn !== undefined) {
       where.checkedInAt = filter.checkedIn
         ? { not: null }
         : { is: null };
     }
-    
+
     if (filter.attendeeIds && Array.isArray(filter.attendeeIds)) {
       where.id = { in: filter.attendeeIds };
     }
-    
+
     const attendees = await prisma.attendee.findMany({
       where,
       include: {
@@ -292,25 +304,25 @@ export class CampaignService {
         },
       },
     });
-    
+
     return attendees;
   }
-  
+
   /**
    * Preview recipients for a filter (without creating campaign)
    */
-  async previewRecipients(filter: any) {
-    return await this.filterRecipients(filter);
+  async previewRecipients(filter: any, organizationId: string) {
+    return await this.filterRecipients(filter, organizationId);
   }
-  
+
   /**
    * Start campaign execution
    */
-  async startCampaign(campaignId: string) {
+  async startCampaign(campaignId: string, organizationId: string) {
     logger.info('Starting campaign:', campaignId);
-    
-    const campaign = await this.getCampaignById(campaignId);
-    
+
+    const campaign = await this.getCampaignById(campaignId, organizationId);
+
     if (campaign.status !== CampaignStatus.DRAFT && campaign.status !== CampaignStatus.SCHEDULED) {
       if (campaign.status === CampaignStatus.IN_PROGRESS) {
         throw new Error('Campaign is already running. Use Pause to stop it, or wait for it to complete.');
@@ -320,14 +332,14 @@ export class CampaignService {
       }
       throw new Error(`Cannot start campaign with status: ${campaign.status}`);
     }
-    
-    // Get recipients
-    const recipients = await this.filterRecipients(campaign.targetFilter);
-    
+
+    // Get recipients (scoped to org)
+    const recipients = await this.filterRecipients(campaign.targetFilter, organizationId);
+
     if (recipients.length === 0) {
       throw new Error('No recipients found for campaign');
     }
-    
+
     // Create messages for all recipients. Numbers that can't be normalized to a
     // valid, country-coded international number are created as FAILED up front
     // instead of being queued — otherwise they burn 3 retries each against
@@ -394,51 +406,57 @@ export class CampaignService {
     // Reconcile status immediately in case every recipient had an invalid
     // number — otherwise the campaign would sit at IN_PROGRESS with nothing
     // ever queued and no job event to trigger the completion check.
-    await this.updateCampaignStats(campaignId);
+    await this.updateCampaignStats(campaignId, organizationId);
 
     return { campaign, messages };
   }
-  
+
   /**
    * Pause campaign
    */
-  async pauseCampaign(campaignId: string) {
+  async pauseCampaign(campaignId: string, organizationId: string) {
     logger.info('Pausing campaign:', campaignId);
-    
+
+    await this.getCampaignById(campaignId, organizationId);
+
     const campaign = await prisma.messageCampaign.update({
       where: { id: campaignId },
       data: {
         status: CampaignStatus.PAUSED,
       },
     });
-    
+
     logger.info('Campaign paused:', campaignId);
     return campaign;
   }
-  
+
   /**
    * Resume campaign
    */
-  async resumeCampaign(campaignId: string) {
+  async resumeCampaign(campaignId: string, organizationId: string) {
     logger.info('Resuming campaign:', campaignId);
-    
+
+    await this.getCampaignById(campaignId, organizationId);
+
     const campaign = await prisma.messageCampaign.update({
       where: { id: campaignId },
       data: {
         status: CampaignStatus.IN_PROGRESS,
       },
     });
-    
+
     logger.info('Campaign resumed:', campaignId);
     return campaign;
   }
-  
+
   /**
    * Cancel campaign
    */
-  async cancelCampaign(campaignId: string) {
+  async cancelCampaign(campaignId: string, organizationId: string) {
     logger.info('Cancelling campaign:', campaignId);
-    
+
+    await this.getCampaignById(campaignId, organizationId);
+
     // Cancel all pending messages
     await prisma.message.updateMany({
       where: {
@@ -449,7 +467,7 @@ export class CampaignService {
         status: MessageStatus.CANCELLED,
       },
     });
-    
+
     const campaign = await prisma.messageCampaign.update({
       where: { id: campaignId },
       data: {
@@ -457,38 +475,38 @@ export class CampaignService {
         completedAt: new Date(),
       },
     });
-    
+
     logger.info('Campaign cancelled:', campaignId);
     return campaign;
   }
-  
+
   /**
    * Get campaign statistics
    */
-  async getCampaignStats(campaignId: string): Promise<CampaignStats> {
-    const campaign = await this.getCampaignById(campaignId);
-    
+  async getCampaignStats(campaignId: string, organizationId: string): Promise<CampaignStats> {
+    const campaign = await this.getCampaignById(campaignId, organizationId);
+
     const stats = await prisma.message.groupBy({
       by: ['status'],
       where: { campaignId },
       _count: true,
     });
-    
+
     const totalSent = stats
       .filter(s => ['SENT', 'DELIVERED', 'READ'].includes(s.status))
       .reduce((sum, s) => sum + s._count, 0);
-    
+
     const totalFailed = stats
       .filter(s => s.status === 'FAILED')
       .reduce((sum, s) => sum + s._count, 0);
-    
+
     const totalPending = stats
       .filter(s => ['PENDING', 'QUEUED', 'SENDING'].includes(s.status))
       .reduce((sum, s) => sum + s._count, 0);
-    
+
     const totalRecipients = campaign.recipientCount;
     const successRate = totalRecipients > 0 ? (totalSent / totalRecipients) * 100 : 0;
-    
+
     return {
       totalRecipients,
       totalSent,
@@ -498,13 +516,13 @@ export class CampaignService {
       status: campaign.status,
     };
   }
-  
+
   /**
    * Update campaign statistics
    */
-  async updateCampaignStats(campaignId: string) {
-    const stats = await this.getCampaignStats(campaignId);
-    
+  async updateCampaignStats(campaignId: string, organizationId: string) {
+    const stats = await this.getCampaignStats(campaignId, organizationId);
+
     await prisma.messageCampaign.update({
       where: { id: campaignId },
       data: {
@@ -513,7 +531,7 @@ export class CampaignService {
         totalPending: stats.totalPending,
       },
     });
-    
+
     // Check if campaign has finished processing (nothing left pending)
     if (stats.totalPending === 0 && stats.status === CampaignStatus.IN_PROGRESS) {
       // Every message permanently failed (e.g. WhatsApp was never connected) —

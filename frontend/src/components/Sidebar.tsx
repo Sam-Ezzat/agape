@@ -5,7 +5,7 @@
  */
 
 import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Users,
@@ -19,8 +19,10 @@ import {
   MessageCircle,
   FileText,
   Send,
-  ChevronDown
+  ChevronDown,
+  LogOut,
 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface NavChild {
   path: string;
@@ -42,6 +44,8 @@ const COMMUNICATION_ENABLED = false;
 
 export default function Sidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -68,7 +72,13 @@ export default function Sidebar() {
           } satisfies NavItem,
         ]
       : []),
+    ...(user?.role === 'ADMIN' ? [{ path: '/users', icon: Users, label: 'Users' }] : []),
   ];
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
 
   const isGroupActive = (item: NavItem) =>
     !!item.children?.some((child) => isActive(child.path));
@@ -88,7 +98,7 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-white border-r border-gray-200 shadow-sm overflow-y-auto">
+    <aside className="fixed left-0 top-0 h-screen w-64 bg-white border-r border-gray-200 shadow-sm flex flex-col">
       <div className="p-6">
         <h1 className="text-xl font-bold text-primary-600">
           Agape Conference
@@ -96,7 +106,7 @@ export default function Sidebar() {
         <p className="text-xs text-gray-500 mt-1">Management System</p>
       </div>
 
-      <nav className="px-3 pb-4">
+      <nav className="px-3 pb-4 flex-1 overflow-y-auto">
         {navItems.map((item) => {
           const Icon = item.icon;
 
@@ -170,6 +180,31 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {user && (
+        <div className="border-t border-gray-200 p-3">
+          <Link
+            to="/profile"
+            className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-semibold shrink-0">
+              {(user.name || user.email || '?').charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{user.name || user.email}</p>
+              <p className="text-xs text-gray-500 truncate">{user.email}</p>
+            </div>
+          </Link>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-lg text-gray-600 hover:bg-gray-50 hover:text-red-600 transition-colors text-sm"
+          >
+            <LogOut size={16} />
+            <span>Log out</span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

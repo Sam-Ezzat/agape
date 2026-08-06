@@ -63,7 +63,28 @@ const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  // WHY: Auth is an httpOnly cookie set by POST /auth/login — this must be
+  // on for the cookie to ride cross-origin requests (frontend/backend on
+  // different domains in production).
+  withCredentials: true,
 });
+
+// WHY: A 401 means the session is missing/expired — bounce to login instead
+// of letting every call site handle it individually. Skip this on the
+// /auth/* endpoints themselves so a failed login attempt doesn't redirect.
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      !error.config?.url?.includes('/auth/')
+    ) {
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
 
 // WHY: Centralized error handling
 const handleApiError = (error: AxiosError | Error) => {
@@ -74,6 +95,70 @@ const handleApiError = (error: AxiosError | Error) => {
   }
   toastError(error.message);
   throw error;
+};
+
+/**
+ * Auth API
+ * Backend routes: /api/auth
+ */
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: 'ADMIN' | 'MEMBER';
+  organizationId: string;
+  organization: { id: string; name: string };
+}
+
+export const authApi = {
+  login: async (email: string, password: string): Promise<AuthUser> => {
+    const { data } = await apiClient.post('/auth/login', { email, password });
+    return data.data;
+  },
+  logout: async (): Promise<void> => {
+    await apiClient.post('/auth/logout');
+  },
+  me: async (): Promise<AuthUser> => {
+    const { data } = await apiClient.get('/auth/me');
+    return data.data;
+  },
+  updateProfile: async (payload: { name?: string; email?: string }): Promise<AuthUser> => {
+    const { data } = await apiClient.patch('/auth/me', payload);
+    return data.data;
+  },
+  changePassword: async (payload: { currentPassword: string; newPassword: string }): Promise<void> => {
+    await apiClient.post('/auth/change-password', payload);
+  },
+};
+
+/**
+ * User Management API (admin-only)
+ * Backend routes: /api/users
+ */
+export interface OrgUser {
+  id: string;
+  email: string;
+  name: string;
+  role: 'ADMIN' | 'MEMBER';
+  createdAt: string;
+}
+
+export const userApi = {
+  list: async (): Promise<OrgUser[]> => {
+    const { data } = await apiClient.get('/users');
+    return data.data;
+  },
+  create: async (payload: { name: string; email: string; role: 'ADMIN' | 'MEMBER' }): Promise<{ user: OrgUser; temporaryPassword: string }> => {
+    const { data } = await apiClient.post('/users', payload);
+    return data.data;
+  },
+  updateRole: async (id: string, role: 'ADMIN' | 'MEMBER'): Promise<OrgUser> => {
+    const { data } = await apiClient.patch(`/users/${id}/role`, { role });
+    return data.data;
+  },
+  remove: async (id: string): Promise<void> => {
+    await apiClient.delete(`/users/${id}`);
+  },
 };
 
 /**

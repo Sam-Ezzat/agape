@@ -1,9 +1,9 @@
 /**
  * ConferenceHouse Controller
- * 
+ *
  * WHY: HTTP request handlers for conference house endpoints
  * Thin layer that delegates to service layer
- * 
+ *
  * SOLID Principles:
  * - Single Responsibility: Only handles HTTP request/response
  * - Dependency Injection: Receives service via constructor
@@ -30,7 +30,8 @@ export class ConferenceHouseController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const conferenceHouse = await this.conferenceHouseService.create(req.body);
+      const organizationId = req.user!.organizationId;
+      const conferenceHouse = await this.conferenceHouseService.create(req.body, organizationId);
       res.status(201).json({
         success: true,
         data: conferenceHouse,
@@ -50,7 +51,8 @@ export class ConferenceHouseController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const result = await this.conferenceHouseService.list(req.query);
+      const organizationId = req.user!.organizationId;
+      const result = await this.conferenceHouseService.list(req.query, organizationId);
       res.json({
         success: true,
         data: result.data,
@@ -71,9 +73,11 @@ export class ConferenceHouseController {
     next: NextFunction
   ): Promise<void> => {
     try {
+      const organizationId = req.user!.organizationId;
       const includeBuildings = req.query.includeBuildings === 'true';
       const conferenceHouse = await this.conferenceHouseService.getById(
         req.params.id,
+        organizationId,
         includeBuildings
       );
       res.json({
@@ -95,8 +99,10 @@ export class ConferenceHouseController {
     next: NextFunction
   ): Promise<void> => {
     try {
+      const organizationId = req.user!.organizationId;
       const conferenceHouse = await this.conferenceHouseService.getWithFullHierarchy(
-        req.params.id
+        req.params.id,
+        organizationId
       );
       res.json({
         success: true,
@@ -117,7 +123,8 @@ export class ConferenceHouseController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const conferenceHouse = await this.conferenceHouseService.update(req.params.id, req.body);
+      const organizationId = req.user!.organizationId;
+      const conferenceHouse = await this.conferenceHouseService.update(req.params.id, req.body, organizationId);
       res.json({
         success: true,
         data: conferenceHouse,
@@ -137,7 +144,8 @@ export class ConferenceHouseController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      await this.conferenceHouseService.delete(req.params.id);
+      const organizationId = req.user!.organizationId;
+      await this.conferenceHouseService.delete(req.params.id, organizationId);
       res.status(204).send();
     } catch (error) {
       next(error);

@@ -32,7 +32,9 @@ export class AutoAssignmentController {
    */
   async execute(req: Request, res: Response) {
     const params: RunAutoAssignmentDTO = req.body;
-    
+    const organizationId = req.user!.organizationId;
+    const roomName = `org:${organizationId}:conference:${params.conferenceHouseId}`;
+
     logger.info('Auto-assignment execution started', {
       conferenceHouseId: params.conferenceHouseId,
       dryRun: params.dryRun,
@@ -44,7 +46,7 @@ export class AutoAssignmentController {
       // Emit to conference-specific room
       const notificationService = getNotificationService();
       notificationService.notifyRoom(
-        params.conferenceHouseId,
+        roomName,
         NotificationEvent.AUTO_ASSIGNMENT_PROGRESS,
         NotificationType.INFO,
         this.formatProgressMessage(event),
@@ -54,7 +56,7 @@ export class AutoAssignmentController {
     };
 
     try {
-      const result = await this.autoAssignmentService.execute(params, onProgress);
+      const result = await this.autoAssignmentService.execute(params, organizationId, onProgress);
 
       logger.info('Auto-assignment execution completed', {
         success: result.success,
@@ -66,7 +68,7 @@ export class AutoAssignmentController {
       // Send completion notification
       const notificationService = getNotificationService();
       notificationService.notifyRoom(
-        params.conferenceHouseId,
+        roomName,
         NotificationEvent.AUTO_ASSIGNMENT_COMPLETE,
         result.success ? NotificationType.SUCCESS : NotificationType.ERROR,
         result.success
@@ -86,7 +88,7 @@ export class AutoAssignmentController {
       // Send error notification
       const notificationService = getNotificationService();
       notificationService.notifyRoom(
-        params.conferenceHouseId,
+        roomName,
         NotificationEvent.AUTO_ASSIGNMENT_ERROR,
         NotificationType.ERROR,
         error instanceof Error ? error.message : 'Auto-assignment failed',
@@ -106,6 +108,8 @@ export class AutoAssignmentController {
       ...req.body,
       dryRun: true, // Force dry run mode
     };
+    const organizationId = req.user!.organizationId;
+    const roomName = `org:${organizationId}:conference:${params.conferenceHouseId}`;
 
     logger.info('Auto-assignment preview started', {
       conferenceHouseId: params.conferenceHouseId,
@@ -115,7 +119,7 @@ export class AutoAssignmentController {
     const onProgress = (event: AutoAssignmentProgressEvent) => {
       const notificationService = getNotificationService();
       notificationService.notifyRoom(
-        params.conferenceHouseId,
+        roomName,
         NotificationEvent.AUTO_ASSIGNMENT_PREVIEW_PROGRESS,
         NotificationType.INFO,
         this.formatProgressMessage(event),
@@ -125,7 +129,7 @@ export class AutoAssignmentController {
     };
 
     try {
-      const result = await this.autoAssignmentService.execute(params, onProgress);
+      const result = await this.autoAssignmentService.execute(params, organizationId, onProgress);
 
       logger.info('Auto-assignment preview completed', {
         assignmentsWouldCreate: result.assignmentsCreated,
@@ -135,7 +139,7 @@ export class AutoAssignmentController {
       // Send completion notification
       const notificationService = getNotificationService();
       notificationService.notifyRoom(
-        params.conferenceHouseId,
+        roomName,
         NotificationEvent.AUTO_ASSIGNMENT_COMPLETE,
         result.success ? NotificationType.SUCCESS : NotificationType.ERROR,
         `Preview completed: ${result.assignmentsCreated} assignments would be created (no changes made to database)`,
@@ -154,7 +158,7 @@ export class AutoAssignmentController {
       // Send error notification
       const notificationService = getNotificationService();
       notificationService.notifyRoom(
-        params.conferenceHouseId,
+        roomName,
         NotificationEvent.AUTO_ASSIGNMENT_ERROR,
         NotificationType.ERROR,
         error instanceof Error ? error.message : 'Preview failed',
@@ -171,8 +175,9 @@ export class AutoAssignmentController {
    */
   async getConfig(req: Request, res: Response) {
     const { conferenceHouseId } = req.params;
+    const organizationId = req.user!.organizationId;
 
-    const config = await this.configRepository.getOrCreateDefault(conferenceHouseId);
+    const config = await this.configRepository.getOrCreateDefault(conferenceHouseId, organizationId);
 
     res.status(200).json({
       success: true,
@@ -186,6 +191,7 @@ export class AutoAssignmentController {
    */
   async updateConfig(req: Request, res: Response) {
     const { conferenceHouseId } = req.params;
+    const organizationId = req.user!.organizationId;
     const updates = req.body;
 
     // Validate rule weights sum to approximately 1.0 (allow small floating point errors)
@@ -202,7 +208,7 @@ export class AutoAssignmentController {
       }
     }
 
-    const config = await this.configRepository.updateByConferenceHouse(conferenceHouseId, updates);
+    const config = await this.configRepository.updateByConferenceHouse(conferenceHouseId, organizationId, updates);
 
     logger.info('Auto-assignment configuration updated', {
       conferenceHouseId,
@@ -212,7 +218,7 @@ export class AutoAssignmentController {
     // Notify connected clients of config change
     const notificationService = getNotificationService();
     notificationService.notifyRoom(
-      conferenceHouseId,
+      `org:${organizationId}:conference:${conferenceHouseId}`,
       NotificationEvent.AUTO_ASSIGNMENT_CONFIG_UPDATED,
       NotificationType.INFO,
       'Auto-assignment configuration has been updated',
@@ -232,16 +238,18 @@ export class AutoAssignmentController {
    */
   async getStatus(req: Request, res: Response) {
     const { conferenceHouseId } = req.params;
+    const organizationId = req.user!.organizationId;
 
     // Get attendee statistics
-    const attendeeStats = await this.attendeeRepository.getStatistics();
+    const attendeeStats = await this.attendeeRepository.getStatistics(organizationId);
     const totalAttendees = attendeeStats.total;
     const assignedAttendees = attendeeStats.withAssignment;
     const unassignedAttendees = totalAttendees - assignedAttendees;
 
     // Get room statistics for this conference house
     const roomStats = await this.roomRepository.getRoomStatisticsByConferenceHouse(
-      conferenceHouseId
+      conferenceHouseId,
+      organizationId
     );
 
     res.status(200).json({

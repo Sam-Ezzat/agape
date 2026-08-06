@@ -1,6 +1,6 @@
 /**
  * Campaign Controller
- * 
+ *
  * Handles HTTP requests for campaign management
  */
 
@@ -8,7 +8,7 @@ import { Request, Response } from 'express';
 import { campaignService } from '@/services/communication';
 import { asyncHandler } from '@/middleware/asyncHandler';
 import { messageQueueService } from '@/services/communication';
-import { getWhatsAppServiceInstance } from '@/controllers/communication/whatsapp.controller';
+import { getWhatsAppService } from '@/services/communication/whatsapp.registry';
 import logger from '@/utils/logger';
 
 /**
@@ -17,12 +17,13 @@ import logger from '@/utils/logger';
  */
 export const getCampaigns = asyncHandler(async (req: Request, res: Response) => {
   const { status, channel } = req.query;
-  
-  const campaigns = await campaignService.getCampaigns({
+  const organizationId = req.user!.organizationId;
+
+  const campaigns = await campaignService.getCampaigns(organizationId, {
     status: status as any,
     channel: channel as any,
   });
-  
+
   res.json({
     success: true,
     data: campaigns,
@@ -36,9 +37,10 @@ export const getCampaigns = asyncHandler(async (req: Request, res: Response) => 
  */
 export const getCampaignById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const campaign = await campaignService.getCampaignById(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  const campaign = await campaignService.getCampaignById(id, organizationId);
+
   res.json({
     success: true,
     data: campaign,
@@ -50,10 +52,11 @@ export const getCampaignById = asyncHandler(async (req: Request, res: Response) 
  * POST /api/campaigns
  */
 export const createCampaign = asyncHandler(async (req: Request, res: Response) => {
-  const campaign = await campaignService.createCampaign(req.body);
-  
+  const organizationId = req.user!.organizationId;
+  const campaign = await campaignService.createCampaign(req.body, organizationId);
+
   logger.info('Campaign created:', campaign.id);
-  
+
   res.status(201).json({
     success: true,
     data: campaign,
@@ -67,11 +70,12 @@ export const createCampaign = asyncHandler(async (req: Request, res: Response) =
  */
 export const updateCampaign = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const campaign = await campaignService.updateCampaign(id, req.body);
-  
+  const organizationId = req.user!.organizationId;
+
+  const campaign = await campaignService.updateCampaign(id, req.body, organizationId);
+
   logger.info('Campaign updated:', id);
-  
+
   res.json({
     success: true,
     data: campaign,
@@ -85,11 +89,12 @@ export const updateCampaign = asyncHandler(async (req: Request, res: Response) =
  */
 export const deleteCampaign = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  await campaignService.deleteCampaign(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  await campaignService.deleteCampaign(id, organizationId);
+
   logger.info('Campaign deleted:', id);
-  
+
   res.json({
     success: true,
     message: 'Campaign deleted successfully',
@@ -102,9 +107,10 @@ export const deleteCampaign = asyncHandler(async (req: Request, res: Response) =
  */
 export const startCampaign = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  const organizationId = req.user!.organizationId;
 
   // Fail fast instead of creating messages that are guaranteed to fail in the worker
-  const whatsappService = getWhatsAppServiceInstance();
+  const whatsappService = getWhatsAppService(organizationId);
   if (!whatsappService || !whatsappService.getStatus().isReady) {
     return res.status(400).json({
       success: false,
@@ -113,13 +119,13 @@ export const startCampaign = asyncHandler(async (req: Request, res: Response) =>
   }
 
   // Start campaign (creates messages)
-  const result = await campaignService.startCampaign(id);
-  
+  const result = await campaignService.startCampaign(id, organizationId);
+
   // Add messages to queue
   await messageQueueService.addCampaignMessages(id);
-  
+
   logger.info('Campaign started:', id);
-  
+
   res.json({
     success: true,
     data: result.campaign,
@@ -133,14 +139,15 @@ export const startCampaign = asyncHandler(async (req: Request, res: Response) =>
  */
 export const pauseCampaign = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const campaign = await campaignService.pauseCampaign(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  const campaign = await campaignService.pauseCampaign(id, organizationId);
+
   // Pause the queue
   await messageQueueService.pauseQueue();
-  
+
   logger.info('Campaign paused:', id);
-  
+
   res.json({
     success: true,
     data: campaign,
@@ -154,8 +161,9 @@ export const pauseCampaign = asyncHandler(async (req: Request, res: Response) =>
  */
 export const resumeCampaign = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  const organizationId = req.user!.organizationId;
 
-  const whatsappService = getWhatsAppServiceInstance();
+  const whatsappService = getWhatsAppService(organizationId);
   if (!whatsappService || !whatsappService.getStatus().isReady) {
     return res.status(400).json({
       success: false,
@@ -163,13 +171,13 @@ export const resumeCampaign = asyncHandler(async (req: Request, res: Response) =
     });
   }
 
-  const campaign = await campaignService.resumeCampaign(id);
-  
+  const campaign = await campaignService.resumeCampaign(id, organizationId);
+
   // Resume the queue
   await messageQueueService.resumeQueue();
-  
+
   logger.info('Campaign resumed:', id);
-  
+
   res.json({
     success: true,
     data: campaign,
@@ -183,11 +191,12 @@ export const resumeCampaign = asyncHandler(async (req: Request, res: Response) =
  */
 export const cancelCampaign = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const campaign = await campaignService.cancelCampaign(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  const campaign = await campaignService.cancelCampaign(id, organizationId);
+
   logger.info('Campaign cancelled:', id);
-  
+
   res.json({
     success: true,
     data: campaign,
@@ -201,9 +210,10 @@ export const cancelCampaign = asyncHandler(async (req: Request, res: Response) =
  */
 export const getCampaignStats = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const stats = await campaignService.getCampaignStats(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  const stats = await campaignService.getCampaignStats(id, organizationId);
+
   res.json({
     success: true,
     data: stats,
@@ -217,8 +227,9 @@ export const getCampaignStats = asyncHandler(async (req: Request, res: Response)
 export const getCampaignMessages = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { status, limit, offset } = req.query;
+  const organizationId = req.user!.organizationId;
 
-  const { messages, total } = await campaignService.getCampaignMessages(id, {
+  const { messages, total } = await campaignService.getCampaignMessages(id, organizationId, {
     status: status as any,
     limit: limit ? Number(limit) : undefined,
     offset: offset ? Number(offset) : undefined,
@@ -237,16 +248,17 @@ export const getCampaignMessages = asyncHandler(async (req: Request, res: Respon
  */
 export const previewRecipients = asyncHandler(async (req: Request, res: Response) => {
   const { targetFilter } = req.body;
-  
+  const organizationId = req.user!.organizationId;
+
   if (!targetFilter) {
     return res.status(400).json({
       success: false,
       message: 'targetFilter is required',
     });
   }
-  
-  const recipients = await campaignService.previewRecipients(targetFilter);
-  
+
+  const recipients = await campaignService.previewRecipients(targetFilter, organizationId);
+
   res.json({
     success: true,
     data: recipients,

@@ -7,7 +7,8 @@
  * Run with: npm run prisma:seed
  */
 
-import { PrismaClient, ConferenceRole, Gender, RoomType, TemplateCategory } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import { PrismaClient, ConferenceRole, Gender, RoomType, TemplateCategory, UserRole } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -29,12 +30,32 @@ async function main(): Promise<void> {
     await prisma.building.deleteMany();
     await prisma.autoAssignmentConfig.deleteMany();
     await prisma.conferenceHouse.deleteMany();
+    await prisma.user.deleteMany();
+    await prisma.organization.deleteMany();
   }
+
+  // Create Organization + admin user (tenant boundary — see multi-tenancy plan)
+  console.log('🏢 Creating organization and admin user...');
+  const organization = await prisma.organization.create({
+    data: { name: 'Agape Conference Center' },
+  });
+
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'ChangeMe123!';
+  await prisma.user.create({
+    data: {
+      organizationId: organization.id,
+      email: process.env.SEED_ADMIN_EMAIL || 'admin@example.com',
+      passwordHash: await bcrypt.hash(adminPassword, 10),
+      name: 'Admin',
+      role: UserRole.ADMIN,
+    },
+  });
 
   // Create Conference House
   console.log('🏛️  Creating conference house...');
   const conferenceHouse = await prisma.conferenceHouse.create({
     data: {
+      organizationId: organization.id,
       name: 'Agape Conference Center',
       description: 'Main conference venue with multiple buildings and accommodation facilities',
     },
@@ -243,7 +264,7 @@ async function main(): Promise<void> {
   await Promise.all(
     attendees.map((attendee) =>
       prisma.attendee.create({
-        data: attendee,
+        data: { ...attendee, organizationId: organization.id },
       })
     )
   );
@@ -283,6 +304,7 @@ async function main(): Promise<void> {
   console.log('💬 Creating communication settings...');
   await prisma.communicationSettings.create({
     data: {
+      organizationId: organization.id,
       whatsappEnabled: true,
       whatsappSessionActive: false,
       whatsappDelayMin: 3000,
@@ -299,6 +321,7 @@ async function main(): Promise<void> {
   const templates = await Promise.all([
     prisma.messageTemplate.create({
       data: {
+        organizationId: organization.id,
         name: 'Room Assignment Notification (Arabic)',
         description: 'Notify attendee about their room assignment',
         category: 'ROOM_ASSIGNMENT',
@@ -332,6 +355,7 @@ async function main(): Promise<void> {
     }),
     prisma.messageTemplate.create({
       data: {
+        organizationId: organization.id,
         name: 'Check-in Reminder (Arabic)',
         description: 'Remind attendee about check-in',
         category: 'CHECK_IN',
@@ -362,6 +386,7 @@ async function main(): Promise<void> {
     }),
     prisma.messageTemplate.create({
       data: {
+        organizationId: organization.id,
         name: 'Payment Confirmation (Arabic)',
         description: 'Confirm payment received',
         category: 'PAYMENT',
@@ -393,6 +418,7 @@ async function main(): Promise<void> {
     }),
     prisma.messageTemplate.create({
       data: {
+        organizationId: organization.id,
         name: 'Welcome Message (Arabic)',
         description: 'Welcome new attendee',
         category: 'WELCOME',

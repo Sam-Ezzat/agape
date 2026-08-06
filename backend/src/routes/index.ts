@@ -6,6 +6,8 @@
  */
 
 import { Router } from 'express';
+import authRoutes from './auth.routes';
+import { authenticate } from '@/middleware/authenticate';
 import conferenceHouseRoutes from './conferenceHouse.routes';
 import buildingRoutes from './building.routes';
 import floorRoutes from './floor.routes';
@@ -18,10 +20,18 @@ import excelRoutes from './excel.routes';
 import autoAssignmentRoutes from './autoAssignment.routes';
 import searchRoutes from './search.routes';
 import communicationRoutes from './communication';
+import userRoutes from './user.routes';
 
 const router = Router();
 
 // Mount routes with /api prefix
+
+// Public auth routes (login must stay reachable without a session)
+router.use('/auth', authRoutes);
+
+// WHY: Everything below this line is tenant data — gate it globally here
+// instead of touching every individual route file.
+router.use(authenticate);
 
 // Phase 2: Core Infrastructure Routes
 router.use('/conference-houses', conferenceHouseRoutes);
@@ -46,6 +56,9 @@ router.use('/communication', communicationRoutes);
 
 // Search utilities
 router.use('/search', searchRoutes);
+
+// Organization user management (admin-only, see user.routes.ts)
+router.use('/users', userRoutes);
 
 // API info endpoint
 router.get('/', (req, res) => {
@@ -73,6 +86,7 @@ router.get('/', (req, res) => {
       campaigns: '/api/communication/campaigns',
       messages: '/api/communication/messages',
       whatsapp: '/api/communication/whatsapp',
+      users: '/api/users',
     },
     documentation: 'See README.md for API documentation',
   });

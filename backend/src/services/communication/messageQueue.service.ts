@@ -14,6 +14,7 @@ const prisma = new PrismaClient();
 export interface MessageJob {
   messageId: string;
   campaignId: string;
+  organizationId: string;
   phone: string;
   body: string;
   subject?: string;
@@ -147,20 +148,23 @@ export class MessageQueueService {
     const delayBetween = campaign.delayBetweenMessages;
     const batchSize = campaign.batchSize;
     
-    // Get global communication settings for batch delay
-    const settings = await prisma.communicationSettings.findFirst();
+    // Get org-scoped communication settings for batch delay
+    const settings = campaign.organizationId
+      ? await prisma.communicationSettings.findUnique({ where: { organizationId: campaign.organizationId } })
+      : null;
     const batchDelay = settings?.whatsappBatchDelay || 120000; // 2 minutes default
-    
+
     // Add messages in batches
     let totalAdded = 0;
     for (let i = 0; i < messages.length; i += batchSize) {
       const batch = messages.slice(i, i + batchSize);
       const batchNumber = Math.floor(i / batchSize);
       const batchStartDelay = batchNumber * batchDelay;
-      
+
       const jobs: MessageJob[] = batch.map(msg => ({
         messageId: msg.id,
         campaignId: msg.campaignId,
+        organizationId: msg.campaign.organizationId!,
         phone: msg.recipient,
         body: msg.body,
         subject: msg.subject || undefined,

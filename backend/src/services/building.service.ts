@@ -1,9 +1,9 @@
 /**
  * Building Service
- * 
+ *
  * WHY: Business logic layer for building operations
  * Handles validation, business rules, and coordinates repository operations
- * 
+ *
  * SOLID Principles:
  * - Single Responsibility: Only handles building business logic
  * - Dependency Injection: Receives repositories via constructor
@@ -27,9 +27,9 @@ export class BuildingService {
    * Create new building
    * WHY: Validates conference house exists and creates building
    */
-  async create(data: CreateBuildingDTO): Promise<Building> {
-    // Business rule: Conference house must exist
-    const conferenceHouse = await this.conferenceHouseRepository.findById(data.conferenceHouseId);
+  async create(data: CreateBuildingDTO, organizationId: string): Promise<Building> {
+    // Business rule: Conference house must exist and belong to org
+    const conferenceHouse = await this.conferenceHouseRepository.findByIdScoped(data.conferenceHouseId, organizationId);
     if (!conferenceHouse) {
       throw new AppError(404, 'Conference house not found');
     }
@@ -40,6 +40,7 @@ export class BuildingService {
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_CREATED,
         NotificationType.SUCCESS,
         `Building "${building.name}" created in ${conferenceHouse.name}`,
@@ -55,10 +56,10 @@ export class BuildingService {
   /**
    * Get building by ID
    */
-  async getById(id: string, includeFloors: boolean = false): Promise<Building> {
+  async getById(id: string, organizationId: string, includeFloors: boolean = false): Promise<Building> {
     const building = includeFloors
-      ? await this.buildingRepository.findByIdWithFloors(id)
-      : await this.buildingRepository.findById(id);
+      ? await this.buildingRepository.findByIdWithFloors(id, organizationId)
+      : await this.buildingRepository.findByIdScoped(id, organizationId);
 
     if (!building) {
       throw new AppError(404, 'Building not found');
@@ -70,8 +71,8 @@ export class BuildingService {
   /**
    * Get building with full details
    */
-  async getWithFullDetails(id: string): Promise<Building> {
-    const building = await this.buildingRepository.findByIdWithFullDetails(id);
+  async getWithFullDetails(id: string, organizationId: string): Promise<Building> {
+    const building = await this.buildingRepository.findByIdWithFullDetails(id, organizationId);
 
     if (!building) {
       throw new AppError(404, 'Building not found');
@@ -83,9 +84,9 @@ export class BuildingService {
   /**
    * List buildings by conference house
    */
-  async listByConferenceHouse(conferenceHouseId: string): Promise<Building[]> {
-    // Verify conference house exists
-    const conferenceHouse = await this.conferenceHouseRepository.findById(conferenceHouseId);
+  async listByConferenceHouse(conferenceHouseId: string, organizationId: string): Promise<Building[]> {
+    // Verify conference house exists and belongs to org
+    const conferenceHouse = await this.conferenceHouseRepository.findByIdScoped(conferenceHouseId, organizationId);
     if (!conferenceHouse) {
       throw new AppError(404, 'Conference house not found');
     }
@@ -97,8 +98,8 @@ export class BuildingService {
    * List all buildings
    * WHY: Get all buildings for admin dashboard
    */
-  async listAll(): Promise<Building[]> {
-    return this.buildingRepository.findAll();
+  async listAll(organizationId: string): Promise<Building[]> {
+    return this.buildingRepository.findAllByOrganization(organizationId);
   }
 
   /**
@@ -106,7 +107,8 @@ export class BuildingService {
    */
   async search(
     conferenceHouseId: string,
-    params: SearchParams
+    params: SearchParams,
+    organizationId: string
   ): Promise<{
     data: Building[];
     pagination: {
@@ -116,6 +118,12 @@ export class BuildingService {
       totalPages: number;
     };
   }> {
+    // Verify conference house exists and belongs to org
+    const conferenceHouse = await this.conferenceHouseRepository.findByIdScoped(conferenceHouseId, organizationId);
+    if (!conferenceHouse) {
+      throw new AppError(404, 'Conference house not found');
+    }
+
     const { page = 1, limit = 20, search } = params;
     const skip = (page - 1) * limit;
 
@@ -139,13 +147,14 @@ export class BuildingService {
   /**
    * Update building
    */
-  async update(id: string, data: UpdateBuildingDTO): Promise<Building> {
-    await this.getById(id);
-    const updated = await this.buildingRepository.update(id, data);
+  async update(id: string, data: UpdateBuildingDTO, organizationId: string): Promise<Building> {
+    await this.getById(id, organizationId);
+    const updated = await this.buildingRepository.updateScoped(id, organizationId, data);
 
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_UPDATED,
         NotificationType.INFO,
         `Building "${updated.name}" updated`,
@@ -161,8 +170,8 @@ export class BuildingService {
   /**
    * Delete building
    */
-  async delete(id: string): Promise<void> {
-    const building = await this.getById(id);
+  async delete(id: string, organizationId: string): Promise<void> {
+    const building = await this.getById(id, organizationId);
 
     // Business rule: Could check if has floors (optional)
     // const floorsCount = await this.floorRepository.countByBuilding(id);
@@ -170,11 +179,12 @@ export class BuildingService {
     //   throw new AppError(400, 'Cannot delete building with floors');
     // }
 
-    await this.buildingRepository.delete(id);
+    await this.buildingRepository.deleteScoped(id, organizationId);
 
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_DELETED,
         NotificationType.WARNING,
         `Building "${building.name}" deleted`,

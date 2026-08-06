@@ -121,6 +121,7 @@ export class AutoAssignmentService {
    */
   async execute(
     params: RunAutoAssignmentDTO,
+    organizationId: string,
     onProgress?: ProgressCallback
   ): Promise<AutoAssignmentExecutionResult> {
     const startTime = Date.now();
@@ -140,7 +141,7 @@ export class AutoAssignmentService {
         stage: { number: 1, name: 'Load Configuration', status: 'started' }
       });
 
-      const config = await this.configRepository.getOrCreateDefault(params.conferenceHouseId);
+      const config = await this.configRepository.getOrCreateDefault(params.conferenceHouseId, organizationId);
       const enabledBuildings = params.buildingIds || config.enabledBuildings;
 
       stages.push({
@@ -163,8 +164,8 @@ export class AutoAssignmentService {
         stage: { number: 2, name: 'Load Data', status: 'started' }
       });
 
-      const allAttendees = await this.attendeeRepository.findAll();
-      const availableRooms = await this.loadAvailableRooms(enabledBuildings);
+      const allAttendees = await this.attendeeRepository.findAllByOrganization(organizationId);
+      const availableRooms = await this.loadAvailableRooms(enabledBuildings, organizationId);
       
       // Filter out deleted attendees
       let unassignedAttendees = allAttendees.filter(a => !a.deletedAt);
@@ -321,6 +322,7 @@ export class AutoAssignmentService {
         sortedGroups,
         availableRooms,
         allAttendees,
+        organizationId,
         params.dryRun || false,
         onProgress
       );
@@ -443,8 +445,8 @@ export class AutoAssignmentService {
   /**
    * Load available rooms from enabled buildings
    */
-  private async loadAvailableRooms(enabledBuildingIds: string[]): Promise<RoomWithDetails[]> {
-    const rooms = await this.roomRepository.findForAutoAssignment(enabledBuildingIds);
+  private async loadAvailableRooms(enabledBuildingIds: string[], organizationId: string): Promise<RoomWithDetails[]> {
+    const rooms = await this.roomRepository.findForAutoAssignment(organizationId, enabledBuildingIds);
     
     // Transform to RoomWithDetails format and calculate current occupancy
     return rooms.map(room => ({
@@ -672,6 +674,7 @@ export class AutoAssignmentService {
     groups: AttendeeGroup[],
     rooms: RoomWithDetails[],
     allAttendees: Attendee[],
+    organizationId: string,
     dryRun: boolean,
     onProgress?: ProgressCallback
   ): Promise<{
@@ -699,7 +702,7 @@ export class AutoAssignmentService {
     );
 
     for (const group of specialGroups) {
-      const result = await this.assignGroup(group, rooms, allAttendees, dryRun, onProgress);
+      const result = await this.assignGroup(group, rooms, allAttendees, organizationId, dryRun, onProgress);
       assignments.push(...result.assignments);
       errors.push(...result.errors);
       warnings.push(...result.warnings);
@@ -730,7 +733,7 @@ export class AutoAssignmentService {
     );
 
     for (const group of regularGroups) {
-      const result = await this.assignGroup(group, rooms, allAttendees, dryRun, onProgress);
+      const result = await this.assignGroup(group, rooms, allAttendees, organizationId, dryRun, onProgress);
       assignments.push(...result.assignments);
       errors.push(...result.errors);
       warnings.push(...result.warnings);
@@ -759,7 +762,7 @@ export class AutoAssignmentService {
     const individuals = groups.filter(g => g.type === GroupType.INDIVIDUAL);
 
     for (const group of individuals) {
-      const result = await this.assignGroup(group, rooms, allAttendees, dryRun, onProgress);
+      const result = await this.assignGroup(group, rooms, allAttendees, organizationId, dryRun, onProgress);
       assignments.push(...result.assignments);
       errors.push(...result.errors);
       warnings.push(...result.warnings);
@@ -789,6 +792,7 @@ export class AutoAssignmentService {
     group: AttendeeGroup,
     rooms: RoomWithDetails[],
     allAttendees: Attendee[],
+    organizationId: string,
     dryRun: boolean,
     onProgress?: ProgressCallback
   ): Promise<{
@@ -812,6 +816,7 @@ export class AutoAssignmentService {
         group,
         rooms,
         allAttendees,
+        organizationId,
         dryRun,
         onProgress,
         preferredFloorId,
@@ -842,6 +847,7 @@ export class AutoAssignmentService {
         group,
         rooms,
         allAttendees,
+        organizationId,
         dryRun,
         onProgress,
         preferredFloorId,
@@ -936,7 +942,7 @@ export class AutoAssignmentService {
 
         // Create assignment in database (only if not dry run)
         if (!dryRun) {
-          await this.createAssignment(attendee.id, bestMatch.room.id);
+          await this.createAssignment(attendee.id, bestMatch.room.id, organizationId);
         }
 
         // Count roommates in the same room (for ROOMMATE groups)
@@ -1015,6 +1021,7 @@ export class AutoAssignmentService {
     group: AttendeeGroup,
     rooms: RoomWithDetails[],
     allAttendees: Attendee[],
+    organizationId: string,
     dryRun: boolean,
     onProgress?: ProgressCallback,
     preferredFloorId?: string,
@@ -1035,6 +1042,7 @@ export class AutoAssignmentService {
       group,
       rooms,
       allAttendees,
+      organizationId,
       dryRun,
       onProgress,
       preferredFloorId,
@@ -1100,6 +1108,7 @@ export class AutoAssignmentService {
         group,
         fallbackRooms,
         allAttendees,
+        organizationId,
         dryRun,
         onProgress,
         'none',
@@ -1119,6 +1128,7 @@ export class AutoAssignmentService {
       group,
       matchedRoomsWithDetails,
       allAttendees,
+      organizationId,
       dryRun,
       onProgress,
       proximityMatch.proximityLevel,
@@ -1134,6 +1144,7 @@ export class AutoAssignmentService {
     group: AttendeeGroup,
     rooms: RoomWithDetails[],
     allAttendees: Attendee[],
+    organizationId: string,
     dryRun: boolean,
     onProgress?: ProgressCallback,
     preferredFloorId?: string,
@@ -1228,7 +1239,7 @@ export class AutoAssignmentService {
 
       // Create assignment in database (only if not dry run)
       if (!dryRun) {
-        await this.createAssignment(member.id, bestRoom.id);
+        await this.createAssignment(member.id, bestRoom.id, organizationId);
       }
 
       // Build reason
@@ -1272,6 +1283,7 @@ export class AutoAssignmentService {
     group: AttendeeGroup,
     nearbyRooms: RoomWithDetails[],
     allAttendees: Attendee[],
+    organizationId: string,
     dryRun: boolean,
     onProgress: ProgressCallback | undefined,
     proximityLevel: 'adjacent' | 'same_floor' | 'same_building' | 'none',
@@ -1361,7 +1373,7 @@ export class AutoAssignmentService {
 
         // Create assignment in database (only if not dry run)
         if (!dryRun) {
-          await this.createAssignment(member.id, room.id);
+          await this.createAssignment(member.id, room.id, organizationId);
         }
 
         // Build reason with proximity info
@@ -1440,6 +1452,7 @@ export class AutoAssignmentService {
     group: AttendeeGroup,
     rooms: RoomWithDetails[],
     allAttendees: Attendee[],
+    organizationId: string,
     dryRun: boolean,
     onProgress?: ProgressCallback,
     preferredFloorId?: string,
@@ -1531,7 +1544,7 @@ export class AutoAssignmentService {
 
       // Create assignment in database (only if not dry run)
       if (!dryRun) {
-        await this.createAssignment(member.id, bestRoom.id);
+        await this.createAssignment(member.id, bestRoom.id, organizationId);
       }
 
       // Build reason
@@ -1953,7 +1966,7 @@ export class AutoAssignmentService {
   /**
    * Create room assignment in database
    */
-  private async createAssignment(attendeeId: string, roomId: string): Promise<void> {
+  private async createAssignment(attendeeId: string, roomId: string, organizationId: string): Promise<void> {
     await this.assignmentRepository.create({
       attendeeId,
       roomId,
@@ -1971,7 +1984,8 @@ export class AutoAssignmentService {
         assignedBy: 'auto-assignment',
         reason: 'Auto-assignment execution'
       },
-      performedBy: 'system'
+      performedBy: 'system',
+      organizationId,
     });
   }
 

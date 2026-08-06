@@ -1,38 +1,31 @@
 /**
  * WhatsApp Controller
- * 
- * Handles HTTP requests for WhatsApp connection management
+ *
+ * Handles HTTP requests for WhatsApp connection management.
+ * Each organization has its own WhatsApp session — resolved per-request
+ * from the authenticated user's organizationId via the WhatsApp registry.
  */
 
 import { Request, Response } from 'express';
 import { asyncHandler } from '@/middleware/asyncHandler';
 import logger from '@/utils/logger';
+import { getOrCreateWhatsAppService } from '@/services/communication/whatsapp.registry';
+import { getIO } from '@/utils/socket-singleton';
 
-// WhatsApp service will be injected via app context
-let whatsappService: any;
-
-export const setWhatsAppService = (service: any) => {
-  whatsappService = service;
-};
-
-export const getWhatsAppServiceInstance = (): any => whatsappService;
+const getServiceForRequest = (req: Request) =>
+  getOrCreateWhatsAppService(req.user!.organizationId, getIO());
 
 /**
  * Initialize WhatsApp session
- * POST /api/whatsapp/initialize
+ * POST /api/communication/whatsapp/initialize
  */
 export const initializeWhatsApp = asyncHandler(async (req: Request, res: Response) => {
-  if (!whatsappService) {
-    return res.status(500).json({
-      success: false,
-      message: 'WhatsApp service not initialized',
-    });
-  }
-  
+  const whatsappService = getServiceForRequest(req);
+
   await whatsappService.initialize();
-  
-  logger.info('WhatsApp initialization started');
-  
+
+  logger.info('WhatsApp initialization started', { organizationId: req.user!.organizationId });
+
   res.json({
     success: true,
     message: 'WhatsApp initialization started. Please scan QR code.',
@@ -41,18 +34,12 @@ export const initializeWhatsApp = asyncHandler(async (req: Request, res: Respons
 
 /**
  * Get WhatsApp QR code
- * GET /api/whatsapp/qr
+ * GET /api/communication/whatsapp/qr
  */
 export const getQRCode = asyncHandler(async (req: Request, res: Response) => {
-  if (!whatsappService) {
-    return res.status(500).json({
-      success: false,
-      message: 'WhatsApp service not initialized',
-    });
-  }
-  
+  const whatsappService = getServiceForRequest(req);
   const status = whatsappService.getStatus();
-  
+
   if (status.qrCode) {
     res.json({
       success: true,
@@ -78,19 +65,13 @@ export const getQRCode = asyncHandler(async (req: Request, res: Response) => {
 
 /**
  * Get WhatsApp status
- * GET /api/whatsapp/status
+ * GET /api/communication/whatsapp/status
  */
 export const getStatus = asyncHandler(async (req: Request, res: Response) => {
-  if (!whatsappService) {
-    return res.status(500).json({
-      success: false,
-      message: 'WhatsApp service not initialized',
-    });
-  }
-  
+  const whatsappService = getServiceForRequest(req);
   const status = whatsappService.getStatus();
   const rateLimit = whatsappService.getRateLimitStatus();
-  
+
   res.json({
     success: true,
     data: {
@@ -102,20 +83,14 @@ export const getStatus = asyncHandler(async (req: Request, res: Response) => {
 
 /**
  * Disconnect WhatsApp
- * POST /api/whatsapp/disconnect
+ * POST /api/communication/whatsapp/disconnect
  */
 export const disconnectWhatsApp = asyncHandler(async (req: Request, res: Response) => {
-  if (!whatsappService) {
-    return res.status(500).json({
-      success: false,
-      message: 'WhatsApp service not initialized',
-    });
-  }
-  
+  const whatsappService = getServiceForRequest(req);
   await whatsappService.disconnect();
-  
-  logger.info('WhatsApp disconnected');
-  
+
+  logger.info('WhatsApp disconnected', { organizationId: req.user!.organizationId });
+
   res.json({
     success: true,
     message: 'WhatsApp disconnected successfully',
@@ -124,29 +99,23 @@ export const disconnectWhatsApp = asyncHandler(async (req: Request, res: Respons
 
 /**
  * Send test message
- * POST /api/whatsapp/test
+ * POST /api/communication/whatsapp/test
  */
 export const sendTestMessage = asyncHandler(async (req: Request, res: Response) => {
-  if (!whatsappService) {
-    return res.status(500).json({
-      success: false,
-      message: 'WhatsApp service not initialized',
-    });
-  }
-  
   const { phone } = req.body;
-  
+
   if (!phone) {
     return res.status(400).json({
       success: false,
       message: 'Phone number is required',
     });
   }
-  
+
+  const whatsappService = getServiceForRequest(req);
   await whatsappService.sendTestMessage(phone);
-  
+
   logger.info('Test message sent to:', phone);
-  
+
   res.json({
     success: true,
     message: 'Test message sent successfully',
@@ -155,27 +124,21 @@ export const sendTestMessage = asyncHandler(async (req: Request, res: Response) 
 
 /**
  * Check if phone number is registered on WhatsApp
- * POST /api/whatsapp/check-number
+ * POST /api/communication/whatsapp/check-number
  */
 export const checkNumber = asyncHandler(async (req: Request, res: Response) => {
-  if (!whatsappService) {
-    return res.status(500).json({
-      success: false,
-      message: 'WhatsApp service not initialized',
-    });
-  }
-  
   const { phone } = req.body;
-  
+
   if (!phone) {
     return res.status(400).json({
       success: false,
       message: 'Phone number is required',
     });
   }
-  
+
+  const whatsappService = getServiceForRequest(req);
   const isRegistered = await whatsappService.isRegisteredUser(phone);
-  
+
   res.json({
     success: true,
     data: {

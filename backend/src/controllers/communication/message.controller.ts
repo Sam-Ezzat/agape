@@ -18,8 +18,9 @@ const prisma = new PrismaClient();
  */
 export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   const { status, campaignId, attendeeId, limit = 50, offset = 0 } = req.query;
-  
-  const where: any = {};
+  const organizationId = req.user!.organizationId;
+
+  const where: any = { campaign: { organizationId } };
   if (status) where.status = status;
   if (campaignId) where.campaignId = campaignId as string;
   if (attendeeId) where.attendeeId = attendeeId as string;
@@ -59,9 +60,10 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
  */
 export const getMessageById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const message = await prisma.message.findUnique({
-    where: { id },
+  const organizationId = req.user!.organizationId;
+
+  const message = await prisma.message.findFirst({
+    where: { id, campaign: { organizationId } },
     include: {
       attendee: true,
       campaign: {
@@ -91,11 +93,13 @@ export const getMessageById = asyncHandler(async (req: Request, res: Response) =
  */
 export const retryMessage = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const message = await prisma.message.findUnique({
-    where: { id },
+  const organizationId = req.user!.organizationId;
+
+  const message = await prisma.message.findFirst({
+    where: { id, campaign: { organizationId } },
+    include: { campaign: true },
   });
-  
+
   if (!message) {
     return res.status(404).json({
       success: false,
@@ -125,6 +129,7 @@ export const retryMessage = asyncHandler(async (req: Request, res: Response) => 
   await messageQueueService.addMessage({
     messageId: message.id,
     campaignId: message.campaignId,
+    organizationId,
     phone: message.recipient,
     body: message.body,
     subject: message.subject || undefined,
@@ -144,11 +149,13 @@ export const retryMessage = asyncHandler(async (req: Request, res: Response) => 
  * GET /api/messages/stats
  */
 export const getMessageStats = asyncHandler(async (req: Request, res: Response) => {
+  const organizationId = req.user!.organizationId;
+
   const [total, sent, failed, pending] = await Promise.all([
-    prisma.message.count(),
-    prisma.message.count({ where: { status: 'SENT' } }),
-    prisma.message.count({ where: { status: 'FAILED' } }),
-    prisma.message.count({ where: { status: { in: ['PENDING', 'QUEUED', 'SENDING'] } } }),
+    prisma.message.count({ where: { campaign: { organizationId } } }),
+    prisma.message.count({ where: { status: 'SENT', campaign: { organizationId } } }),
+    prisma.message.count({ where: { status: 'FAILED', campaign: { organizationId } } }),
+    prisma.message.count({ where: { status: { in: ['PENDING', 'QUEUED', 'SENDING'] }, campaign: { organizationId } } }),
   ]);
   
   const successRate = total > 0 ? (sent / total) * 100 : 0;

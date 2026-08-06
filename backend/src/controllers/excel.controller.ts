@@ -28,6 +28,7 @@ export class ExcelController {
       throw new AppError(400, 'No file uploaded');
     }
 
+    const organizationId = req.user!.organizationId;
     const { data, errors } = this.excelService.parseAttendeesFromExcel(req.file.buffer);
 
     // Import attendees that passed validation
@@ -43,8 +44,11 @@ export class ExcelController {
         // Perform smart check based on duplicate ticketId to run upsert/updates or create cleanly
         let attendee;
         if (row.ticketId) {
-          const existing = await prisma.attendee.findUnique({
-            where: { ticketId: row.ticketId },
+          // WHY: ticketId is globally unique in the schema, but we must only
+          // treat it as "existing" when it belongs to this organization —
+          // otherwise we'd leak/overwrite another tenant's attendee record.
+          const existing = await prisma.attendee.findFirst({
+            where: { ticketId: row.ticketId, organizationId },
           });
 
           if (existing) {
@@ -87,11 +91,11 @@ export class ExcelController {
             });
           } else {
             // Safe creation of new unique Ticket entries
-            attendee = await this.attendeeService.create(row as any);
+            attendee = await this.attendeeService.create(row as any, organizationId, req.user!.id);
           }
         } else {
           // If no Ticket ID provided, create cleanly
-          attendee = await this.attendeeService.create(row as any);
+          attendee = await this.attendeeService.create(row as any, organizationId, req.user!.id);
         }
 
         imported.push(attendee);
@@ -123,6 +127,7 @@ export class ExcelController {
    * Export attendees to Excel file
    */
   async exportAttendees(req: Request, res: Response) {
+    const organizationId = req.user!.organizationId;
     const params = {
       search: req.query.search as string,
       role: req.query.role as any,
@@ -133,7 +138,7 @@ export class ExcelController {
       limit: 10000, // Export all (with reasonable limit)
     };
 
-    const result = await this.attendeeService.list(params);
+    const result = await this.attendeeService.list(params, organizationId);
     const buffer = this.excelService.generateAttendeesExcel(result.data);
 
     const filename = `attendees-${new Date().toISOString().split('T')[0]}.xlsx`;
@@ -148,6 +153,7 @@ export class ExcelController {
    * Export room assignments to Excel file
    */
   async exportAssignments(req: Request, res: Response) {
+    const organizationId = req.user!.organizationId;
     const params = {
       roomId: req.query.roomId as string,
       buildingId: req.query.buildingId as string,
@@ -156,7 +162,7 @@ export class ExcelController {
       limit: 10000, // Export all
     };
 
-    const result = await this.assignmentRepository.search(params);
+    const result = await this.assignmentRepository.search(params, organizationId);
     const buffer = this.excelService.generateAssignmentsExcel(result.data);
 
     const filename = `assignments-${new Date().toISOString().split('T')[0]}.xlsx`;
@@ -190,6 +196,17 @@ export class ExcelController {
     const { conferenceHouseId } = req.body || req.query;
     if (!conferenceHouseId) {
       throw new AppError(400, 'conferenceHouseId is required');
+    }
+
+    const organizationId = req.user!.organizationId;
+    // WHY: Verify the conference house belongs to this org before importing
+    // rooms into it — prevents writing rooms into another tenant's hierarchy.
+    const conferenceHouse = await prisma.conferenceHouse.findFirst({
+      where: { id: conferenceHouseId, organizationId },
+      select: { id: true },
+    });
+    if (!conferenceHouse) {
+      throw new AppError(404, 'Conference house not found');
     }
 
     const { data, errors } = this.excelService.parseRoomsFromExcel(req.file.buffer);
@@ -352,12 +369,15 @@ export class ExcelController {
       throw new AppError(400, 'conferenceHouseId query parameter is required');
     }
 
-    // Retrieve all rooms belonging to this conference house
+    const organizationId = req.user!.organizationId;
+
+    // Retrieve all rooms belonging to this conference house, scoped to org
     const rooms = await prisma.room.findMany({
       where: {
         floor: {
           building: {
             conferenceHouseId: String(conferenceHouseId),
+            conferenceHouse: { organizationId },
           },
         },
       },

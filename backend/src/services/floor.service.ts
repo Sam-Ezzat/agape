@@ -1,9 +1,9 @@
 /**
  * Floor Service
- * 
+ *
  * WHY: Business logic layer for floor operations
  * Handles validation, business rules, and coordinates repository operations
- * 
+ *
  * SOLID Principles:
  * - Single Responsibility: Only handles floor business logic
  * - Dependency Injection: Receives repositories via constructor
@@ -27,9 +27,9 @@ export class FloorService {
    * Create new floor
    * WHY: Validates building exists and creates floor
    */
-  async create(data: CreateFloorDTO): Promise<Floor> {
-    // Business rule: Building must exist
-    const building = await this.buildingRepository.findById(data.buildingId);
+  async create(data: CreateFloorDTO, organizationId: string): Promise<Floor> {
+    // Business rule: Building must exist and belong to org
+    const building = await this.buildingRepository.findByIdScoped(data.buildingId, organizationId);
     if (!building) {
       throw new AppError(404, 'Building not found');
     }
@@ -52,6 +52,7 @@ export class FloorService {
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_CREATED,
         NotificationType.SUCCESS,
         `Floor ${floor.floorNumber} created in ${building.name}`,
@@ -67,10 +68,10 @@ export class FloorService {
   /**
    * Get floor by ID
    */
-  async getById(id: string, includeRooms: boolean = false): Promise<Floor> {
+  async getById(id: string, organizationId: string, includeRooms: boolean = false): Promise<Floor> {
     const floor = includeRooms
-      ? await this.floorRepository.findByIdWithRooms(id)
-      : await this.floorRepository.findById(id);
+      ? await this.floorRepository.findByIdWithRooms(id, organizationId)
+      : await this.floorRepository.findByIdScoped(id, organizationId);
 
     if (!floor) {
       throw new AppError(404, 'Floor not found');
@@ -82,8 +83,8 @@ export class FloorService {
   /**
    * Get floor with full details
    */
-  async getWithFullDetails(id: string): Promise<Floor> {
-    const floor = await this.floorRepository.findByIdWithFullDetails(id);
+  async getWithFullDetails(id: string, organizationId: string): Promise<Floor> {
+    const floor = await this.floorRepository.findByIdWithFullDetails(id, organizationId);
 
     if (!floor) {
       throw new AppError(404, 'Floor not found');
@@ -95,9 +96,9 @@ export class FloorService {
   /**
    * List floors by building
    */
-  async listByBuilding(buildingId: string): Promise<Floor[]> {
-    // Verify building exists
-    const building = await this.buildingRepository.findById(buildingId);
+  async listByBuilding(buildingId: string, organizationId: string): Promise<Floor[]> {
+    // Verify building exists and belongs to org
+    const building = await this.buildingRepository.findByIdScoped(buildingId, organizationId);
     if (!building) {
       throw new AppError(404, 'Building not found');
     }
@@ -109,15 +110,15 @@ export class FloorService {
    * List all floors
    * WHY: Get all floors for admin dashboard
    */
-  async listAll(): Promise<Floor[]> {
-    return this.floorRepository.findAll();
+  async listAll(organizationId: string): Promise<Floor[]> {
+    return this.floorRepository.findAllByOrganization(organizationId);
   }
 
   /**
    * Update floor
    */
-  async update(id: string, data: UpdateFloorDTO): Promise<Floor> {
-    const existing = await this.getById(id);
+  async update(id: string, data: UpdateFloorDTO, organizationId: string): Promise<Floor> {
+    const existing = await this.getById(id, organizationId);
 
     // Business rule: If updating floor number, check for duplicates
     if (data.floorNumber !== undefined && data.floorNumber !== existing.floorNumber) {
@@ -130,11 +131,12 @@ export class FloorService {
       }
     }
 
-    const updated = await this.floorRepository.update(id, data);
+    const updated = await this.floorRepository.updateScoped(id, organizationId, data);
 
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_UPDATED,
         NotificationType.INFO,
         `Floor ${updated.floorNumber} updated`,
@@ -150,8 +152,8 @@ export class FloorService {
   /**
    * Delete floor
    */
-  async delete(id: string): Promise<void> {
-    const floor = await this.getById(id);
+  async delete(id: string, organizationId: string): Promise<void> {
+    const floor = await this.getById(id, organizationId);
 
     // Business rule: Could check if has rooms (optional)
     // const roomsCount = await this.roomRepository.countByFloor(id);
@@ -159,11 +161,12 @@ export class FloorService {
     //   throw new AppError('Cannot delete floor with rooms', 400);
     // }
 
-    await this.floorRepository.delete(id);
+    await this.floorRepository.deleteScoped(id, organizationId);
 
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_DELETED,
         NotificationType.WARNING,
         `Floor ${floor.floorNumber} deleted`,

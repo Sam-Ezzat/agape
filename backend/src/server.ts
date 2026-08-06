@@ -10,13 +10,15 @@
 import 'dotenv/config'; // WHY: Load environment variables first
 import { createServer } from 'http';
 import { Server as SocketServer } from 'socket.io';
+import cookie from 'cookie';
 import { createApp } from './app';
 import logger from '@/utils/logger';
 import prisma from '@/utils/prisma-client';
 import { initializeNotificationService } from '@/services/notification.service';
-import { createWhatsAppService } from '@/services/communication/whatsapp.service';
+import { getAllWhatsAppServices } from '@/services/communication/whatsapp.registry';
 import { createMessageProcessingService } from '@/services/communication/messageProcessing.service';
-import { setWhatsAppService } from '@/controllers/communication/whatsapp.controller';
+import { setIO } from '@/utils/socket-singleton';
+import { AUTH_COOKIE_NAME, verifyToken } from '@/utils/jwt';
 
 const PORT = process.env.PORT || 3000;
 
@@ -51,30 +53,53 @@ async function startServer(): Promise<void> {
         credentials: true,
       },
     });
+    setIO(io);
+
+    // WHY: Authenticate the handshake using the same httpOnly cookie the
+    // REST API trusts, so a socket can never be opened by an anonymous or
+    // cross-tenant client. Without this, any client could join any
+    // `org:<id>`/conference room just by knowing (or guessing) its id.
+    io.use((socket, next) => {
+      try {
+        const cookieHeader = socket.handshake.headers.cookie;
+        const token = cookieHeader ? cookie.parse(cookieHeader)[AUTH_COOKIE_NAME] : undefined;
+        if (!token) {
+          return next(new Error('Unauthorized'));
+        }
+        const user = verifyToken(token);
+        socket.data.userId = user.id;
+        socket.data.organizationId = user.organizationId;
+        next();
+      } catch {
+        next(new Error('Unauthorized'));
+      }
+    });
 
     // Socket.io connection handling
     // WHY: Log connections for monitoring and setup notification service
     const notificationService = initializeNotificationService(io);
 
     io.on('connection', (socket) => {
-      logger.info(`✅ Socket connected: ${socket.id}`);
+      const { organizationId, userId } = socket.data as { organizationId: string; userId: string };
+      logger.info(`✅ Socket connected: ${socket.id} (org: ${organizationId})`);
 
-      // WHY: Allow clients to join conference-specific rooms for targeted notifications
+      // WHY: Every socket auto-joins its own organization's room — this is
+      // the only room real-time broadcasts target, so tenants are isolated
+      // by construction rather than by trusting client-supplied ids.
+      socket.join(`org:${organizationId}`);
+      socket.join(userId);
+
+      // WHY: Conference rooms are still opt-in (multiple conferences per
+      // org), but scoped under the org namespace so a client can't join
+      // another organization's conference room.
       socket.on('join-conference', (conferenceId: string) => {
-        socket.join(conferenceId);
+        socket.join(`org:${organizationId}:conference:${conferenceId}`);
         logger.info(`Socket ${socket.id} joined conference room: ${conferenceId}`);
       });
 
-      // WHY: Allow clients to leave conference rooms
       socket.on('leave-conference', (conferenceId: string) => {
-        socket.leave(conferenceId);
+        socket.leave(`org:${organizationId}:conference:${conferenceId}`);
         logger.info(`Socket ${socket.id} left conference room: ${conferenceId}`);
-      });
-
-      // WHY: Handle user-specific room joining (for targeted notifications)
-      socket.on('join-user-room', (userId: string) => {
-        socket.join(userId);
-        logger.info(`Socket ${socket.id} joined user room: ${userId}`);
       });
 
       socket.on('disconnect', () => {
@@ -87,26 +112,21 @@ async function startServer(): Promise<void> {
       });
     });
 
-    // WHY: Test notification on startup (development only)
-    if (process.env.NODE_ENV === 'development') {
-      setTimeout(() => {
-        notificationService.info(
-          'Real-time notifications are working! 🎉',
-          'System Ready'
-        );
-      }, 2000);
-    }
+    // WHY: notificationService is initialized (wires up Socket.io) even
+    // though nothing here emits through it directly anymore — the startup
+    // smoke-test notification was removed since broadcast() now requires an
+    // organizationId, which doesn't exist at server-boot time (no request).
+    void notificationService;
 
     // Initialize Communication Services
     logger.info('💬 Initializing communication services...');
-    
-    // Create WhatsApp service
-    const whatsappService = createWhatsAppService(io);
-    setWhatsAppService(whatsappService);
-    
-    // Create message processing service
-    const messageProcessingService = createMessageProcessingService(whatsappService, io);
-    
+
+    // WHY: WhatsApp clients are created lazily per-organization (see
+    // whatsapp.registry.ts) the first time an org initializes WhatsApp from
+    // the UI — the set of orgs isn't known at boot. The message processor
+    // resolves the right org's client per-job via the same registry.
+    const messageProcessingService = createMessageProcessingService(io);
+
     logger.info('✅ Communication services initialized');
     logger.info('📱 WhatsApp: Ready to initialize (scan QR code when ready)');
 
@@ -129,7 +149,7 @@ async function startServer(): Promise<void> {
       // Shutdown communication services
       logger.info('Shutting down communication services...');
       try {
-        await whatsappService.disconnect();
+        await Promise.all(getAllWhatsAppServices().map((service) => service.disconnect()));
         await messageProcessingService.shutdown();
       } catch (error) {
         logger.error('Error shutting down communication services:', error);

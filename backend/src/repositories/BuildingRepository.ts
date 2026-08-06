@@ -20,6 +20,7 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
   /**
    * Find buildings by conference house
    * WHY: Most common query - get all buildings for a house
+   * NOTE: organizationId ownership of conferenceHouseId must be verified by caller (service layer)
    */
   async findByConferenceHouseId(conferenceHouseId: string): Promise<Building[]> {
     return this.model.findMany({
@@ -40,11 +41,12 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
   }
 
   /**
-   * Find all buildings
-   * WHY: List all buildings across all conference houses
+   * Find all buildings for an organization
+   * WHY: List all buildings across all conference houses, scoped to org
    */
-  async findAll(): Promise<Building[]> {
+  async findAllByOrganization(organizationId: string): Promise<Building[]> {
     return this.model.findMany({
+      where: { conferenceHouse: { organizationId } },
       include: {
         floors: {
           include: {
@@ -61,12 +63,12 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
   }
 
   /**
-   * Find building with floors
+   * Find building with floors, scoped to organization
    * WHY: Often need building with its floors
    */
-  async findByIdWithFloors(id: string): Promise<Building | null> {
-    return this.model.findUnique({
-      where: { id },
+  async findByIdWithFloors(id: string, organizationId: string): Promise<Building | null> {
+    return this.model.findFirst({
+      where: { id, conferenceHouse: { organizationId } },
       include: {
         floors: {
           orderBy: { floorNumber: 'asc' },
@@ -76,12 +78,12 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
   }
 
   /**
-   * Find building with full details (floors + rooms)
+   * Find building with full details (floors + rooms), scoped to organization
    * WHY: For detailed building view
    */
-  async findByIdWithFullDetails(id: string): Promise<Building | null> {
-    return this.model.findUnique({
-      where: { id },
+  async findByIdWithFullDetails(id: string, organizationId: string): Promise<Building | null> {
+    return this.model.findFirst({
+      where: { id, conferenceHouse: { organizationId } },
       include: {
         conferenceHouse: true,
         floors: {
@@ -94,6 +96,39 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
         },
       },
     });
+  }
+
+  /**
+   * Find building by id scoped to organization (ownership check)
+   */
+  async findByIdScoped(id: string, organizationId: string): Promise<Building | null> {
+    return this.model.findFirst({ where: { id, conferenceHouse: { organizationId } } });
+  }
+
+  /**
+   * Update building scoped to organization
+   */
+  async updateScoped(id: string, organizationId: string, data: any): Promise<Building> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.update({ where: { id }, data });
+  }
+
+  /**
+   * Delete building scoped to organization
+   */
+  async deleteScoped(id: string, organizationId: string): Promise<Building> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.delete({ where: { id } });
+  }
+
+  private async assertOwnership(id: string, organizationId: string): Promise<void> {
+    const existing = await this.model.findFirst({
+      where: { id, conferenceHouse: { organizationId } },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new Error('Building not found in organization');
+    }
   }
 
   /**

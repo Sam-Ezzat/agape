@@ -27,7 +27,8 @@ export class AuditLogController {
       limit: req.query.limit ? parseInt(req.query.limit as string) : 50,
     };
 
-    const result = await this.auditLogService.list(params);
+    const organizationId = req.user!.organizationId;
+    const result = await this.auditLogService.list(params, organizationId);
     res.json({
       success: true,
       data: result.data,
@@ -46,7 +47,8 @@ export class AuditLogController {
    */
   async getByEntity(req: Request, res: Response) {
     const { entityType, entityId } = req.params;
-    const logs = await this.auditLogService.getByEntity(entityType, entityId);
+    const organizationId = req.user!.organizationId;
+    const logs = await this.auditLogService.getByEntity(entityType, entityId, organizationId);
     res.json({
       success: true,
       data: logs,
@@ -59,7 +61,8 @@ export class AuditLogController {
    */
   async getRecent(req: Request, res: Response) {
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
-    const logs = await this.auditLogService.getRecentActivity(limit);
+    const organizationId = req.user!.organizationId;
+    const logs = await this.auditLogService.getRecentActivity(organizationId, limit);
     res.json({
       success: true,
       data: logs,
@@ -71,7 +74,8 @@ export class AuditLogController {
    * Get audit log statistics
    */
   async getStats(req: Request, res: Response) {
-    const stats = await this.auditLogService.getStatistics();
+    const organizationId = req.user!.organizationId;
+    const stats = await this.auditLogService.getStatistics(organizationId);
     res.json({
       success: true,
       data: stats,

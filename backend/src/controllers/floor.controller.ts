@@ -1,9 +1,9 @@
 /**
  * Floor Controller
- * 
+ *
  * WHY: HTTP request handlers for floor endpoints
  * Thin layer that delegates to service layer
- * 
+ *
  * SOLID Principles:
  * - Single Responsibility: Only handles HTTP request/response
  * - Dependency Injection: Receives service via constructor
@@ -26,7 +26,8 @@ export class FloorController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const floors = await this.floorService.listAll();
+      const organizationId = req.user!.organizationId;
+      const floors = await this.floorService.listAll(organizationId);
       res.json({
         success: true,
         data: floors,
@@ -46,7 +47,8 @@ export class FloorController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const floor = await this.floorService.create(req.body);
+      const organizationId = req.user!.organizationId;
+      const floor = await this.floorService.create(req.body, organizationId);
       res.status(201).json({
         success: true,
         data: floor,
@@ -66,7 +68,8 @@ export class FloorController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const floors = await this.floorService.listByBuilding(req.params.buildingId);
+      const organizationId = req.user!.organizationId;
+      const floors = await this.floorService.listByBuilding(req.params.buildingId, organizationId);
       res.json({
         success: true,
         data: floors,
@@ -86,8 +89,9 @@ export class FloorController {
     next: NextFunction
   ): Promise<void> => {
     try {
+      const organizationId = req.user!.organizationId;
       const includeRooms = req.query.includeRooms === 'true';
-      const floor = await this.floorService.getById(req.params.id, includeRooms);
+      const floor = await this.floorService.getById(req.params.id, organizationId, includeRooms);
       res.json({
         success: true,
         data: floor,
@@ -107,7 +111,8 @@ export class FloorController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const floor = await this.floorService.getWithFullDetails(req.params.id);
+      const organizationId = req.user!.organizationId;
+      const floor = await this.floorService.getWithFullDetails(req.params.id, organizationId);
       res.json({
         success: true,
         data: floor,
@@ -127,7 +132,8 @@ export class FloorController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const floor = await this.floorService.update(req.params.id, req.body);
+      const organizationId = req.user!.organizationId;
+      const floor = await this.floorService.update(req.params.id, req.body, organizationId);
       res.json({
         success: true,
         data: floor,
@@ -147,7 +153,8 @@ export class FloorController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      await this.floorService.delete(req.params.id);
+      const organizationId = req.user!.organizationId;
+      await this.floorService.delete(req.params.id, organizationId);
       res.status(204).send();
     } catch (error) {
       next(error);

@@ -27,9 +27,9 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
    * @param conferenceHouseId - Conference house ID
    * @returns Configuration or null if not found
    */
-  async findByConferenceHouse(conferenceHouseId: string): Promise<AutoAssignmentConfig | null> {
-    return this.prisma.autoAssignmentConfig.findUnique({
-      where: { conferenceHouseId }
+  async findByConferenceHouse(conferenceHouseId: string, organizationId: string): Promise<AutoAssignmentConfig | null> {
+    return this.prisma.autoAssignmentConfig.findFirst({
+      where: { conferenceHouseId, conferenceHouse: { organizationId } }
     });
   }
 
@@ -42,10 +42,11 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
    */
   async getOrCreateDefault(
     conferenceHouseId: string,
+    organizationId: string,
     enabledBuildings: string[] = []
   ): Promise<AutoAssignmentConfig> {
     // Try to find existing config
-    let config = await this.findByConferenceHouse(conferenceHouseId);
+    let config = await this.findByConferenceHouse(conferenceHouseId, organizationId);
     
     if (!config) {
       // Create default configuration
@@ -90,8 +91,13 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
    */
   async updateByConferenceHouse(
     conferenceHouseId: string,
+    organizationId: string,
     data: Partial<AutoAssignmentConfigDTO>
   ): Promise<AutoAssignmentConfig> {
+    const existing = await this.findByConferenceHouse(conferenceHouseId, organizationId);
+    if (!existing) {
+      throw new Error('Auto-assignment config not found in organization');
+    }
     return this.prisma.autoAssignmentConfig.update({
       where: { conferenceHouseId },
       data: {
@@ -103,7 +109,9 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
 
   /**
    * Create or update configuration (upsert)
-   * 
+   * WHY: organizationId ownership of conferenceHouseId must be verified by caller (service layer)
+   * before calling upsert, since create requires conferenceHouseId to already belong to org
+   *
    * @param data - Configuration data
    * @returns Configuration
    */
@@ -139,7 +147,11 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
    * @param conferenceHouseId - Conference house ID
    * @returns Deleted configuration
    */
-  async deleteByConferenceHouse(conferenceHouseId: string): Promise<AutoAssignmentConfig> {
+  async deleteByConferenceHouse(conferenceHouseId: string, organizationId: string): Promise<AutoAssignmentConfig> {
+    const existing = await this.findByConferenceHouse(conferenceHouseId, organizationId);
+    if (!existing) {
+      throw new Error('Auto-assignment config not found in organization');
+    }
     return this.prisma.autoAssignmentConfig.delete({
       where: { conferenceHouseId }
     });
@@ -147,13 +159,13 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
 
   /**
    * Check if configuration exists for a conference house
-   * 
+   *
    * @param conferenceHouseId - Conference house ID
    * @returns True if exists
    */
-  async exists(conferenceHouseId: string): Promise<boolean> {
+  async exists(conferenceHouseId: string, organizationId: string): Promise<boolean> {
     const count = await this.prisma.autoAssignmentConfig.count({
-      where: { conferenceHouseId }
+      where: { conferenceHouseId, conferenceHouse: { organizationId } }
     });
     return count > 0;
   }

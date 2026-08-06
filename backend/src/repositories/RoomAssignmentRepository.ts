@@ -18,9 +18,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Find assignment by ID with full details
    * WHY: Common query to show assignment with attendee and room info
    */
-  async findByIdWithDetails(id: string) {
-    return this.prisma.roomAssignment.findUnique({
-      where: { id },
+  async findByIdWithDetails(id: string, organizationId: string) {
+    return this.prisma.roomAssignment.findFirst({
+      where: { id, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
       include: {
         attendee: true,
         room: {
@@ -44,9 +44,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Find assignment by attendee ID
    * WHY: Check if attendee is already assigned
    */
-  async findByAttendeeId(attendeeId: string) {
-    return this.prisma.roomAssignment.findUnique({
-      where: { attendeeId },
+  async findByAttendeeId(attendeeId: string, organizationId: string) {
+    return this.prisma.roomAssignment.findFirst({
+      where: { attendeeId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
       include: {
         room: {
           include: {
@@ -65,9 +65,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Find all assignments for a room
    * WHY: Check room capacity and current occupants
    */
-  async findByRoomId(roomId: string) {
+  async findByRoomId(roomId: string, organizationId: string) {
     return this.prisma.roomAssignment.findMany({
-      where: { roomId },
+      where: { roomId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
       include: {
         attendee: true,
       },
@@ -76,14 +76,30 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
   }
 
   /**
+   * Delete assignment scoped to organization (ownership check)
+   */
+  async deleteScoped(id: string, organizationId: string) {
+    const existing = await this.prisma.roomAssignment.findFirst({
+      where: { id, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new Error('Room assignment not found in organization');
+    }
+    return this.prisma.roomAssignment.delete({ where: { id } });
+  }
+
+  /**
    * Search assignments with filters
    * WHY: Filter by room, building, or floor
    */
-  async search(params: AssignmentFilterParams) {
+  async search(params: AssignmentFilterParams, organizationId: string) {
     const { roomId, buildingId, floorId, page, limit } = params;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.RoomAssignmentWhereInput = {};
+    const where: Prisma.RoomAssignmentWhereInput = {
+      room: { floor: { building: { conferenceHouse: { organizationId } } } },
+    };
 
     if (roomId) {
       where.roomId = roomId;
@@ -93,6 +109,7 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
       where.room = {
         floor: {
           buildingId,
+          building: { conferenceHouse: { organizationId } },
         },
       };
     }
@@ -100,6 +117,7 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
     if (floorId) {
       where.room = {
         floorId,
+        floor: { building: { conferenceHouse: { organizationId } } },
       };
     }
 
@@ -153,9 +171,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Count assignments in a room
    * WHY: Capacity validation
    */
-  async countByRoomId(roomId: string): Promise<number> {
+  async countByRoomId(roomId: string, organizationId: string): Promise<number> {
     return this.prisma.roomAssignment.count({
-      where: { roomId },
+      where: { roomId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
     });
   }
 
@@ -163,8 +181,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Get room availability summary
    * WHY: Dashboard and assignment UI need this data
    */
-  async getRoomAvailability() {
+  async getRoomAvailability(organizationId: string) {
     const rooms = await this.prisma.room.findMany({
+      where: { floor: { building: { conferenceHouse: { organizationId } } } },
       select: {
         id: true,
         roomNumber: true,
@@ -222,12 +241,13 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Count assignments created since a date
    * WHY: Track assignment activity over time
    */
-  async countCreatedSince(date: Date): Promise<number> {
+  async countCreatedSince(date: Date, organizationId: string): Promise<number> {
     return this.prisma.roomAssignment.count({
       where: {
         createdAt: {
           gte: date,
         },
+        room: { floor: { building: { conferenceHouse: { organizationId } } } },
       },
     });
   }

@@ -6,26 +6,27 @@
  */
 
 import { Job } from 'bull';
-import { PrismaClient, MessageStatus } from '@prisma/client';
+import { MessageStatus } from '@prisma/client';
 import { Server as SocketServer } from 'socket.io';
+import prisma from '@/utils/prisma-client';
 import logger from '@/utils/logger';
 import { MessageJob, messageQueueService } from './messageQueue.service';
-import { WhatsAppService } from './whatsapp.service';
+import { getWhatsAppService } from './whatsapp.registry';
 import { campaignService } from './campaign.service';
 import { InvalidPhoneNumberError } from '@/utils/phone';
 
-const prisma = new PrismaClient();
-
 /**
  * Message Processing Service Class
+ *
+ * WHY: A single queue serves all organizations; each job carries its own
+ * organizationId so the correct org's WhatsApp client is resolved per-job
+ * via the registry, rather than binding one client at construction time.
  */
 export class MessageProcessingService {
-  private whatsappService: WhatsAppService;
   private io: SocketServer;
   private isProcessing = false;
-  
-  constructor(whatsappService: WhatsAppService, io: SocketServer) {
-    this.whatsappService = whatsappService;
+
+  constructor(io: SocketServer) {
     this.io = io;
   }
   
@@ -67,28 +68,29 @@ export class MessageProcessingService {
    * Process a single message job
    */
   private async processMessage(job: Job<MessageJob>): Promise<void> {
-    const { messageId, phone, body, subject, attachmentUrl } = job.data;
-    
+    const { messageId, organizationId, phone, body, subject, attachmentUrl } = job.data;
+
     logger.info(`Processing message: ${messageId}`);
-    
-    // Check if WhatsApp is ready
-    const status = this.whatsappService.getStatus();
-    if (!status.isReady) {
+
+    // Check if this org's WhatsApp is connected and ready
+    const whatsappService = getWhatsAppService(organizationId);
+    const status = whatsappService?.getStatus();
+    if (!whatsappService || !status?.isReady) {
       throw new Error('WhatsApp is not ready');
     }
-    
+
     // Update message status to SENDING
     await prisma.message.update({
       where: { id: messageId },
       data: { status: MessageStatus.SENDING },
     });
-    
+
     // Send message
     try {
       if (attachmentUrl) {
-        await this.whatsappService.sendMessageWithAttachment(phone, body, attachmentUrl);
+        await whatsappService.sendMessageWithAttachment(phone, body, attachmentUrl);
       } else {
-        await this.whatsappService.sendMessage(phone, body);
+        await whatsappService.sendMessage(phone, body);
       }
       
       // Update message status to SENT
@@ -128,14 +130,14 @@ export class MessageProcessingService {
    * Handle job completion
    */
   private async onJobCompleted(job: Job<MessageJob>): Promise<void> {
-    const { messageId, campaignId } = job.data;
-    
+    const { messageId, campaignId, organizationId } = job.data;
+
     // Update campaign statistics
-    await campaignService.updateCampaignStats(campaignId);
-    
-    // Emit progress event via Socket.io
-    const stats = await campaignService.getCampaignStats(campaignId);
-    this.io.emit('campaign:progress', {
+    await campaignService.updateCampaignStats(campaignId, organizationId);
+
+    // Emit progress event via Socket.io, scoped to the owning organization
+    const stats = await campaignService.getCampaignStats(campaignId, organizationId);
+    this.io.to(`org:${organizationId}`).emit('campaign:progress', {
       campaignId,
       messageId,
       status: 'completed',
@@ -147,8 +149,8 @@ export class MessageProcessingService {
    * Handle job failure
    */
   private async onJobFailed(job: Job<MessageJob>, error: Error): Promise<void> {
-    const { messageId, campaignId } = job.data;
-    
+    const { messageId, campaignId, organizationId } = job.data;
+
     // Check if max retries exceeded
     const maxRetries = 3;
     if (job.attemptsMade >= maxRetries) {
@@ -169,10 +171,10 @@ export class MessageProcessingService {
     }
     
     // Update campaign statistics
-    await campaignService.updateCampaignStats(campaignId);
-    
-    // Emit error event via Socket.io
-    this.io.emit('campaign:message-failed', {
+    await campaignService.updateCampaignStats(campaignId, organizationId);
+
+    // Emit error event via Socket.io, scoped to the owning organization
+    this.io.to(`org:${organizationId}`).emit('campaign:message-failed', {
       campaignId,
       messageId,
       error: error.message,
@@ -230,10 +232,9 @@ export class MessageProcessingService {
  * Create and initialize message processing service
  */
 export const createMessageProcessingService = (
-  whatsappService: WhatsAppService,
   io: SocketServer
 ): MessageProcessingService => {
-  const service = new MessageProcessingService(whatsappService, io);
+  const service = new MessageProcessingService(io);
   service.initialize();
   return service;
 };

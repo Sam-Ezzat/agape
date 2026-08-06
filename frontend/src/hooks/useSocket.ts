@@ -22,16 +22,24 @@ const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3000';
  * Custom hook for Socket.io connection
  * WHY: Provides a clean API for subscribing to real-time events
  */
-export function useSocket() {
+export function useSocket(enabled: boolean = true) {
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
+    // WHY: Only connect once authenticated — the server's handshake
+    // middleware verifies the same httpOnly cookie the REST API uses and
+    // rejects anonymous connections, so connecting earlier would just error.
+    if (!enabled) {
+      return;
+    }
+
     // WHY: Create socket connection once
     socketRef.current = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionAttempts: 5,
+      withCredentials: true,
     });
 
     const socket = socketRef.current;
@@ -70,7 +78,7 @@ export function useSocket() {
     return () => {
       socket.disconnect();
     };
-  }, []);
+  }, [enabled]);
 
   return socketRef.current;
 }

@@ -1,6 +1,6 @@
 /**
  * Template Controller
- * 
+ *
  * Handles HTTP requests for message template management
  */
 
@@ -15,13 +15,14 @@ import logger from '@/utils/logger';
  */
 export const getTemplates = asyncHandler(async (req: Request, res: Response) => {
   const { category, isActive, language } = req.query;
-  
-  const templates = await templateService.getTemplates({
+  const organizationId = req.user!.organizationId;
+
+  const templates = await templateService.getTemplates(organizationId, {
     category: category as string,
     isActive: isActive === 'true' ? true : isActive === 'false' ? false : undefined,
     language: language as string,
   });
-  
+
   res.json({
     success: true,
     data: templates,
@@ -35,9 +36,10 @@ export const getTemplates = asyncHandler(async (req: Request, res: Response) => 
  */
 export const getTemplateById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const template = await templateService.getTemplateById(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  const template = await templateService.getTemplateById(id, organizationId);
+
   res.json({
     success: true,
     data: template,
@@ -49,10 +51,11 @@ export const getTemplateById = asyncHandler(async (req: Request, res: Response) 
  * POST /api/templates
  */
 export const createTemplate = asyncHandler(async (req: Request, res: Response) => {
-  const template = await templateService.createTemplate(req.body);
-  
+  const organizationId = req.user!.organizationId;
+  const template = await templateService.createTemplate(req.body, organizationId);
+
   logger.info('Template created:', template.id);
-  
+
   res.status(201).json({
     success: true,
     data: template,
@@ -66,11 +69,12 @@ export const createTemplate = asyncHandler(async (req: Request, res: Response) =
  */
 export const updateTemplate = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const template = await templateService.updateTemplate(id, req.body);
-  
+  const organizationId = req.user!.organizationId;
+
+  const template = await templateService.updateTemplate(id, req.body, organizationId);
+
   logger.info('Template updated:', id);
-  
+
   res.json({
     success: true,
     data: template,
@@ -84,11 +88,12 @@ export const updateTemplate = asyncHandler(async (req: Request, res: Response) =
  */
 export const deleteTemplate = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  await templateService.deleteTemplate(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  await templateService.deleteTemplate(id, organizationId);
+
   logger.info('Template deleted:', id);
-  
+
   res.json({
     success: true,
     message: 'Template deleted successfully',
@@ -102,16 +107,17 @@ export const deleteTemplate = asyncHandler(async (req: Request, res: Response) =
 export const previewTemplate = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { attendeeId } = req.body;
-  
+  const organizationId = req.user!.organizationId;
+
   if (!attendeeId) {
     return res.status(400).json({
       success: false,
       message: 'attendeeId is required',
     });
   }
-  
-  const preview = await templateService.previewTemplate(id, attendeeId);
-  
+
+  const preview = await templateService.previewTemplate(id, attendeeId, organizationId);
+
   res.json({
     success: true,
     data: {
@@ -126,9 +132,10 @@ export const previewTemplate = asyncHandler(async (req: Request, res: Response) 
  */
 export const getTemplateStats = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
-  const stats = await templateService.getTemplateStats(id);
-  
+  const organizationId = req.user!.organizationId;
+
+  const stats = await templateService.getTemplateStats(id, organizationId);
+
   res.json({
     success: true,
     data: stats,
