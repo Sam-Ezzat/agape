@@ -9,6 +9,20 @@
 
 const DEFAULT_COUNTRY_CODE = '20'; // Egypt
 
+// Non-Latin decimal digit scripts seen in Excel imports: Arabic-Indic (٠-٩),
+// Extended Arabic-Indic/Persian (۰-۹), and Devanagari/Hindi (०-९). Each block
+// is 10 consecutive code points in digit order, so offsetting by the block's
+// zero code point maps them onto ASCII '0'-'9'.
+const NON_LATIN_DIGIT_BLOCKS = [0x0660, 0x06f0, 0x0966];
+
+function toLatinDigits(input: string): string {
+  return input.replace(/[٠-٩۰-۹०-९]/g, (ch) => {
+    const code = ch.codePointAt(0)!;
+    const zero = NON_LATIN_DIGIT_BLOCKS.find((base) => code >= base && code <= base + 9)!;
+    return String(code - zero);
+  });
+}
+
 /**
  * Normalize a raw phone number to E.164 display form (e.g. "+201271384211").
  * Returns null if the number can't be normalized to a valid international number.
@@ -19,7 +33,7 @@ export function normalizePhoneToE164(
 ): string | null {
   if (!phone || !phone.trim()) return null;
 
-  let cleaned = phone.trim();
+  let cleaned = toLatinDigits(phone.trim());
 
   if (cleaned.startsWith('+')) {
     cleaned = cleaned.slice(1);
