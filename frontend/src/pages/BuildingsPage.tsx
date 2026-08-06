@@ -27,7 +27,7 @@ export default function BuildingsPage() {
   const loadBuildings = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${baseUrl}/buildings`);
+      const response = await fetch(`${baseUrl}/buildings`, { credentials: 'include' });
       const data = await response.json();
       setBuildings(data.data || []);
     } catch (error) {
@@ -39,7 +39,7 @@ export default function BuildingsPage() {
 
   const loadHouses = async () => {
     try {
-      const response = await fetch(`${baseUrl}/conference-houses`);
+      const response = await fetch(`${baseUrl}/conference-houses`, { credentials: 'include' });
       const data = await response.json();
       setHouses(data.data || []);
     } catch (error) {
@@ -53,6 +53,7 @@ export default function BuildingsPage() {
     try {
       const response = await fetch(`${baseUrl}/buildings/${id}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       if (!response.ok) throw new Error('Delete failed');
       toastSuccess(`${name} deleted successfully`);
@@ -200,6 +201,7 @@ function BuildingModal({ building, houses, onClose, onSave }: BuildingModalProps
       const response = await fetch(url, {
         method: building ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(formData),
       });
 

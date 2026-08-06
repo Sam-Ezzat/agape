@@ -30,7 +30,7 @@ export default function RoomsPage() {
   const loadRooms = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${baseUrl}/rooms`);
+      const response = await fetch(`${baseUrl}/rooms`, { credentials: 'include' });
       const data = await response.json();
       setRooms(data.data || []);
     } catch (error) {
@@ -42,7 +42,7 @@ export default function RoomsPage() {
 
   const loadFloors = async () => {
     try {
-      const response = await fetch(`${baseUrl}/floors`);
+      const response = await fetch(`${baseUrl}/floors`, { credentials: 'include' });
       const data = await response.json();
       setFloors(data.data || []);
     } catch (error) {
@@ -52,7 +52,7 @@ export default function RoomsPage() {
 
   const loadBuildings = async () => {
     try {
-      const response = await fetch(`${baseUrl}/buildings`);
+      const response = await fetch(`${baseUrl}/buildings`, { credentials: 'include' });
       const data = await response.json();
       setBuildings(data.data || []);
     } catch (error) {
@@ -66,6 +66,7 @@ export default function RoomsPage() {
     try {
       const response = await fetch(`${baseUrl}/rooms/${id}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       if (!response.ok) throw new Error('Delete failed');
       toastSuccess(`Room ${roomNumber} deleted successfully`);
@@ -290,6 +291,7 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
       const response = await fetch(url, {
         method: room ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(submitData),
       });
 

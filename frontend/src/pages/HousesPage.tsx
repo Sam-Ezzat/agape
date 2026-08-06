@@ -29,7 +29,7 @@ export default function HousesPage() {
   const loadHouses = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${baseUrl}/conference-houses`);
+      const response = await fetch(`${baseUrl}/conference-houses`, { credentials: 'include' });
       const data = await response.json();
       setHouses(data.data || []);
     } catch (error) {
@@ -45,6 +45,7 @@ export default function HousesPage() {
     try {
       const response = await fetch(`${baseUrl}/conference-houses/${id}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       if (!response.ok) throw new Error('Delete failed');
       toastSuccess(`${name} deleted successfully`);
@@ -229,6 +230,7 @@ function HouseModal({ house, onClose, onSave }: {
       const response = await fetch(url, {
         method: house ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ name: name.trim(), description: description.trim() }),
       });
 

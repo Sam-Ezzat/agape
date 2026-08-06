@@ -7,7 +7,8 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { attendeeApi, excelApi } from '@/services/api.service';
+import { AlertTriangle } from 'lucide-react';
+import { attendeeApi, assignmentApi, excelApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useSocket } from '@/hooks/useSocket';
 import { normalizePhoneToE164 } from '@/utils/phone';
@@ -26,6 +27,8 @@ export default function AttendeesPage() {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
   const [deletingAttendee, setDeletingAttendee] = useState<{ id: string; name: string } | null>(null);
+  const [assignedWarningAttendee, setAssignedWarningAttendee] = useState<Attendee | null>(null);
+  const [unassigning, setUnassigning] = useState(false);
   const socket = useSocket();
   const navigate = useNavigate();
 
@@ -124,8 +127,15 @@ export default function AttendeesPage() {
     }
   };
 
-  const handleDelete = (id: string, name: string) => {
-    setDeletingAttendee({ id, name });
+  const handleDelete = (attendee: Attendee) => {
+    // WHY: Deletion is blocked server-side while a room assignment exists —
+    // surface that up front instead of letting the delete fail after the
+    // reason has already been picked.
+    if (attendee.assignment) {
+      setAssignedWarningAttendee(attendee);
+      return;
+    }
+    setDeletingAttendee({ id: attendee.id, name: attendee.fullName });
   };
 
   const handleConfirmDelete = async (reason: string) => {
@@ -137,6 +147,21 @@ export default function AttendeesPage() {
       loadAttendees();
     } catch (error) {
       // Error already shown by API service
+    }
+  };
+
+  const handleUnassignAndContinueDelete = async () => {
+    if (!assignedWarningAttendee?.assignment) return;
+    try {
+      setUnassigning(true);
+      await assignmentApi.delete(assignedWarningAttendee.assignment.id);
+      toastSuccess(`${assignedWarningAttendee.fullName} unassigned from their room`);
+      setDeletingAttendee({ id: assignedWarningAttendee.id, name: assignedWarningAttendee.fullName });
+      setAssignedWarningAttendee(null);
+    } catch (error) {
+      // Error already shown by API service
+    } finally {
+      setUnassigning(false);
     }
   };
 
@@ -214,9 +239,9 @@ export default function AttendeesPage() {
     }
   };
 
-  const handleDeleteFromDetails = async () => {
+  const handleDeleteFromDetails = () => {
     if (selectedAttendee) {
-      await handleDelete(selectedAttendee.id, selectedAttendee.fullName);
+      handleDelete(selectedAttendee);
       closeDetailsModal();
     }
   };
@@ -516,7 +541,7 @@ export default function AttendeesPage() {
                           Edit
                         </button>
                         <button
-                          onClick={() => handleDelete(attendee.id, attendee.fullName)}
+                          onClick={() => handleDelete(attendee)}
                           className="text-red-600 hover:text-red-900"
                         >
                           Delete
@@ -599,6 +624,16 @@ export default function AttendeesPage() {
           onClose={closeDetailsModal}
           onEdit={openEditFromDetails}
           onDelete={handleDeleteFromDetails}
+        />
+      )}
+
+      {/* Room Assignment Warning — shown before the deletion reason modal */}
+      {assignedWarningAttendee && (
+        <AssignedAttendeeWarningModal
+          attendee={assignedWarningAttendee}
+          unassigning={unassigning}
+          onCancel={() => setAssignedWarningAttendee(null)}
+          onUnassignAndContinue={handleUnassignAndContinueDelete}
         />
       )}
 
@@ -1510,6 +1545,67 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
             className="btn-primary"
           >
             Edit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Assigned Attendee Warning Modal
+ *
+ * WHY: Deletion is blocked server-side while a room assignment exists.
+ * Surface that up front — before the reason-for-deletion picker — so the
+ * admin can unassign and continue in one flow instead of hitting a 409
+ * after already filling out the reason form.
+ */
+interface AssignedAttendeeWarningModalProps {
+  attendee: Attendee;
+  unassigning: boolean;
+  onCancel: () => void;
+  onUnassignAndContinue: () => void;
+}
+
+function AssignedAttendeeWarningModal({
+  attendee,
+  unassigning,
+  onCancel,
+  onUnassignAndContinue,
+}: AssignedAttendeeWarningModalProps) {
+  const room = attendee.assignment?.room as any;
+  const roomLabel = room
+    ? `Room ${room.roomNumber}${room.floor?.building?.name ? ` in ${room.floor.building.name}` : ''}`
+    : 'a room';
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+            <AlertTriangle className="text-amber-600" size={20} />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-gray-900">Attendee is assigned to a room</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              <strong className="text-gray-900">{attendee.fullName}</strong> is currently assigned to{' '}
+              <strong className="text-gray-900">{roomLabel}</strong>. They must be unassigned before they
+              can be deleted.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-4 border-t mt-2">
+          <button type="button" onClick={onCancel} disabled={unassigning} className="btn-secondary text-sm px-4 py-2">
+            Keep assigned
+          </button>
+          <button
+            type="button"
+            onClick={onUnassignAndContinue}
+            disabled={unassigning}
+            className="px-5 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm transition-colors shadow disabled:opacity-50"
+          >
+            {unassigning ? 'Unassigning...' : 'Unassign & continue to delete'}
           </button>
         </div>
       </div>
