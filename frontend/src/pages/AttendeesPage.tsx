@@ -34,8 +34,12 @@ export default function AttendeesPage() {
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedAttendeesMap, setSelectedAttendeesMap] = useState<Map<string, Attendee>>(new Map());
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [assignedForBulkWarning, setAssignedForBulkWarning] = useState<Attendee[] | null>(null);
+  const [bulkUnassigning, setBulkUnassigning] = useState(false);
+  const [idsPendingBulkDelete, setIdsPendingBulkDelete] = useState<string[]>([]);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -86,7 +90,12 @@ export default function AttendeesPage() {
     };
 
     // Listen for various attendee events
+    // WHY: Excel import creates attendees silently (no per-row broadcast) and
+    // fires one 'import:completed' event instead — other open tabs/sessions
+    // need to reload the list on that signal same as they do for a single
+    // created attendee.
     socket.on('attendee:created', handleAttendeeCreatedOrDeleted);
+    socket.on('import:completed', handleAttendeeCreatedOrDeleted);
     socket.on('attendee:updated', handleAttendeeUpdate);
     socket.on('attendee:deleted', handleAttendeeCreatedOrDeleted);
     socket.on('attendee:checked-in', handleAttendeeUpdate);
@@ -94,6 +103,7 @@ export default function AttendeesPage() {
 
     return () => {
       socket.off('attendee:created', handleAttendeeCreatedOrDeleted);
+      socket.off('import:completed', handleAttendeeCreatedOrDeleted);
       socket.off('attendee:updated', handleAttendeeUpdate);
       socket.off('attendee:deleted', handleAttendeeCreatedOrDeleted);
       socket.off('attendee:checked-in', handleAttendeeUpdate);
@@ -165,29 +175,61 @@ export default function AttendeesPage() {
     }
   };
 
-  const toggleSelect = (id: string) => {
+  // WHY: `attendees` only holds the current page's rows, but selections can
+  // span multiple pages (selectedIds isn't cleared on page change). Bulk
+  // delete needs each selected attendee's assignment status even after its
+  // page is no longer loaded, so we snapshot the full record here instead of
+  // re-deriving it from `attendees` at delete time.
+  const toggleSelect = (attendee: Attendee) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
+      if (next.has(attendee.id)) {
+        next.delete(attendee.id);
       } else {
-        next.add(id);
+        next.add(attendee.id);
+      }
+      return next;
+    });
+    setSelectedAttendeesMap((prev) => {
+      const next = new Map(prev);
+      if (next.has(attendee.id)) {
+        next.delete(attendee.id);
+      } else {
+        next.set(attendee.id, attendee);
       }
       return next;
     });
   };
 
   const toggleSelectAll = () => {
+    const allOnPageSelected = attendees.every((a) => selectedIds.has(a.id));
     setSelectedIds((prev) => {
-      if (attendees.every((a) => prev.has(a.id))) {
-        return new Set();
+      const next = new Set(prev);
+      if (allOnPageSelected) {
+        attendees.forEach((a) => next.delete(a.id));
+      } else {
+        attendees.forEach((a) => next.add(a.id));
       }
-      return new Set(attendees.map((a) => a.id));
+      return next;
+    });
+    setSelectedAttendeesMap((prev) => {
+      const next = new Map(prev);
+      if (allOnPageSelected) {
+        attendees.forEach((a) => next.delete(a.id));
+      } else {
+        attendees.forEach((a) => next.set(a.id, a));
+      }
+      return next;
     });
   };
 
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setSelectedAttendeesMap(new Map());
+  };
+
   const handleConfirmBulkDelete = async (reason: string) => {
-    const ids = Array.from(selectedIds);
+    const ids = idsPendingBulkDelete.length > 0 ? idsPendingBulkDelete : Array.from(selectedIds);
     try {
       setBulkDeleting(true);
       const response = await attendeeApi.bulkDelete(ids, reason);
@@ -199,12 +241,61 @@ export default function AttendeesPage() {
         toastError(`${failed.length} attendee(s) could not be deleted`);
       }
       setShowBulkDeleteModal(false);
-      setSelectedIds(new Set());
+      setIdsPendingBulkDelete([]);
+      clearSelection();
       loadAttendees();
     } catch (error) {
       // Error already shown by API service
     } finally {
       setBulkDeleting(false);
+    }
+  };
+
+  // WHY: Same rationale as handleDelete's single-attendee check — surface
+  // room-assigned selections before the reason picker instead of letting
+  // the bulk endpoint fail those rows silently. Uses selectedAttendeesMap
+  // (not the current page's `attendees`) because selections can span pages
+  // that are no longer loaded.
+  const handleOpenBulkDelete = () => {
+    const assigned = Array.from(selectedAttendeesMap.values()).filter((a) => a.assignment);
+    if (assigned.length > 0) {
+      setAssignedForBulkWarning(assigned);
+      return;
+    }
+    setIdsPendingBulkDelete(Array.from(selectedIds));
+    setShowBulkDeleteModal(true);
+  };
+
+  const handleBulkKeepAssigned = () => {
+    if (!assignedForBulkWarning) return;
+    const assignedIds = new Set(assignedForBulkWarning.map((a) => a.id));
+    const remaining = Array.from(selectedIds).filter((id) => !assignedIds.has(id));
+    setAssignedForBulkWarning(null);
+    if (remaining.length === 0) {
+      toastError('All selected attendees are assigned to rooms. Nothing to delete.');
+      return;
+    }
+    setIdsPendingBulkDelete(remaining);
+    setShowBulkDeleteModal(true);
+  };
+
+  const handleBulkUnassignAndContinue = async () => {
+    if (!assignedForBulkWarning) return;
+    try {
+      setBulkUnassigning(true);
+      await Promise.all(
+        assignedForBulkWarning
+          .filter((a) => a.assignment)
+          .map((a) => assignmentApi.delete(a.assignment!.id))
+      );
+      toastSuccess(`${assignedForBulkWarning.length} attendee(s) unassigned from their rooms`);
+      setIdsPendingBulkDelete(Array.from(selectedIds));
+      setAssignedForBulkWarning(null);
+      setShowBulkDeleteModal(true);
+    } catch (error) {
+      // Error already shown by API service
+    } finally {
+      setBulkUnassigning(false);
     }
   };
 
@@ -431,7 +522,7 @@ export default function AttendeesPage() {
               Send WhatsApp Message
             </button>
             <button
-              onClick={() => setShowBulkDeleteModal(true)}
+              onClick={handleOpenBulkDelete}
               className="btn-secondary flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 hover:bg-red-100"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -440,7 +531,7 @@ export default function AttendeesPage() {
               Delete Selected
             </button>
             <button
-              onClick={() => setSelectedIds(new Set())}
+              onClick={clearSelection}
               className="text-sm text-gray-500 hover:text-gray-700 px-2"
             >
               Clear
@@ -494,7 +585,7 @@ export default function AttendeesPage() {
                         <input
                           type="checkbox"
                           checked={selectedIds.has(attendee.id)}
-                          onChange={() => toggleSelect(attendee.id)}
+                          onChange={() => toggleSelect(attendee)}
                           className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                         />
                       </td>
@@ -634,6 +725,17 @@ export default function AttendeesPage() {
           unassigning={unassigning}
           onCancel={() => setAssignedWarningAttendee(null)}
           onUnassignAndContinue={handleUnassignAndContinueDelete}
+        />
+      )}
+
+      {/* Bulk Room Assignment Warning — shown before the bulk deletion reason modal */}
+      {assignedForBulkWarning && (
+        <BulkAssignedAttendeesWarningModal
+          attendees={assignedForBulkWarning}
+          unassigning={bulkUnassigning}
+          onCancel={() => setAssignedForBulkWarning(null)}
+          onKeepAssigned={handleBulkKeepAssigned}
+          onUnassignAndContinue={handleBulkUnassignAndContinue}
         />
       )}
 
@@ -1606,6 +1708,86 @@ function AssignedAttendeeWarningModal({
             className="px-5 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm transition-colors shadow disabled:opacity-50"
           >
             {unassigning ? 'Unassigning...' : 'Unassign & continue to delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Bulk Assigned Attendees Warning Modal
+ *
+ * WHY: Same rationale as AssignedAttendeeWarningModal, but for bulk delete —
+ * lists every room-assigned attendee in the selection and lets the admin
+ * either skip them (delete only the unassigned rest) or unassign all of
+ * them and proceed with the full selection, instead of the bulk endpoint
+ * silently dropping them into an unexplained "could not be deleted" count.
+ */
+interface BulkAssignedAttendeesWarningModalProps {
+  attendees: Attendee[];
+  unassigning: boolean;
+  onCancel: () => void;
+  onKeepAssigned: () => void;
+  onUnassignAndContinue: () => void;
+}
+
+function BulkAssignedAttendeesWarningModal({
+  attendees,
+  unassigning,
+  onCancel,
+  onKeepAssigned,
+  onUnassignAndContinue,
+}: BulkAssignedAttendeesWarningModalProps) {
+  const roomLabelFor = (attendee: Attendee) => {
+    const room = attendee.assignment?.room as any;
+    return room
+      ? `Room ${room.roomNumber}${room.floor?.building?.name ? ` in ${room.floor.building.name}` : ''}`
+      : 'a room';
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 pb-2 border-b">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+              <AlertTriangle className="text-amber-600" size={20} />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">
+              {attendees.length} attendee{attendees.length > 1 ? 's are' : ' is'} assigned to a room
+            </h3>
+          </div>
+          <button type="button" onClick={onCancel} disabled={unassigning} className="text-gray-400 hover:text-gray-500 font-bold text-xl">
+            ×
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-3">
+          They must be unassigned before they can be deleted. Unassign them all and continue, or keep
+          them assigned and only delete the rest of the selection.
+        </p>
+
+        <ul className="max-h-48 overflow-y-auto divide-y divide-gray-100 border rounded mb-4">
+          {attendees.map((attendee) => (
+            <li key={attendee.id} className="px-3 py-2 text-sm flex items-center justify-between gap-2">
+              <span className="text-gray-900 font-medium truncate">{attendee.fullName}</span>
+              <span className="text-gray-500 text-xs whitespace-nowrap">{roomLabelFor(attendee)}</span>
+            </li>
+          ))}
+        </ul>
+
+        <div className="flex items-center justify-end gap-3 pt-4 border-t mt-2">
+          <button type="button" onClick={onKeepAssigned} disabled={unassigning} className="btn-secondary text-sm px-4 py-2">
+            Keep assigned
+          </button>
+          <button
+            type="button"
+            onClick={onUnassignAndContinue}
+            disabled={unassigning}
+            className="px-5 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm transition-colors shadow disabled:opacity-50"
+          >
+            {unassigning ? 'Unassigning...' : 'Unassign all & continue to delete'}
           </button>
         </div>
       </div>

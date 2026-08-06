@@ -25,7 +25,12 @@ export class AttendeeService {
    * Create new attendee
    * WHY: Register person for conference
    */
-  async create(data: CreateAttendeeDTO, organizationId: string, userId?: string): Promise<Attendee> {
+  async create(
+    data: CreateAttendeeDTO,
+    organizationId: string,
+    userId?: string,
+    notify: boolean = true
+  ): Promise<Attendee> {
     const attendee = await this.attendeeRepository.create({ ...data, organizationId });
 
     // Create audit log
@@ -39,18 +44,23 @@ export class AttendeeService {
     });
 
     // Notify clients
-    try {
-      const notificationService = getNotificationService();
-      notificationService.broadcast(
-        organizationId,
-        NotificationEvent.ATTENDEE_CREATED,
-        NotificationType.SUCCESS,
-        `Attendee "${attendee.fullName}" registered`,
-        'Attendee Registered',
-        { attendeeId: attendee.id, fullName: attendee.fullName }
-      );
-    } catch (error) {
-      console.error('Failed to send notification:', error);
+    // WHY: Excel import creates attendees in a loop and passes notify=false —
+    // one toast per imported row would flood the UI, so the controller sends
+    // a single consolidated "Imported N attendees" notification instead.
+    if (notify) {
+      try {
+        const notificationService = getNotificationService();
+        notificationService.broadcast(
+          organizationId,
+          NotificationEvent.ATTENDEE_CREATED,
+          NotificationType.SUCCESS,
+          `Attendee "${attendee.fullName}" registered`,
+          'Attendee Registered',
+          { attendeeId: attendee.id, fullName: attendee.fullName }
+        );
+      } catch (error) {
+        console.error('Failed to send notification:', error);
+      }
     }
 
     return attendee;

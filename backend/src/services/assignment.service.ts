@@ -5,7 +5,7 @@
  * Handles capacity validation, conflict prevention, and batch operations
  */
 
-import { RoomAssignment } from '@prisma/client';
+import { Attendee, Gender, Room, RoomAssignment } from '@prisma/client';
 import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AttendeeRepository } from '@/repositories/AttendeeRepository';
 import { RoomRepository } from '@/repositories/RoomRepository';
@@ -27,6 +27,41 @@ export class AssignmentService {
     private roomRepository: RoomRepository,
     private auditLogRepository: AuditLogRepository
   ) {}
+
+  /**
+   * Enforce single-gender rooms for manual/batch assignment.
+   * WHY: Mirrors the auto-assignment engine's GenderMatchRule — FAMILY rooms
+   * may be mixed-gender, but GENERAL/VIP rooms must stay single-gender once
+   * occupied. The auto-assignment engine enforces this for its own flow, but
+   * manual assignment (drag-and-drop, batch import) went through this
+   * service directly and had no equivalent check.
+   */
+  private async assertGenderCompatible(
+    room: Pick<Room, 'id' | 'roomNumber' | 'roomType'>,
+    attendee: Pick<Attendee, 'id' | 'fullName' | 'gender'>,
+    organizationId: string
+  ): Promise<void> {
+    if (room.roomType === 'FAMILY') return;
+
+    const occupants = await this.assignmentRepository.findByRoomId(room.id, organizationId);
+    const others = occupants.filter((o) => o.attendeeId !== attendee.id);
+    if (others.length === 0) return;
+
+    if (!attendee.gender || attendee.gender === Gender.OTHER) {
+      throw new AppError(
+        409,
+        `${attendee.fullName} has an unspecified or OTHER gender and can only be assigned to an empty room or a FAMILY room.`
+      );
+    }
+
+    const roomGender = others[0].attendee.gender;
+    if (roomGender && roomGender !== attendee.gender) {
+      throw new AppError(
+        409,
+        `Room ${room.roomNumber} is occupied by ${roomGender} attendees, cannot assign ${attendee.gender} attendee ${attendee.fullName}.`
+      );
+    }
+  }
 
   /**
    * Create room assignment
@@ -62,6 +97,9 @@ export class AssignmentService {
         `Room ${room.roomNumber} is at full capacity (${room.capacity}/${room.capacity})`
       );
     }
+
+    // Business rule: Room must stay single-gender (unless FAMILY)
+    await this.assertGenderCompatible(room, attendee, organizationId);
 
     // Create assignment
     // WHY: RoomAssignment has no direct organizationId column; tenancy is
@@ -148,6 +186,9 @@ export class AssignmentService {
           `Room ${newRoom.roomNumber} is at full capacity (${newRoom.capacity}/${newRoom.capacity})`
         );
       }
+
+      // Business rule: Room must stay single-gender (unless FAMILY)
+      await this.assertGenderCompatible(newRoom, existing.attendee, organizationId);
     }
 
     const updated = await this.assignmentRepository.update(id, data);
@@ -259,6 +300,13 @@ export class AssignmentService {
           const occupancy = await this.assignmentRepository.countByRoomId(assignment.roomId, organizationId);
           if (occupancy >= room.capacity) {
             return { valid: false, error: `Room ${room.roomNumber} is full` };
+          }
+
+          // Check room gender compatibility
+          try {
+            await this.assertGenderCompatible(room, attendee, organizationId);
+          } catch (error) {
+            return { valid: false, error: error instanceof AppError ? error.message : 'Gender mismatch' };
           }
 
           return { valid: true, attendee, room };

@@ -7,23 +7,68 @@
  * SOLID Principle: Single Responsibility - Only manages Socket.io connection
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import toast from 'react-hot-toast';
-import {
-  NotificationPayload,
-  NotificationType,
-  NotificationEvent,
-} from '@/types/notifications';
+import { NotificationPayload, NotificationType } from '@/types/notifications';
 
 const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3000';
 
+// WHY: The server broadcasts each notification on two channels — a generic
+// 'notification' event and the specific event name (e.g. 'room:assigned') —
+// so other listeners can subscribe narrowly if they ever need to. The toast
+// display only needs one of those, and previously subscribed to both, which
+// alone doubled every toast. On top of that, useSocket() used to open a new
+// io() connection per call site; App.tsx holds one globally while several
+// pages also called it locally, so a page with its own call ended up with
+// two live connections — each double-subscribed — quadrupling the toast.
+// A module-level singleton, reference-counted across hook consumers, fixes
+// both: exactly one connection, exactly one 'notification' listener.
+let sharedSocket: Socket | null = null;
+let consumerCount = 0;
+
+function getOrCreateSocket(): Socket {
+  if (!sharedSocket) {
+    sharedSocket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+      withCredentials: true,
+    });
+
+    sharedSocket.on('connect', () => {
+      console.log('✅ Socket connected:', sharedSocket?.id);
+    });
+
+    sharedSocket.on('disconnect', () => {
+      console.log('❌ Socket disconnected');
+    });
+
+    sharedSocket.on('reconnect', (attemptNumber: number) => {
+      console.log('🔄 Socket reconnected after', attemptNumber, 'attempts');
+      toast.success('Connection restored');
+    });
+
+    sharedSocket.on('reconnect_error', () => {
+      console.error('❌ Socket reconnection failed');
+    });
+
+    sharedSocket.on('notification', (payload: NotificationPayload) => {
+      handleNotification(payload);
+    });
+  }
+  return sharedSocket;
+}
+
 /**
  * Custom hook for Socket.io connection
- * WHY: Provides a clean API for subscribing to real-time events
+ * WHY: Provides a clean API for subscribing to real-time events, backed by
+ * a single shared connection no matter how many components use this hook.
  */
 export function useSocket(enabled: boolean = true) {
   const socketRef = useRef<Socket | null>(null);
+  const [, forceRender] = useState(0);
 
   useEffect(() => {
     // WHY: Only connect once authenticated — the server's handshake
@@ -33,50 +78,16 @@ export function useSocket(enabled: boolean = true) {
       return;
     }
 
-    // WHY: Create socket connection once
-    socketRef.current = io(SOCKET_URL, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionAttempts: 5,
-      withCredentials: true,
-    });
+    socketRef.current = getOrCreateSocket();
+    consumerCount += 1;
+    forceRender((n) => n + 1);
 
-    const socket = socketRef.current;
-
-    // Connection events
-    socket.on('connect', () => {
-      console.log('✅ Socket connected:', socket.id);
-    });
-
-    socket.on('disconnect', () => {
-      console.log('❌ Socket disconnected');
-    });
-
-    socket.on('reconnect', (attemptNumber: number) => {
-      console.log('🔄 Socket reconnected after', attemptNumber, 'attempts');
-      toast.success('Connection restored');
-    });
-
-    socket.on('reconnect_error', () => {
-      console.error('❌ Socket reconnection failed');
-    });
-
-    // WHY: Listen for generic notification events
-    socket.on('notification', (payload: NotificationPayload) => {
-      handleNotification(payload);
-    });
-
-    // WHY: Listen for specific events (can be extended)
-    Object.values(NotificationEvent).forEach((event) => {
-      socket.on(event, (payload: NotificationPayload) => {
-        handleNotification({ ...payload, event });
-      });
-    });
-
-    // WHY: Cleanup on unmount
     return () => {
-      socket.disconnect();
+      consumerCount -= 1;
+      if (consumerCount <= 0) {
+        sharedSocket?.disconnect();
+        sharedSocket = null;
+      }
     };
   }, [enabled]);
 

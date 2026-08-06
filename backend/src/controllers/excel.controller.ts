@@ -11,6 +11,8 @@ import { AttendeeService } from '@/services/attendee.service';
 import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AppError } from '@/middleware/errorHandler';
 import prisma from '@/utils/prisma-client';
+import { getNotificationService } from '@/services/notification.service';
+import { NotificationEvent, NotificationType } from '@/types/notifications';
 
 export class ExcelController {
   constructor(
@@ -91,11 +93,11 @@ export class ExcelController {
             });
           } else {
             // Safe creation of new unique Ticket entries
-            attendee = await this.attendeeService.create(row as any, organizationId, req.user!.id);
+            attendee = await this.attendeeService.create(row as any, organizationId, req.user!.id, false);
           }
         } else {
           // If no Ticket ID provided, create cleanly
-          attendee = await this.attendeeService.create(row as any, organizationId, req.user!.id);
+          attendee = await this.attendeeService.create(row as any, organizationId, req.user!.id, false);
         }
 
         imported.push(attendee);
@@ -106,6 +108,23 @@ export class ExcelController {
           value: data[i]?.fullName || 'Unknown',
           message: (error as Error).message,
         });
+      }
+    }
+
+    // WHY: Each row's attendeeService.create() call above skips its own
+    // per-row notification (notify=false) to avoid flooding the UI with one
+    // toast per imported attendee — send a single summary instead.
+    if (imported.length > 0) {
+      try {
+        getNotificationService().broadcast(
+          organizationId,
+          NotificationEvent.IMPORT_COMPLETED,
+          NotificationType.SUCCESS,
+          `Imported ${imported.length} attendee(s)${failed.length > 0 ? `, ${failed.length} failed` : ''}`,
+          'Import Complete'
+        );
+      } catch (error) {
+        console.error('Failed to send import notification:', error);
       }
     }
 
