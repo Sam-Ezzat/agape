@@ -269,6 +269,7 @@ export interface AutoAssignmentConfig {
   id: string;
   conferenceHouseId: string;
   enabledBuildings?: string[];
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
   staffReservedCapacity?: number;
   ruleWeights?: Record<string, number>;
   createdAt: string;
@@ -278,6 +279,7 @@ export interface AutoAssignmentConfig {
 export interface RunAutoAssignmentDTO {
   conferenceHouseId: string;
   buildingIds?: string[];
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
   dryRun?: boolean;
   options?: {
     minGroupSize?: number;
@@ -287,6 +289,7 @@ export interface RunAutoAssignmentDTO {
 
 export interface UpdateAutoAssignmentConfigDTO {
   enabledBuildings?: string[];
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
   staffReservedCapacity?: number;
   ruleWeights?: Record<string, number>;
 }

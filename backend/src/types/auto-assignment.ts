@@ -143,6 +143,7 @@ export interface StageResult {
 export interface RunAutoAssignmentDTO {
   conferenceHouseId: string;
   buildingIds?: string[];         // Optional: override config buildings
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>; // Optional: manual per-building gender pin, overrides config; buildings absent keep automatic behavior
   dryRun?: boolean;               // Preview without saving
   options?: {
     skipOptimization?: boolean;
@@ -157,6 +158,7 @@ export interface RunAutoAssignmentDTO {
 export interface AutoAssignmentConfigDTO {
   conferenceHouseId: string;
   enabledBuildings: string[];
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
   staffReservedCapacity?: number;
   vipReservedCapacity?: number;
   emergencyReservedCapacity?: number;

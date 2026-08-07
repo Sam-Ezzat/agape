@@ -145,6 +145,18 @@ export class AutoAssignmentService {
       const config = await this.configRepository.getOrCreateDefault(params.conferenceHouseId, organizationId);
       const enabledBuildings = params.buildingIds || config.enabledBuildings;
 
+      // WHY: Manual per-building gender pins take priority over the automatic
+      // first-come-first-served behavior below — pre-seed the tracking map so
+      // findCandidateRooms() enforces the pin from the very first assignment.
+      // Buildings absent from this map fall through to the existing dynamic logic.
+      const buildingGenderOverrides =
+        params.buildingGenderOverrides || (config.buildingGenderOverrides as Record<string, Gender> | null) || {};
+      for (const [buildingId, gender] of Object.entries(buildingGenderOverrides)) {
+        if (gender === Gender.MALE || gender === Gender.FEMALE) {
+          this.buildingGenderMap.set(buildingId, gender);
+        }
+      }
+
       stages.push({
         stage: 1,
         name: 'Load Configuration',

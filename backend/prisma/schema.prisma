@@ -290,6 +290,7 @@ model AutoAssignmentConfig {
   id                        String   @id @default(uuid())
   conferenceHouseId         String   @unique @map("conference_house_id")
   enabledBuildings          String[] @map("enabled_buildings") // Array of building IDs to include
+  buildingGenderOverrides   Json     @default("{}") @map("building_gender_overrides") // buildingId -> 'MALE'|'FEMALE' manual pin; buildings absent from this map keep the automatic first-come gender behavior
   staffReservedCapacity     Int      @default(0) @map("staff_reserved_capacity") // Beds reserved for staff
   vipReservedCapacity       Int      @default(0) @map("vip_reserved_capacity") // Beds reserved for VIP
   emergencyReservedCapacity Int      @default(0) @map("emergency_reserved_capacity") // Beds reserved for emergencies

@@ -54,6 +54,7 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
         data: {
           conferenceHouseId,
           enabledBuildings,
+          buildingGenderOverrides: {},
           staffReservedCapacity: 0,
           vipReservedCapacity: 0,
           emergencyReservedCapacity: 0,
@@ -121,6 +122,7 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
       create: {
         conferenceHouseId: data.conferenceHouseId,
         enabledBuildings: data.enabledBuildings,
+        buildingGenderOverrides: (data.buildingGenderOverrides || {}) as any,
         staffReservedCapacity: data.staffReservedCapacity || 0,
         vipReservedCapacity: data.vipReservedCapacity || 0,
         emergencyReservedCapacity: data.emergencyReservedCapacity || 0,
@@ -130,6 +132,7 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
       },
       update: {
         enabledBuildings: data.enabledBuildings,
+        buildingGenderOverrides: data.buildingGenderOverrides as any,
         staffReservedCapacity: data.staffReservedCapacity,
         vipReservedCapacity: data.vipReservedCapacity,
         emergencyReservedCapacity: data.emergencyReservedCapacity,

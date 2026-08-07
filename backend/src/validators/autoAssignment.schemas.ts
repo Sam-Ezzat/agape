@@ -14,6 +14,9 @@ import { z } from 'zod';
 export const runAutoAssignmentSchema = z.object({
   conferenceHouseId: z.string().uuid('Invalid conference house ID'),
   buildingIds: z.array(z.string().uuid()).optional(),
+  // WHY: Manual per-building gender pin — buildings absent from this map
+  // keep the automatic first-come gender behavior.
+  buildingGenderOverrides: z.record(z.string().uuid(), z.enum(['MALE', 'FEMALE'])).optional(),
   dryRun: z.boolean().optional().default(false),
   options: z.object({
     onlyUnassigned: z.boolean().optional().default(true),
@@ -27,6 +30,7 @@ export const runAutoAssignmentSchema = z.object({
  */
 export const updateAutoAssignmentConfigSchema = z.object({
   enabledBuildings: z.array(z.string().uuid()).optional(),
+  buildingGenderOverrides: z.record(z.string().uuid(), z.enum(['MALE', 'FEMALE'])).optional(),
   staffReservedCapacity: z.number().int().min(0).max(1000).optional(),
   vipReservedCapacity: z.number().int().min(0).max(1000).optional(),
   emergencyReservedCapacity: z.number().int().min(0).max(100).optional(),

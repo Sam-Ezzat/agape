@@ -70,6 +70,9 @@ export default function AutoAssignmentPage() {
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [selectedHouseId, setSelectedHouseId] = useState<string>('');
   const [selectedBuildingIds, setSelectedBuildingIds] = useState<string[]>([]);
+  // WHY: Manual per-building gender pin. Buildings absent from this map keep
+  // the automatic first-come gender behavior.
+  const [buildingGenderOverrides, setBuildingGenderOverrides] = useState<Record<string, 'MALE' | 'FEMALE'>>({});
   
   const [status, setStatus] = useState<AutoAssignmentStatus | null>(null);
   const [ruleWeights, setRuleWeights] = useState(DEFAULT_RULE_WEIGHTS);
@@ -235,6 +238,8 @@ export default function AutoAssignmentPage() {
         if (configData.enabledBuildings) {
           setSelectedBuildingIds(configData.enabledBuildings);
         }
+
+        setBuildingGenderOverrides(configData.buildingGenderOverrides || {});
       }
     } catch (error) {
       console.error('Failed to load config:', error);
@@ -263,6 +268,19 @@ export default function AutoAssignmentPage() {
     setConfigDirty(true);
   };
   
+  const handleBuildingGenderChange = (buildingId: string, gender: 'MALE' | 'FEMALE' | '') => {
+    setBuildingGenderOverrides(prev => {
+      const next = { ...prev };
+      if (gender === '') {
+        delete next[buildingId];
+      } else {
+        next[buildingId] = gender;
+      }
+      return next;
+    });
+    setConfigDirty(true);
+  };
+
   const handleRuleWeightChange = (ruleName: string, value: number) => {
     setRuleWeights(prev => ({ ...prev, [ruleName]: value }));
     setConfigDirty(true);
@@ -281,6 +299,7 @@ export default function AutoAssignmentPage() {
       
       await autoAssignmentApi.updateConfig(selectedHouseId, {
         enabledBuildings: selectedBuildingIds,
+        buildingGenderOverrides,
         ruleWeights,
         // Backend expects integer percentage (0-50), convert from decimal (0.0-0.5)
         staffReservedCapacity: Math.round(staffReservedCapacity * 100),
@@ -335,6 +354,7 @@ export default function AutoAssignmentPage() {
       const response = await autoAssignmentApi.execute({
         conferenceHouseId: selectedHouseId,
         buildingIds: selectedBuildingIds,
+        buildingGenderOverrides,
         dryRun: false,
       });
       
@@ -402,6 +422,7 @@ export default function AutoAssignmentPage() {
       const response = await autoAssignmentApi.preview({
         conferenceHouseId: selectedHouseId,
         buildingIds: selectedBuildingIds,
+        buildingGenderOverrides,
         dryRun: true,
       });
       
@@ -477,6 +498,7 @@ export default function AutoAssignmentPage() {
       const response = await autoAssignmentApi.execute({
         conferenceHouseId: selectedHouseId,
         buildingIds: selectedBuildingIds,
+        buildingGenderOverrides,
         dryRun: false,  // Actually save to database
       });
       
@@ -698,22 +720,23 @@ export default function AutoAssignmentPage() {
             </h2>
             
             {/* Table Header/Columns */}
-            <div className="grid grid-cols-12 gap-4 px-3 py-2 text-xs font-semibold text-gray-500 uppercase bg-gray-50 rounded-lg mb-2">
-              <div className="col-span-3">Building Name</div>
-              <div className="col-span-2 text-right">Floors</div>
-              <div className="col-span-2 text-right">Available Rooms</div>
-              <div className="col-span-3 text-right">Available Beds</div>
-              <div className="col-span-2 text-right">Total Capacity</div>
+            <div className="hidden md:flex items-center gap-4 px-3 py-2 text-xs font-semibold text-gray-500 uppercase bg-gray-50 rounded-lg mb-2">
+              <div className="flex-1 min-w-[140px]">Building Name</div>
+              <div className="w-16 text-right">Floors</div>
+              <div className="w-24 text-right">Rooms</div>
+              <div className="w-28 text-right">Beds</div>
+              <div className="w-20 text-right">Capacity</div>
+              <div className="w-36 text-right">Assign Gender</div>
             </div>
-            
+
             <div className="space-y-2">
               {buildings
                 .filter(b => b.conferenceHouseId === selectedHouseId)
                 .map(building => {
                   const stats = getBuildingStats(building);
                   return (
-                    <label key={building.id} className="grid grid-cols-12 gap-4 items-center p-3 rounded-lg hover:bg-gray-50 cursor-pointer border border-gray-100 transition-colors">
-                      <div className="col-span-3 flex items-center gap-3">
+                    <label key={building.id} className="flex flex-col md:flex-row md:flex-wrap gap-3 md:gap-4 md:items-center p-3 rounded-lg hover:bg-gray-50 cursor-pointer border border-gray-100 transition-colors">
+                      <div className="w-full md:flex-1 md:min-w-[140px] flex items-center gap-3">
                         <input
                           type="checkbox"
                           checked={selectedBuildingIds.includes(building.id)}
@@ -722,20 +745,46 @@ export default function AutoAssignmentPage() {
                         />
                         <span className="font-semibold text-gray-900">{building.name}</span>
                       </div>
-                      <div className="col-span-2 text-right text-sm text-gray-600">
-                        {building.floorCount} floors
+                      <div className="w-full flex items-center justify-between md:block md:w-16 md:text-right text-sm text-gray-600">
+                        <span className="md:hidden text-xs text-gray-400">Floors</span>
+                        <span>{building.floorCount} floors</span>
                       </div>
-                      <div className="col-span-2 text-right text-sm text-gray-600">
-                        <span className="font-semibold text-primary-600">{stats.availableRooms}</span>
-                        <span className="text-xs text-gray-400"> / {stats.totalRooms} rms</span>
+                      <div className="w-full flex items-center justify-between md:block md:w-24 md:text-right text-sm text-gray-600">
+                        <span className="md:hidden text-xs text-gray-400">Available Rooms</span>
+                        <span>
+                          <span className="font-semibold text-primary-600">{stats.availableRooms}</span>
+                          <span className="text-xs text-gray-400"> / {stats.totalRooms} rms</span>
+                        </span>
                       </div>
-                      <div className="col-span-3 text-right text-sm text-gray-600">
-                        <span className="font-semibold text-green-600">{stats.availableBeds}</span>
-                        <span className="text-xs text-gray-400"> / {stats.totalCapacity} empty</span>
+                      <div className="w-full flex items-center justify-between md:block md:w-28 md:text-right text-sm text-gray-600">
+                        <span className="md:hidden text-xs text-gray-400">Available Beds</span>
+                        <span>
+                          <span className="font-semibold text-green-600">{stats.availableBeds}</span>
+                          <span className="text-xs text-gray-400"> / {stats.totalCapacity} empty</span>
+                        </span>
                       </div>
-                      <div className="col-span-2 text-right text-sm text-gray-600">
-                        <span className="font-semibold text-gray-950">{stats.totalCapacity}</span>
-                        <span className="text-xs text-gray-400"> beds</span>
+                      <div className="w-full flex items-center justify-between md:block md:w-20 md:text-right text-sm text-gray-600">
+                        <span className="md:hidden text-xs text-gray-400">Total Capacity</span>
+                        <span>
+                          <span className="font-semibold text-gray-950">{stats.totalCapacity}</span>
+                          <span className="text-xs text-gray-400"> beds</span>
+                        </span>
+                      </div>
+                      <div className="w-full flex items-center gap-2 md:block md:w-36">
+                        <span className="md:hidden text-xs text-gray-400 shrink-0">Assign Gender</span>
+                        <select
+                          value={buildingGenderOverrides[building.id] || ''}
+                          onChange={(e) =>
+                            handleBuildingGenderChange(building.id, e.target.value as 'MALE' | 'FEMALE' | '')
+                          }
+                          onClick={(e) => e.stopPropagation()}
+                          className="input text-sm py-1.5 flex-1 md:w-full"
+                          title="Manually pin which gender may be assigned to this building — leave on Auto to keep the existing first-come behavior"
+                        >
+                          <option value="">Auto</option>
+                          <option value="MALE">Male only</option>
+                          <option value="FEMALE">Female only</option>
+                        </select>
                       </div>
                     </label>
                   );
