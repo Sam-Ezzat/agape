@@ -795,6 +795,7 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
     isServant: attendee?.isServant !== undefined ? String(attendee.isServant) : '',
     arrivalMethod: attendee?.arrivalMethod || '',
     busPickupPoint: attendee?.busPickupPoint || '',
+    mealType: attendee?.mealType || '',
     paymentMethod: attendee?.paymentMethod || '',
     paymentStatus: attendee?.paymentStatus || 'PENDING',
     transactionNumber: attendee?.transactionNumber || '',
@@ -865,6 +866,7 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
         isServant: formData.isServant === 'true' ? true : formData.isServant === 'false' ? false : undefined,
         arrivalMethod: formData.arrivalMethod.trim() || undefined,
         busPickupPoint: formData.busPickupPoint.trim() || undefined,
+        mealType: formData.mealType || undefined,
         paymentMethod: formData.paymentMethod.trim() || undefined,
         paymentStatus: formData.paymentStatus,
         transactionNumber: formData.transactionNumber.trim() || undefined,
@@ -1085,6 +1087,25 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                     placeholder="Specify pickup location"
                   />
                 )}
+              </div>
+            </div>
+          </div>
+
+          {/* Meal Preference */}
+          <div>
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Meal Preference</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Meal Type</label>
+                <select
+                  value={formData.mealType}
+                  onChange={(e) => setFormData({ ...formData, mealType: e.target.value })}
+                  className="input w-full"
+                >
+                  <option value="">No selection</option>
+                  <option value="وجبات صيامي">وجبات صيامي</option>
+                  <option value="وجبات فطاري">وجبات فطاري</option>
+                </select>
               </div>
             </div>
           </div>
@@ -1569,6 +1590,10 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
             <DetailRow label="Church" value={attendee.church} />
             <DetailRow label="Area" value={attendee.area} />
             <DetailRow label="Governorate" value={attendee.governorate} />
+            <DetailRow
+              label="Are you a servant in your church?"
+              value={attendee.isServant === true ? 'Yes' : attendee.isServant === false ? 'No' : undefined}
+            />
 
             {/* Travel & Transportation */}
             <div className="col-span-2">
@@ -1576,6 +1601,12 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
             </div>
             <DetailRow label="Arrival Method" value={attendee.arrivalMethod} />
             <DetailRow label="Bus Pickup Point" value={attendee.busPickupPoint} />
+
+            {/* Meal Preference */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Meal Preference</h4>
+            </div>
+            <DetailRow label="Meal Type" value={attendee.mealType} />
 
             {/* Payment Information */}
             <div className="col-span-2">

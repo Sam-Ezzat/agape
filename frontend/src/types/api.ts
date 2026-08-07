@@ -94,6 +94,7 @@ export interface Attendee {
   isServant?: boolean;
   arrivalMethod?: string;
   busPickupPoint?: string;
+  mealType?: string;
   paymentMethod?: string;
   paymentStatus?: PaymentStatus;
   transactionNumber?: string;

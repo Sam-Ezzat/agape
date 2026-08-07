@@ -35,8 +35,10 @@ export interface TemplateVariables {
   church?: string;
   area?: string;
   governorate?: string;
+  isServant?: string;
   arrivalMethod?: string;
   busPickupPoint?: string;
+  mealType?: string;
   paymentMethod?: string;
   paymentStatus?: string;
   transactionNumber?: string;
@@ -282,8 +284,10 @@ export class TemplateService {
       church: attendee.church || '',
       area: attendee.area || '',
       governorate: attendee.governorate || '',
+      isServant: attendee.isServant === true ? 'Yes' : attendee.isServant === false ? 'No' : '',
       arrivalMethod: attendee.arrivalMethod || '',
       busPickupPoint: attendee.busPickupPoint || '',
+      mealType: attendee.mealType || '',
       paymentMethod: attendee.paymentMethod || '',
       paymentStatus: attendee.paymentStatus || '',
       transactionNumber: attendee.transactionNumber || '',

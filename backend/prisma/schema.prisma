@@ -169,7 +169,10 @@ model Attendee {
   // Travel & Transportation
   arrivalMethod     String?         @map("arrival_method") // e.g., "باص المؤتمر", "ملاكي"
   busPickupPoint    String?         @map("bus_pickup_point") // Bus pickup location
-  
+
+  // Meal Preference
+  mealType          String?         @map("meal_type") // e.g., "وجبات صيامي", "وجبات فطاري"
+
   // Payment Information
   paymentMethod     String?         @map("payment_method") // e.g., "Orange Cash", "InstaPay"
   paymentStatus     PaymentStatus?  @default(PENDING) @map("payment_status")

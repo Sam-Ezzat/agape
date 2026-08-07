@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight } from 'lucide-react';
-import { AutoAssignmentExecutionResult, Attendee } from '@/types/api';
+import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight, LayoutList, LayoutGrid } from 'lucide-react';
+import { AutoAssignmentExecutionResult, Attendee, AssignmentPreview } from '@/types/api';
 import { autoAssignmentApi, attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import SwapAttendeesModal from '@/components/SwapAttendeesModal';
 
 type SortOption = 'room' | 'attendee' | 'score' | 'building';
+type ViewMode = 'list' | 'grid';
 
 interface RoomCapacityInfo {
   roomId: string;
@@ -29,7 +30,8 @@ export default function AutoAssignmentPreviewPage() {
   const [selectedHouseId, setSelectedHouseId] = useState<string | null>(null);
   const [selectedBuildingIds, setSelectedBuildingIds] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<SortOption>('room');
-  
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+
   // Attendee modal state
   const [showAttendeeModal, setShowAttendeeModal] = useState(false);
   const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
@@ -126,6 +128,39 @@ export default function AutoAssignmentPreviewPage() {
         return assignments;
     }
   }, [previewResult?.assignments, sortBy]);
+
+  // Group assignments by room for the grid view
+  const roomsGrouped = useMemo(() => {
+    if (!previewResult?.assignments) return [];
+
+    const groups = new Map<string, { info: RoomCapacityInfo; assignments: AssignmentPreview[] }>();
+
+    previewResult.assignments.forEach((assignment) => {
+      const info = roomCapacityMap.get(assignment.roomId);
+      if (!info) return;
+
+      if (!groups.has(assignment.roomId)) {
+        groups.set(assignment.roomId, { info, assignments: [] });
+      }
+      groups.get(assignment.roomId)!.assignments.push(assignment);
+    });
+
+    const rooms = Array.from(groups.values());
+    rooms.forEach((room) => {
+      room.assignments.sort((a, b) => a.attendeeName.localeCompare(b.attendeeName));
+    });
+    rooms.sort((a, b) => {
+      if (a.info.buildingName !== b.info.buildingName) {
+        return a.info.buildingName.localeCompare(b.info.buildingName);
+      }
+      if (a.info.floorNumber !== b.info.floorNumber) {
+        return a.info.floorNumber - b.info.floorNumber;
+      }
+      return a.info.roomNumber.localeCompare(b.info.roomNumber, undefined, { numeric: true });
+    });
+
+    return rooms;
+  }, [previewResult?.assignments, roomCapacityMap]);
 
   const handleConfirmAndExecute = async () => {
     if (!selectedHouseId || selectedBuildingIds.length === 0) {
@@ -501,8 +536,8 @@ export default function AutoAssignmentPreviewPage() {
           </div>
         </div>
 
-        {/* Sort Controls */}
-        <div className="bg-white rounded-lg shadow px-6 py-4 mb-4 flex items-center justify-between">
+        {/* Sort & View Controls */}
+        <div className="bg-white rounded-lg shadow px-6 py-4 mb-4 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <ArrowUpDown size={18} className="text-gray-500" />
             <label className="text-sm font-medium text-gray-700">Sort by:</label>
@@ -517,14 +552,116 @@ export default function AutoAssignmentPreviewPage() {
               <option value="building">Building</option>
             </select>
           </div>
-          {sortBy === 'room' && (
-            <div className="text-sm text-gray-600">
-              <span className="font-medium">Room View:</span> Assignments grouped by room with capacity indicators
+
+          <div className="flex items-center gap-3">
+            {sortBy === 'room' && viewMode === 'list' && (
+              <div className="text-sm text-gray-600">
+                <span className="font-medium">Room View:</span> Assignments grouped by room with capacity indicators
+              </div>
+            )}
+            <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden">
+              <button
+                onClick={() => setViewMode('list')}
+                className={`px-3 py-2 text-sm font-medium flex items-center gap-1.5 transition-colors ${
+                  viewMode === 'list' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <LayoutList size={16} />
+                List
+              </button>
+              <button
+                onClick={() => setViewMode('grid')}
+                className={`px-3 py-2 text-sm font-medium flex items-center gap-1.5 transition-colors border-l border-gray-300 ${
+                  viewMode === 'grid' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <LayoutGrid size={16} />
+                Grid
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
+        {/* Grid View: Room Cards, 3-per-row responsive */}
+        {viewMode === 'grid' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {roomsGrouped.map((room) => {
+              const capacityPercent = room.info.capacity
+                ? (room.info.assignedCount / room.info.capacity) * 100
+                : 0;
+
+              return (
+                <div key={room.info.roomId} className="bg-white rounded-lg shadow overflow-hidden flex flex-col">
+                  {/* Room Card Header */}
+                  <div className="bg-blue-50 border-b border-blue-200 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-blue-900">Room {room.info.roomNumber}</span>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                          capacityPercent >= 100
+                            ? 'bg-green-100 text-green-800'
+                            : capacityPercent >= 75
+                            ? 'bg-blue-100 text-blue-800'
+                            : capacityPercent >= 50
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-orange-100 text-orange-800'
+                        }`}
+                      >
+                        {room.info.assignedCount}/{room.info.capacity}
+                      </span>
+                    </div>
+                    <div className="text-xs text-blue-700 mt-0.5">
+                      {room.info.buildingName} • Floor {room.info.floorNumber}
+                    </div>
+                    <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden mt-2">
+                      <div
+                        className={`h-full transition-all ${
+                          capacityPercent >= 100
+                            ? 'bg-green-500'
+                            : capacityPercent >= 75
+                            ? 'bg-blue-500'
+                            : capacityPercent >= 50
+                            ? 'bg-yellow-500'
+                            : 'bg-orange-500'
+                        }`}
+                        style={{ width: `${Math.min(capacityPercent, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Attendee List */}
+                  <div className="px-4 py-3 flex-1 space-y-2">
+                    {room.assignments.map((assignment) => (
+                      <div key={assignment.attendeeId} className="flex items-center justify-between gap-2 text-sm">
+                        <button
+                          onClick={() => handleAttendeeClick(assignment.attendeeId)}
+                          className="text-blue-600 hover:text-blue-800 flex items-center gap-1.5 transition-colors min-w-0"
+                        >
+                          <User size={13} className="shrink-0" />
+                          <span className="truncate">{assignment.attendeeName}</span>
+                        </button>
+                        <span
+                          className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
+                            assignment.score >= 0.8
+                              ? 'bg-green-100 text-green-800'
+                              : assignment.score >= 0.6
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-orange-100 text-orange-800'
+                          }`}
+                        >
+                          {(assignment.score * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Assignments Table */}
+        {viewMode === 'list' && (
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -752,6 +889,7 @@ export default function AutoAssignmentPreviewPage() {
             </table>
           </div>
         </div>
+        )}
 
         {/* Unassigned Attendees */}
         {previewResult.unassignedAttendees && previewResult.unassignedAttendees.length > 0 && (

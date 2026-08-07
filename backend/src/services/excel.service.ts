@@ -20,8 +20,10 @@ export interface AttendeeExcelRow {
   church?: string;
   area?: string;
   governorate?: string;
+  isServant?: boolean;
   arrivalMethod?: string;
   busPickupPoint?: string;
+  mealType?: string;
   paymentMethod?: string;
   paymentStatus?: string;
   transactionNumber?: string;
@@ -113,8 +115,10 @@ export class ExcelService {
         church: row['Church'] || row['church'] || undefined,
         area: row['Area'] || row['area'] || undefined,
         governorate: row['Governorate'] || row['governorate'] || undefined,
+        isServant: this.parseIsServant(row['Are you a servant in your church?'] || row['isServant']),
         arrivalMethod: row['Arrival Method'] || row['arrivalMethod'] || undefined,
         busPickupPoint: row['Bus Pickup Point'] || row['busPickupPoint'] || undefined,
+        mealType: this.parseMealType(row['Meal Type'] || row['mealType']),
         paymentMethod: row['Payment Method'] || row['paymentMethod'] || undefined,
         paymentStatus: this.parsePaymentStatus(row['Payment Review Status'] || row['paymentStatus']),
         transactionNumber: rawTransactionNumber,
@@ -178,8 +182,10 @@ export class ExcelService {
       'Church': attendee.church || '',
       'Area': attendee.area || '',
       'Governorate': attendee.governorate || '',
+      'Are you a servant in your church?': attendee.isServant === true ? 'Yes' : attendee.isServant === false ? 'No' : '',
       'Arrival Method': attendee.arrivalMethod || '',
       'Bus Pickup Point': attendee.busPickupPoint || '',
+      'Meal Type': attendee.mealType || '',
       'Payment Method': attendee.paymentMethod || '',
       'Payment Review Status': attendee.paymentStatus || 'PENDING',
       'Transaction Number': attendee.transactionNumber || '',
@@ -211,8 +217,10 @@ export class ExcelService {
       { wch: 20 }, // Church
       { wch: 15 }, // Area
       { wch: 15 }, // Governorate
+      { wch: 30 }, // Are you a servant in your church?
       { wch: 15 }, // Arrival Method
       { wch: 20 }, // Bus Pickup Point
+      { wch: 15 }, // Meal Type
       { wch: 15 }, // Payment Method
       { wch: 18 }, // Payment Review Status
       { wch: 18 }, // Transaction Number
@@ -293,8 +301,10 @@ export class ExcelService {
         'Church': 'Sample Church',
         'Area': 'Sample Area',
         'Governorate': 'Cairo',
+        'Are you a servant in your church?': 'Yes',
         'Arrival Method': 'Conference Bus',
         'Bus Pickup Point': 'Main Square',
+        'Meal Type': 'وجبات صيامي',
         'Payment Method': 'InstaPay',
         'Payment Review Status': 'PENDING',
         'Transaction Number': 'TXN-123456',
@@ -313,8 +323,10 @@ export class ExcelService {
         'Church': 'Another Church',
         'Area': 'Downtown',
         'Governorate': 'Alexandria',
+        'Are you a servant in your church?': 'No',
         'Arrival Method': 'Private Transport',
         'Bus Pickup Point': '',
+        'Meal Type': 'وجبات فطاري',
         'Payment Method': 'Orange Cash',
         'Payment Review Status': 'CONFIRMED',
         'Transaction Number': 'TXN-789012',
@@ -339,8 +351,10 @@ export class ExcelService {
       { wch: 20 }, // Church
       { wch: 15 }, // Area
       { wch: 15 }, // Governorate
+      { wch: 30 }, // Are you a servant in your church?
       { wch: 18 }, // Arrival Method
       { wch: 20 }, // Bus Pickup Point
+      { wch: 15 }, // Meal Type
       { wch: 15 }, // Payment Method
       { wch: 18 }, // Payment Review Status
       { wch: 18 }, // Transaction Number
@@ -384,6 +398,40 @@ export class ExcelService {
     if (value === 'FEMALE') return 'Female';
     if (value === 'OTHER') return 'Other';
     return value;
+  }
+
+  /**
+   * Parse "is servant" flag from Excel (supports Arabic and English)
+   * WHY: Handle various formats (Yes/No, نعم/لا, true/false)
+   */
+  private parseIsServant(value: any): boolean | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+
+    const normalized = String(value).trim().toUpperCase();
+
+    if (normalized === 'YES' || normalized === 'TRUE' || normalized === 'Y') return true;
+    if (normalized === 'NO' || normalized === 'FALSE' || normalized === 'N') return false;
+
+    const raw = String(value).trim();
+    if (raw === 'نعم') return true;
+    if (raw === 'لا') return false;
+
+    return undefined;
+  }
+
+  /**
+   * Parse meal type from Excel (Arabic values only)
+   * WHY: Restrict import to the two supported meal options
+   */
+  private parseMealType(value: any): string | undefined {
+    if (!value) return undefined;
+
+    const normalized = String(value).trim();
+
+    if (normalized === 'وجبات صيامي') return 'وجبات صيامي';
+    if (normalized === 'وجبات فطاري') return 'وجبات فطاري';
+
+    return undefined;
   }
 
   /**
