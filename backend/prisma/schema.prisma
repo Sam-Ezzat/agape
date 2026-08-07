@@ -123,11 +123,12 @@ model Room {
   id             String   @id @default(uuid())
   floorId        String   @map("floor_id")
   roomNumber     String   @map("room_number")
-  capacity       Int      // Maximum number of people (calculated from individualBeds + 2 * bunkBeds)
+  capacity       Int      // Maximum number of people (calculated from individualBeds + kingBeds + 2 * bunkBeds)
   individualBeds Int      @default(0) @map("individual_beds")
-  bunkBeds       Int      @default(0) @map("bunk_beds")
+  bunkBeds       Int      @default(0) @map("bunk_beds") // Each bunk bed sleeps 2
+  kingBeds       Int      @default(0) @map("king_beds") // Counted as 1 person each, like individualBeds
   roomType       RoomType @default(GENERAL) @map("room_type")
-  amenities      Json?    // Flexible JSONB for features: ["AC", "Wheelchair accessible", "مكيف"]
+  amenities      String?  // Auto-generated bed-count summary, e.g. "Individual Beds: 2, Bunk Beds: 1, King Beds: 0"
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
   

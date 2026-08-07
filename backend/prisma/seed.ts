@@ -9,6 +9,7 @@
 
 import bcrypt from 'bcryptjs';
 import { PrismaClient, ConferenceRole, Gender, RoomType, TemplateCategory, UserRole } from '@prisma/client';
+import { computeRoomCapacity, generateAmenitiesText } from '../src/utils/roomCapacity';
 
 const prisma = new PrismaClient();
 
@@ -105,15 +106,24 @@ async function main(): Promise<void> {
 
   // Create Rooms
   console.log('🚪 Creating rooms...');
-  const rooms: { floorId: string; roomNumber: string; capacity: number; type: RoomType }[] = [];
+  const rooms: {
+    floorId: string;
+    roomNumber: string;
+    individualBeds: number;
+    bunkBeds: number;
+    kingBeds: number;
+    type: RoomType;
+  }[] = [];
 
-  // Building A - Floor 1: Rooms 101-110 (double rooms)
+  // Building A - Floor 1: Rooms 101-110 (double rooms, 2 individual beds each)
   for (let i = 1; i <= 10; i++) {
     rooms.push({
       floorId: floorsA[0]!.id,
       roomNumber: `10${i}`,
-      capacity: 2,
-      type: RoomType.DOUBLE,
+      individualBeds: 2,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
 
@@ -122,26 +132,32 @@ async function main(): Promise<void> {
     rooms.push({
       floorId: floorsA[1]!.id,
       roomNumber: `20${i}`,
-      capacity: 1,
-      type: RoomType.SINGLE,
+      individualBeds: 1,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
   for (let i = 6; i <= 10; i++) {
     rooms.push({
       floorId: floorsA[1]!.id,
       roomNumber: `20${i}`,
-      capacity: 2,
-      type: RoomType.DOUBLE,
+      individualBeds: 2,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
 
-  // Building A - Floor 3: Rooms 301-305 (suites)
+  // Building A - Floor 3: Rooms 301-305 (family suites, one bunk bed sleeping 2 + one king)
   for (let i = 1; i <= 5; i++) {
     rooms.push({
       floorId: floorsA[2]!.id,
       roomNumber: `30${i}`,
-      capacity: 4,
-      type: RoomType.SUITE,
+      individualBeds: 0,
+      bunkBeds: 1,
+      kingBeds: 1,
+      type: RoomType.FAMILY,
     });
   }
 
@@ -150,33 +166,43 @@ async function main(): Promise<void> {
     rooms.push({
       floorId: floorsB[0]!.id,
       roomNumber: `B10${i}`,
-      capacity: 2,
-      type: RoomType.DOUBLE,
+      individualBeds: 2,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
 
-  // Building B - Floor 2: Rooms B201-B205
+  // Building B - Floor 2: Rooms B201-B205 (VIP suites with a king bed)
   for (let i = 1; i <= 5; i++) {
     rooms.push({
       floorId: floorsB[1]!.id,
       roomNumber: `B20${i}`,
-      capacity: 3,
-      type: RoomType.SUITE,
+      individualBeds: 1,
+      bunkBeds: 0,
+      kingBeds: 1,
+      type: RoomType.VIP,
     });
   }
 
   await Promise.all(
-    rooms.map((room) =>
-      prisma.room.create({
+    rooms.map((room) => {
+      const bedCounts = {
+        individualBeds: room.individualBeds,
+        bunkBeds: room.bunkBeds,
+        kingBeds: room.kingBeds,
+      };
+      return prisma.room.create({
         data: {
           floorId: room.floorId,
           roomNumber: room.roomNumber,
-          capacity: room.capacity,
+          capacity: computeRoomCapacity(bedCounts),
+          ...bedCounts,
           roomType: room.type,
-          amenities: ['AC', 'WiFi'],
+          amenities: generateAmenitiesText(bedCounts),
         },
-      })
-    )
+      });
+    })
   );
 
   // Create Sample Attendees
@@ -337,6 +363,7 @@ async function main(): Promise<void> {
 - سعة الغرفة: {{roomCapacity}} أشخاص
 - أسرة فردية: {{individualBeds}}
 - أسرة بطابقين: {{bunkBeds}}
+- أسرة كينج: {{kingBeds}}
 
 نتمنى لك إقامة سعيدة! 🌟`,
         variables: [
@@ -347,7 +374,8 @@ async function main(): Promise<void> {
           'roomType',
           'roomCapacity',
           'individualBeds',
-          'bunkBeds'
+          'bunkBeds',
+          'kingBeds'
         ],
         language: 'ar',
         isActive: true,

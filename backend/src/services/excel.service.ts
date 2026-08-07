@@ -47,6 +47,7 @@ export interface RoomExcelRow {
   roomNumber: string;
   individualBeds: number;
   bunkBeds: number;
+  kingBeds: number;
 }
 
 export interface ValidationError {
@@ -520,6 +521,7 @@ export class ExcelService {
       const roomNumberRaw = row['Room'] || row['room'] || row['Room Number'] || row['roomNumber'] || row['RoomNumber'];
       const individualBedsRaw = row['Individual Beds'] || row['individual beds'] || row['individual_beds'] || row['individualBeds'] || row['IndividualBeds'];
       const bunkBedsRaw = row['Bunk Beds'] || row['bunk beds'] || row['bunk_beds'] || row['bunkBeds'] || row['BunkBeds'];
+      const kingBedsRaw = row['King Beds'] || row['king beds'] || row['king_beds'] || row['kingBeds'] || row['KingBeds'];
 
       if (!buildingRaw) {
         errors.push({
@@ -622,6 +624,11 @@ export class ExcelService {
         bunkBeds = parseInt(String(bunkBedsRaw).trim(), 10);
       }
 
+      let kingBeds = 0;
+      if (kingBedsRaw !== undefined && kingBedsRaw !== null && String(kingBedsRaw).trim() !== '') {
+        kingBeds = parseInt(String(kingBedsRaw).trim(), 10);
+      }
+
       if (isNaN(individualBeds) || individualBeds < 0) {
         errors.push({
           row: rowNumber,
@@ -642,12 +649,22 @@ export class ExcelService {
         return;
       }
 
-      if (individualBeds === 0 && bunkBeds === 0) {
+      if (isNaN(kingBeds) || kingBeds < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'kingBeds',
+          value: kingBedsRaw,
+          message: 'King Beds must be a non-negative integer',
+        });
+        return;
+      }
+
+      if (individualBeds === 0 && bunkBeds === 0 && kingBeds === 0) {
         errors.push({
           row: rowNumber,
           field: 'capacity',
           value: 0,
-          message: 'Room must have at least one individual or bunk bed',
+          message: 'Room must have at least one individual, bunk, or king bed',
         });
         return;
       }
@@ -658,6 +675,7 @@ export class ExcelService {
         roomNumber: roomNumStr,
         individualBeds,
         bunkBeds,
+        kingBeds,
       });
     });
 
@@ -675,8 +693,10 @@ export class ExcelService {
       'Room': room.roomNumber || '',
       'Individual Beds': room.individualBeds || 0,
       'Bunk Beds': room.bunkBeds || 0,
+      'King Beds': room.kingBeds || 0,
       'Capacity': room.capacity || 0,
       'Room Type': room.roomType || 'GENERAL',
+      'Amenities': room.amenities || '',
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
@@ -690,8 +710,10 @@ export class ExcelService {
       { wch: 15 }, // Room
       { wch: 18 }, // Individual Beds
       { wch: 15 }, // Bunk Beds
+      { wch: 15 }, // King Beds
       { wch: 12 }, // Capacity
       { wch: 15 }, // Room Type
+      { wch: 40 }, // Amenities
     ];
 
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
@@ -709,6 +731,7 @@ export class ExcelService {
         'Room': '101',
         'Individual Beds': 2,
         'Bunk Beds': 1,
+        'King Beds': 0,
       },
       {
         'Building': 'Building A',
@@ -716,6 +739,7 @@ export class ExcelService {
         'Room': '102',
         'Individual Beds': 4,
         'Bunk Beds': 0,
+        'King Beds': 0,
       },
       {
         'Building': 'Building B',
@@ -723,6 +747,15 @@ export class ExcelService {
         'Room': '201',
         'Individual Beds': 0,
         'Bunk Beds': 3,
+        'King Beds': 0,
+      },
+      {
+        'Building': 'Building B',
+        'Floor': 2,
+        'Room': '202',
+        'Individual Beds': 0,
+        'Bunk Beds': 0,
+        'King Beds': 1,
       },
     ];
 
@@ -736,6 +769,7 @@ export class ExcelService {
       { wch: 15 }, // Room
       { wch: 20 }, // Individual Beds
       { wch: 15 }, // Bunk Beds
+      { wch: 15 }, // King Beds
     ];
 
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;

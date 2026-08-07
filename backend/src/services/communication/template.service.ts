@@ -53,6 +53,7 @@ export interface TemplateVariables {
   roomType?: string;
   individualBeds?: number;
   bunkBeds?: number;
+  kingBeds?: number;
 
   // Conference data
   conferenceName?: string;
@@ -306,6 +307,7 @@ export class TemplateService {
       variables.roomType = room.roomType;
       variables.individualBeds = room.individualBeds;
       variables.bunkBeds = room.bunkBeds;
+      variables.kingBeds = room.kingBeds;
 
       if (floor) {
         variables.floorNumber = floor.floorNumber;

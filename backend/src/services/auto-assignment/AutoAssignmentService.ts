@@ -50,8 +50,9 @@ interface RoomWithDetails {
   capacity: number;
   individualBeds: number;
   bunkBeds: number;
+  kingBeds: number;
   floorId: string;
-  amenities: any; // JsonValue from Prisma
+  amenities: string | null;
   currentOccupancy: number;
   currentAssignments: RoomAssignment[];
   floor: {
@@ -456,6 +457,7 @@ export class AutoAssignmentService {
       capacity: room.capacity,
       individualBeds: room.individualBeds,
       bunkBeds: room.bunkBeds,
+      kingBeds: room.kingBeds,
       floorId: room.floorId,
       amenities: room.amenities,
       currentOccupancy: room.assignments.length,

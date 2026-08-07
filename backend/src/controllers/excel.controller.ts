@@ -13,6 +13,7 @@ import { AppError } from '@/middleware/errorHandler';
 import prisma from '@/utils/prisma-client';
 import { getNotificationService } from '@/services/notification.service';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
+import { computeRoomCapacity, generateAmenitiesText } from '@/utils/roomCapacity';
 
 export class ExcelController {
   constructor(
@@ -316,7 +317,13 @@ export class ExcelController {
 
           // 3. Find or create Room
           // Calculate room occupancy/capacity from beds
-          const capacity = row.individualBeds + (2 * row.bunkBeds);
+          const bedCounts = {
+            individualBeds: row.individualBeds,
+            bunkBeds: row.bunkBeds,
+            kingBeds: row.kingBeds,
+          };
+          const capacity = computeRoomCapacity(bedCounts);
+          const amenities = generateAmenitiesText(bedCounts);
 
           let room = await tx.room.findUnique({
             where: {
@@ -333,8 +340,8 @@ export class ExcelController {
               where: { id: room.id },
               data: {
                 capacity,
-                individualBeds: row.individualBeds,
-                bunkBeds: row.bunkBeds,
+                ...bedCounts,
+                amenities,
               },
             });
           } else {
@@ -344,8 +351,8 @@ export class ExcelController {
                 floorId: floor.id,
                 roomNumber: row.roomNumber,
                 capacity,
-                individualBeds: row.individualBeds,
-                bunkBeds: row.bunkBeds,
+                ...bedCounts,
+                amenities,
                 roomType: 'GENERAL',
               },
             });

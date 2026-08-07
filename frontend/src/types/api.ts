@@ -72,8 +72,11 @@ export interface Room {
   floorId: string;
   roomNumber: string;
   capacity: number;
+  individualBeds: number;
+  bunkBeds: number;
+  kingBeds: number;
   roomType: RoomType;
-  amenities?: any;
+  amenities?: string;
   createdAt: string;
   updatedAt: string;
   floor?: Floor;

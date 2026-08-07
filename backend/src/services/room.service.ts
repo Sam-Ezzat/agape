@@ -16,6 +16,7 @@ import { CreateRoomDTO, UpdateRoomDTO, RoomFilterParams } from '@/validators/sch
 import { AppError } from '@/middleware/errorHandler';
 import { getNotificationService } from './notification.service';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
+import { computeRoomCapacity, generateAmenitiesText, MAX_ROOM_CAPACITY } from '@/utils/roomCapacity';
 
 export class RoomService {
   constructor(
@@ -46,7 +47,26 @@ export class RoomService {
       );
     }
 
-    const room = await this.roomRepository.create(data as any);
+    const bedCounts = {
+      individualBeds: data.individualBeds ?? 0,
+      bunkBeds: data.bunkBeds ?? 0,
+      kingBeds: data.kingBeds ?? 0,
+    };
+    const capacity = computeRoomCapacity(bedCounts);
+
+    if (capacity <= 0) {
+      throw new AppError(400, 'Room must have at least one bed');
+    }
+    if (capacity > MAX_ROOM_CAPACITY) {
+      throw new AppError(400, `Maximum ${MAX_ROOM_CAPACITY} people per room`);
+    }
+
+    const room = await this.roomRepository.create({
+      ...data,
+      ...bedCounts,
+      capacity,
+      amenities: generateAmenitiesText(bedCounts),
+    } as any);
 
     // Notify clients
     try {
@@ -195,7 +215,26 @@ export class RoomService {
       }
     }
 
-    const updated = await this.roomRepository.updateScoped(id, organizationId, data as any);
+    const bedCounts = {
+      individualBeds: data.individualBeds ?? existing.individualBeds,
+      bunkBeds: data.bunkBeds ?? existing.bunkBeds,
+      kingBeds: data.kingBeds ?? existing.kingBeds,
+    };
+    const capacity = computeRoomCapacity(bedCounts);
+
+    if (capacity <= 0) {
+      throw new AppError(400, 'Room must have at least one bed');
+    }
+    if (capacity > MAX_ROOM_CAPACITY) {
+      throw new AppError(400, `Maximum ${MAX_ROOM_CAPACITY} people per room`);
+    }
+
+    const updated = await this.roomRepository.updateScoped(id, organizationId, {
+      ...data,
+      ...bedCounts,
+      capacity,
+      amenities: generateAmenitiesText(bedCounts),
+    } as any);
 
     try {
       const notificationService = getNotificationService();

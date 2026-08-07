@@ -60,11 +60,12 @@ export const floorIdSchema = z.object({
 export const createRoomSchema = z.object({
   roomNumber: z.string().min(1, 'Room number is required').max(20),
   floorId: z.string().uuid('Invalid floor ID'),
-  capacity: z.number().int().positive('Capacity must be positive').max(20, 'Maximum 20 people per room'),
+  // WHY: capacity and amenities are derived server-side from bed counts
+  // (see @/utils/roomCapacity) — not accepted as direct input.
   individualBeds: z.number().int().nonnegative().optional().default(0),
   bunkBeds: z.number().int().nonnegative().optional().default(0),
+  kingBeds: z.number().int().nonnegative().optional().default(0),
   roomType: z.nativeEnum(RoomType, { errorMap: () => ({ message: 'Invalid room type' }) }),
-  amenities: z.record(z.unknown()).optional(), // WHY: JSONB field for flexible amenities
 });
 
 export const updateRoomSchema = createRoomSchema.partial().omit({ floorId: true });

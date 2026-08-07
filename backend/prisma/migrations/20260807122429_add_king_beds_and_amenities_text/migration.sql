@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "rooms" ADD COLUMN     "king_beds" INTEGER NOT NULL DEFAULT 0,
+ALTER COLUMN "amenities" SET DATA TYPE TEXT;

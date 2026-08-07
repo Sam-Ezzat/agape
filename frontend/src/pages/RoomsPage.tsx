@@ -216,7 +216,15 @@ export default function RoomsPage() {
                       {building?.name} - Floor {floor?.floorNumber}
                     </p>
                   </div>
-                  
+
+                  <div className="text-xs text-gray-500">
+                    Individual: {room.individualBeds ?? 0} · Bunk: {room.bunkBeds ?? 0} · King: {room.kingBeds ?? 0}
+                  </div>
+
+                  {room.amenities && (
+                    <div className="text-xs text-gray-400">{room.amenities}</div>
+                  )}
+
                   <div className="text-xs text-gray-400 pt-2 border-t">
                     Created: {new Date(room.createdAt).toLocaleDateString()}
                   </div>
@@ -255,9 +263,15 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
   const [formData, setFormData] = useState({
     roomNumber: room?.roomNumber || '',
     floorId: room?.floorId || '',
-    capacity: room?.capacity || 1,
+    individualBeds: room?.individualBeds ?? 0,
+    bunkBeds: room?.bunkBeds ?? 0,
+    kingBeds: room?.kingBeds ?? 0,
     roomType: room?.roomType || RoomType.GENERAL,
   });
+
+  // WHY: Capacity is server-computed (individualBeds + kingBeds + 2*bunkBeds) —
+  // this mirrors that formula purely for a live preview in the form.
+  const computedCapacity = formData.individualBeds + formData.kingBeds + formData.bunkBeds * 2;
 
   const [selectedBuildingId, setSelectedBuildingId] = useState(() => {
     if (room && room.floorId) {
@@ -280,7 +294,9 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
       const submitData = {
         roomNumber: formData.roomNumber,
         floorId: formData.floorId,
-        capacity: formData.capacity,
+        individualBeds: formData.individualBeds,
+        bunkBeds: formData.bunkBeds,
+        kingBeds: formData.kingBeds,
         roomType: formData.roomType,
       };
 
@@ -357,18 +373,42 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
             </select>
           </div>
 
-          <div>
-            <label className="label">Capacity *</label>
-            <input
-              type="number"
-              required
-              min="1"
-              value={formData.capacity}
-              onChange={(e) => setFormData({ ...formData, capacity: parseInt(e.target.value) })}
-              className="input"
-              placeholder="Number of people"
-            />
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="label">Individual Beds</label>
+              <input
+                type="number"
+                min="0"
+                value={formData.individualBeds}
+                onChange={(e) => setFormData({ ...formData, individualBeds: parseInt(e.target.value) || 0 })}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Bunk Beds</label>
+              <input
+                type="number"
+                min="0"
+                value={formData.bunkBeds}
+                onChange={(e) => setFormData({ ...formData, bunkBeds: parseInt(e.target.value) || 0 })}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">King Beds</label>
+              <input
+                type="number"
+                min="0"
+                value={formData.kingBeds}
+                onChange={(e) => setFormData({ ...formData, kingBeds: parseInt(e.target.value) || 0 })}
+                className="input"
+              />
+            </div>
           </div>
+          <p className="text-sm text-gray-600">
+            Capacity: <span className="font-medium">{computedCapacity}</span> person{computedCapacity !== 1 ? 's' : ''}
+            {' '}(a bunk bed sleeps 2; individual and king beds each sleep 1)
+          </p>
 
           <div>
             <label className="label">Room Type *</label>
