@@ -25,6 +25,7 @@ import {
   RunAutoAssignmentDTO
 } from '@/types/auto-assignment';
 import logger from '@/utils/logger';
+import { mapWithConcurrency } from '@/utils/concurrency';
 
 // Import hard constraint rules
 import { RoomCapacityRule } from './rules/hard/RoomCapacityRule';
@@ -40,6 +41,7 @@ import { SimilarAgeRule } from './rules/soft/SimilarAgeRule';
 import { MinimizeEmptyBedsRule } from './rules/soft/MinimizeEmptyBedsRule';
 import { PreferSameFloorRule } from './rules/soft/PreferSameFloorRule';
 import { LeaderProximityRule } from './rules/soft/LeaderProximityRule';
+import { RequestedRoommateProximityRule } from './rules/soft/RequestedRoommateProximityRule';
 
 export type ProgressCallback = (event: AutoAssignmentProgressEvent) => void;
 
@@ -90,6 +92,7 @@ export class AutoAssignmentService {
   private aiEnhancer: AIGroupEnhancementService;
   private engine: RuleEngine;
   private buildingGenderMap: Map<string, Gender>; // Track which gender is assigned to each building
+  private requestedRoommateMap: Map<string, Set<string>>; // attendeeId -> explicitly requested roommate attendeeIds
 
   constructor(
     private attendeeRepository: AttendeeRepository,
@@ -111,6 +114,7 @@ export class AutoAssignmentService {
     });
     this.engine = new RuleEngine();
     this.buildingGenderMap = new Map(); // Initialize building gender tracking
+    this.requestedRoommateMap = new Map();
   }
 
   /**
@@ -133,6 +137,7 @@ export class AutoAssignmentService {
 
     // Reset building gender tracking for this execution
     this.buildingGenderMap.clear();
+    this.requestedRoommateMap.clear();
 
     try {
       // Stage 1: Load configuration
@@ -220,11 +225,23 @@ export class AutoAssignmentService {
         stage: { number: 3, name: 'Classify Notes', status: 'started' }
       });
 
-      // Classify all rooming notes for AI enhancement
+      // Classify all rooming notes for AI enhancement.
+      // WHY: Each classification is an independent OpenAI call — awaiting them
+      // one at a time serializes network latency across every attendee, which
+      // is what was pushing total execution past the frontend's HTTP timeout.
+      // A bounded concurrency limit keeps requests parallel without tripping
+      // OpenAI rate limits.
       const classifications = new Map();
-      for (const attendee of unassignedAttendees) {
-        const classified = await this.classifier.classify(attendee.roomingNotes);
-        classifications.set(attendee.id, classified);
+      const classificationResults = await mapWithConcurrency(
+        unassignedAttendees,
+        8,
+        async (attendee) => ({
+          attendeeId: attendee.id,
+          classified: await this.classifier.classify(attendee.roomingNotes),
+        })
+      );
+      for (const { attendeeId, classified } of classificationResults) {
+        classifications.set(attendeeId, classified);
       }
 
       stages.push({
@@ -249,7 +266,8 @@ export class AutoAssignmentService {
 
       const groups = await this.createHierarchicalGroupsWithSubgrouping(
         unassignedAttendees,
-        classifications
+        classifications,
+        availableRooms
       );
 
       stages.push({
@@ -266,17 +284,30 @@ export class AutoAssignmentService {
         stage: { number: 4, name: 'Hierarchical Grouping', status: 'completed' }
       });
 
-      // Stage 4b: AI Group Enhancement (optional layer) - REMOVED FOR NOW
-      // AI enhancement will be applied after assignment as an analysis layer
-      // keeping this for backward compatibility with existing tests
-      const enhancedGroups = groups;
+      // Stage 4b: AI Group Enhancement (optional layer)
+      // WHY: Rule-based hierarchical grouping (rooming notes → church → governorate)
+      // can miss implicit compatibility buried in free-text notes — this layer asks
+      // an LLM to suggest additional groups among still-ungrouped attendees, which
+      // get merged in alongside (never replacing) the rule-based groups.
+      const stage4bStart = Date.now();
+      this.emitProgress(onProgress, {
+        type: 'stage',
+        stage: { number: 4.5, name: 'AI Group Enhancement', status: 'started' }
+      });
+
+      const aiAvailable = this.aiEnhancer.isAIAvailable();
+      const enhancedGroups = aiAvailable
+        ? await this.aiEnhancer.enhanceGroups(unassignedAttendees, classifications, groups)
+        : groups;
 
       stages.push({
         stage: 4.5,
         name: 'AI Group Enhancement',
-        status: 'skipped',
-        durationMs: 0,
-        details: `AI enhancement deferred to post-assignment analysis`,
+        status: aiAvailable ? 'completed' : 'skipped',
+        durationMs: Date.now() - stage4bStart,
+        details: aiAvailable
+          ? `AI added ${enhancedGroups.length - groups.length} suggested group(s) on top of ${groups.length} rule-based group(s)`
+          : 'AI enhancement skipped (AI unavailable or disabled)',
         itemsProcessed: enhancedGroups.length
       });
 
@@ -500,9 +531,16 @@ export class AutoAssignmentService {
    */
   private async createHierarchicalGroupsWithSubgrouping(
     attendees: Attendee[],
-    classifications: Map<string, any>
+    classifications: Map<string, any>,
+    availableRooms: RoomWithDetails[] = []
   ): Promise<AttendeeGroup[]> {
     logger.info('Creating hierarchical groups with sub-grouping');
+
+    // WHY: Room capacities vary (especially now that king beds exist alongside
+    // individual/bunk beds), so group-splitting thresholds are derived from the
+    // actual available rooms instead of a hardcoded "8 per room" assumption.
+    const roomCapacities = availableRooms.map(r => r.capacity).filter(c => c > 0);
+    const maxRoomCapacity = roomCapacities.length > 0 ? Math.max(...roomCapacities) : 8;
 
     // Step 1: Create 3-level hierarchical groups
     const result = this.hierarchicalGrouping.createHierarchicalGroups(
@@ -510,16 +548,39 @@ export class AutoAssignmentService {
       classifications
     );
 
+    // WHY: Keep the resolved requested-roommate map for RequestedRoommateProximityRule
+    // to consult during per-attendee scoring, as a fallback safety net for anyone
+    // who couldn't be placed together with their requested group (see below).
+    this.requestedRoommateMap = result.requestedRoommateMap;
+
     const allGroups: AttendeeGroup[] = [];
     const attendeeMap = new Map(attendees.map(a => [a.id, a]));
 
     // Step 2: Process each hierarchical group
     for (const hierGroup of result.groups) {
-      // Step 2a: Split by gender (STRICT constraint)
+      // Step 2a: Split by gender (STRICT constraint — the only split a
+      // rooming-request group cannot avoid)
       const genderGroups = this.hierarchicalGrouping.splitByGender(hierGroup, attendees);
 
       for (const [gender, genderGroup] of genderGroups.entries()) {
-        // Step 2b: Extract medical/VIP cases
+        // WHY: Explicit mutual rooming requests ("A wants B,C,D") must take
+        // priority over the medical/VIP/age heuristics below — those exist to
+        // substitute for missing explicit preference, not to override it.
+        // Splitting an already-correct connected component by age bucket or
+        // medical/VIP status was the root cause of requested friend groups
+        // fragmenting into separate rooms. Keep the group intact instead;
+        // determineGroupConstraints() below already unions medical/VIP/
+        // accessibility requirements across every member, so a room is chosen
+        // that satisfies the whole group rather than splitting people out.
+        if (genderGroup.type === 'rooming_notes') {
+          const roommateSubGroups = this.splitLargeGroup(genderGroup, attendees, 'roommate', maxRoomCapacity, roomCapacities);
+          allGroups.push(...roommateSubGroups);
+          continue;
+        }
+
+        // Step 2b: Extract medical/VIP cases (church/governorate groups only —
+        // these are heuristic groupings, so medical/VIP members get dedicated
+        // handling rather than diluting an age-bucketed room)
         const { medical, vip, regular } = this.hierarchicalGrouping.extractSpecialCases(
           genderGroup,
           attendees
@@ -527,13 +588,13 @@ export class AutoAssignmentService {
 
         // Process medical group
         if (medical && medical.attendeeIds.size > 0) {
-          const medicalSubGroups = this.splitLargeGroup(medical, attendees, 'medical');
+          const medicalSubGroups = this.splitLargeGroup(medical, attendees, 'medical', maxRoomCapacity, roomCapacities);
           allGroups.push(...medicalSubGroups);
         }
 
         // Process VIP group
         if (vip && vip.attendeeIds.size > 0) {
-          const vipSubGroups = this.splitLargeGroup(vip, attendees, 'vip');
+          const vipSubGroups = this.splitLargeGroup(vip, attendees, 'vip', maxRoomCapacity, roomCapacities);
           allGroups.push(...vipSubGroups);
         }
 
@@ -541,16 +602,16 @@ export class AutoAssignmentService {
         if (regular.attendeeIds.size > 0) {
           // Try 5-year age buckets first
           let ageSubGroups = this.hierarchicalGrouping.splitByAge(regular, attendees, 5);
-          
+
           // If any sub-group is too large for a single room, split by 10-year buckets
-          const largeSubGroups = ageSubGroups.filter(sg => sg.attendeeIds.size > 10);
+          const largeSubGroups = ageSubGroups.filter(sg => sg.attendeeIds.size > maxRoomCapacity);
           if (largeSubGroups.length > 0) {
             ageSubGroups = this.hierarchicalGrouping.splitByAge(regular, attendees, 10);
           }
 
           // Convert each age sub-group to old AttendeeGroup format
           for (const ageGroup of ageSubGroups) {
-            const subGroups = this.splitLargeGroup(ageGroup, attendees, 'age');
+            const subGroups = this.splitLargeGroup(ageGroup, attendees, 'age', maxRoomCapacity, roomCapacities);
             allGroups.push(...subGroups);
           }
         }
@@ -583,7 +644,9 @@ export class AutoAssignmentService {
   private splitLargeGroup(
     hierGroup: HierarchicalGroup,
     attendees: Attendee[],
-    groupCategory: 'medical' | 'vip' | 'age'
+    groupCategory: 'medical' | 'vip' | 'age' | 'roommate',
+    maxRoomCapacity: number = 8,
+    roomCapacities: number[] = []
   ): AttendeeGroup[] {
     const attendeeMap = new Map(attendees.map(a => [a.id, a]));
     const members = Array.from(hierGroup.attendeeIds)
@@ -606,29 +669,38 @@ export class AutoAssignmentService {
 
     const subGroups: AttendeeGroup[] = [];
 
-    // If group fits in one room (<=8 people), create single group
-    if (members.length <= 8) {
+    // If the group fits in the largest available room, keep it as one group
+    if (members.length <= maxRoomCapacity) {
       subGroups.push({
         id: `${hierGroup.id}-${groupCategory}`,
         type: groupType,
         members,
         priority: this.calculateGroupPriority(groupType, members),
         constraints: this.determineGroupConstraints(members),
-        minRoomCount: Math.ceil(members.length / 8), // Assume max 8 per room
+        minRoomCount: Math.ceil(members.length / maxRoomCapacity),
       });
       return subGroups;
     }
 
-    // Split large group into sub-groups of optimal sizes (4, 6, 8)
-    // Prefer filling rooms completely
-    const optimalSizes = [8, 6, 4, 3, 2];
+    // Split large group into sub-groups sized to match real room capacities,
+    // largest first, so each chunk actually fits a room that exists.
+    // WHY: previously a fixed [8,6,4,3,2] guess — now derived from the rooms
+    // actually available, falling back to that guess if no room data was passed.
+    const optimalSizes = (roomCapacities.length > 0
+      ? Array.from(new Set(roomCapacities)).sort((a, b) => b - a)
+      : [8, 6, 4, 3, 2]
+    ).filter(size => size <= maxRoomCapacity && size > 0);
+    if (optimalSizes.length === 0 || optimalSizes[optimalSizes.length - 1] !== 1) {
+      optimalSizes.push(1); // Always allow a final single-person remainder
+    }
+
     let remaining = [...members];
     let subGroupIndex = 0;
 
     while (remaining.length > 0) {
       // Find best size for remaining members
       let bestSize = optimalSizes.find(size => size <= remaining.length) || 1;
-      
+
       // Take members for this sub-group
       const subGroupMembers = remaining.slice(0, bestSize);
       remaining = remaining.slice(bestSize);
@@ -639,7 +711,7 @@ export class AutoAssignmentService {
         members: subGroupMembers,
         priority: this.calculateGroupPriority(groupType, subGroupMembers),
         constraints: this.determineGroupConstraints(subGroupMembers),
-        minRoomCount: Math.ceil(subGroupMembers.length / 8), // Assume max 8 per room
+        minRoomCount: Math.ceil(subGroupMembers.length / maxRoomCapacity),
       });
     }
 
@@ -676,6 +748,10 @@ export class AutoAssignmentService {
     this.engine.registerRule(new MinimizeEmptyBedsRule(weights.minimizeEmptyBeds || 0.2));
     this.engine.registerRule(new PreferSameFloorRule(weights.preferSameFloor || 0.1));
     this.engine.registerRule(new LeaderProximityRule(weights.leaderProximity || 0.1));
+    this.engine.registerRule(new RequestedRoommateProximityRule(
+      this.requestedRoommateMap,
+      weights.requestedRoommateProximity || 0.25
+    ));
   }
 
   /**
@@ -853,9 +929,13 @@ export class AutoAssignmentService {
       group.members = group.members.filter(m => !assignedIds.has(m.id));
     }
 
-    // For other multi-member groups (CHURCH, GOVERNORATE, FAMILY), try proximity-based assignment
-    // This allows splitting across nearby rooms when they can't fit in one room
-    if ((group.type === GroupType.CHURCH || group.type === GroupType.GOVERNORATE || group.type === GroupType.FAMILY) 
+    // For other multi-member groups (CHURCH, GOVERNORATE, FAMILY), try proximity-based assignment.
+    // This also covers any ROOMMATE remainder that didn't fit in a single room above
+    // (previously roommate leftovers went straight to fully independent per-attendee
+    // scoring with zero pull toward staying near the rest of their requested group —
+    // now they get the same adjacent/same-floor/same-building fallback as other groups).
+    if ((group.type === GroupType.CHURCH || group.type === GroupType.GOVERNORATE ||
+         group.type === GroupType.FAMILY || group.type === GroupType.ROOMMATE)
         && group.members.length > 1) {
       const proximityResult = await this.tryAssignGroupWithProximity(
         group,
@@ -1029,7 +1109,8 @@ export class AutoAssignmentService {
    * 2. If not possible, use RoomProximityMatcher to find nearby rooms
    * 3. Split group optimally across nearby rooms (adjacent → same floor → same building)
    * 
-   * Used for CHURCH, GOVERNORATE, and FAMILY groups (not ROOMMATE)
+   * Used for CHURCH, GOVERNORATE, FAMILY groups, and ROOMMATE remainders that
+   * didn't fit in a single room via tryAssignRoommatesTogether()
    */
   private async tryAssignGroupWithProximity(
     group: AttendeeGroup,

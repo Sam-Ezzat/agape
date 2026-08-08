@@ -51,8 +51,27 @@ describe('RoomingNotesClassifier', () => {
 
     it('should extract multiple roommate names', async () => {
       const result = await classifier.classify('Roommate with John Smith, pair with Mark Johnson');
-      
+
       expect(result.roommateRequests.length).toBeGreaterThan(0);
+    });
+
+    it('should extract every name from a comma-separated list, not just the first', async () => {
+      // WHY: regression test — the previous regex's character class excluded
+      // commas, so "with Ahmed, Sara, Omar" silently truncated to just "Ahmed".
+      const result = await classifier.classify('I want to room with Ahmed, Sara, Omar');
+
+      expect(result.roommateRequests).toContain('Ahmed');
+      expect(result.roommateRequests).toContain('Sara');
+      expect(result.roommateRequests).toContain('Omar');
+      expect(result.roommateRequests).toHaveLength(3);
+    });
+
+    it('should extract every name from an "and"-joined list', async () => {
+      const result = await classifier.classify('room with Sara and Omar');
+
+      expect(result.roommateRequests).toContain('Sara');
+      expect(result.roommateRequests).toContain('Omar');
+      expect(result.roommateRequests).toHaveLength(2);
     });
 
     it('should handle "together with" pattern', async () => {

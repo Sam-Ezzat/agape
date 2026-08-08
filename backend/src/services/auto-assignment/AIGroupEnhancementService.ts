@@ -6,6 +6,7 @@ import OpenAI from 'openai';
 import { Attendee } from '@prisma/client';
 import { AttendeeGroup, ClassifiedNotes, GroupType } from '@/types/auto-assignment';
 import logger from '@/utils/logger';
+import { mapWithConcurrency } from '@/utils/concurrency';
 
 /**
  * Configuration for AI group enhancement
@@ -94,22 +95,20 @@ export class AIGroupEnhancementService {
     try {
       logger.info(`Starting AI group enhancement for ${attendees.length} attendees`);
       
-      // Split into batches if too many attendees
+      // Split into batches if too many attendees.
+      // WHY: Batches are independent API calls — run up to 3 concurrently
+      // instead of sequentially awaiting each one, since with several
+      // hundred attendees a serial loop here was a major contributor to
+      // total execution time exceeding the frontend's HTTP timeout.
       const batches = this.createBatches(attendees, this.config.maxAttendeesPerBatch!);
-      const allSuggestions: AIGroupSuggestion[] = [];
+      logger.info(`Processing ${batches.length} batch(es) of up to ${this.config.maxAttendeesPerBatch} attendees each`);
 
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
+      const batchResults = await mapWithConcurrency(batches, 3, (batch, i) => {
         logger.info(`Processing batch ${i + 1}/${batches.length} (${batch.length} attendees)`);
-        
-        const batchSuggestions = await this.analyzeCompatibilityBatch(
-          batch,
-          classifications,
-          existingGroups
-        );
-        
-        allSuggestions.push(...batchSuggestions);
-      }
+        return this.analyzeCompatibilityBatch(batch, classifications, existingGroups);
+      });
+
+      const allSuggestions: AIGroupSuggestion[] = batchResults.flat();
 
       // Merge AI suggestions with existing groups
       const enhancedGroups = this.mergeAISuggestions(

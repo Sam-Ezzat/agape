@@ -714,7 +714,11 @@ export const autoAssignmentApi = {
    */
   execute: async (dto: RunAutoAssignmentDTO): Promise<ApiResponse<AutoAssignmentExecutionResult>> => {
     try {
-      const { data } = await apiClient.post('/auto-assignment/execute', dto);
+      // WHY: Involves per-attendee/per-batch OpenAI calls (rooming-notes
+      // classification + AI group enhancement) on top of the assignment
+      // algorithm itself — for larger attendee counts this can run past the
+      // general 120s timeout even with the backend's concurrency limits.
+      const { data } = await apiClient.post('/auto-assignment/execute', dto, { timeout: 300000 });
       return data;
     } catch (error) {
       return handleApiError(error as Error);
@@ -727,7 +731,7 @@ export const autoAssignmentApi = {
    */
   preview: async (dto: RunAutoAssignmentDTO): Promise<ApiResponse<AutoAssignmentExecutionResult>> => {
     try {
-      const { data } = await apiClient.post('/auto-assignment/preview', dto);
+      const { data } = await apiClient.post('/auto-assignment/preview', dto, { timeout: 300000 });
       return data;
     } catch (error) {
       return handleApiError(error as Error);

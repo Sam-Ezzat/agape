@@ -206,19 +206,40 @@ Guidelines:
   private classifyWithKeywords(notes: string): ClassifiedNotes {
     const lowerNotes = notes.toLowerCase();
 
-    // Roommate request patterns (Arabic & English)
+    // Roommate request patterns (Arabic & English).
+    // WHY: the captured span now allows commas/"and"/Arabic equivalents
+    // INSIDE it (previously the character class stopped at the first comma),
+    // so a multi-name request like "with Ahmed, Sara, Omar" is captured in
+    // full and then split into individual names below — the old pattern
+    // silently truncated such requests to just "Ahmed".
     const roommatePatterns = [
-      /(?:with|roommate|together\s+with|pair\s+with|share\s+with)\s+([A-Za-z][A-Za-z\s]{2,40})/gi,
-      /(?:مع|زميل|صديق|شريك\s*الغرفة|أريد\s*أن\s*أكون\s*مع)\s+([\u0600-\u06FF\s]{3,40})/g
+      /(?:with|roommate|together\s+with|pair\s+with|share\s+with)\s+([A-Za-z][A-Za-z\s,&]{2,80})/gi,
+      /(?:مع|زميل|صديق|شريك\s*الغرفة|أريد\s*أن\s*أكون\s*مع)\s+([\u0600-\u06FF\s,،]{3,80})/g
     ];
+    // Splits a captured span into individual names on comma / "and" / Arabic ، or و
+    const nameSeparators = /\s*(?:,|،|&|\band\b)\s*|\s+و\s+/i;
+    // WHY: the widened character class above lets a match span run across
+    // commas — but with no boundary, it can also run across a SECOND trigger
+    // phrase later in the same note (e.g. "with John, roommate John, with
+    // John" would otherwise be captured as one span containing "roommate"/
+    // "with" as if they were name text). Truncate the span at the next
+    // trigger word so each mention is scored independently and de-duped by
+    // `seenNames` below, same as before this fix.
+    const triggerWordCutoff = /\b(?:with|roommate|together\s+with|pair\s+with|share\s+with|مع|زميل|صديق)\b/i;
     const roommateRequests: string[] = [];
     const seenNames = new Set<string>();
-    
+
     roommatePatterns.forEach(pattern => {
       const matches = notes.matchAll(pattern);
       for (const match of matches) {
-        if (match[1]) {
-          const name = match[1].trim();
+        if (!match[1]) continue;
+        let span = match[1].trim();
+        const cutoff = span.match(triggerWordCutoff);
+        if (cutoff && cutoff.index !== undefined && cutoff.index > 0) {
+          span = span.slice(0, cutoff.index).trim();
+        }
+        for (const rawName of span.split(nameSeparators)) {
+          const name = (rawName || '').trim();
           const nameLower = name.toLowerCase();
           // Filter: 3-40 characters, not already seen
           if (name.length >= 3 && name.length <= 40 && !seenNames.has(nameLower)) {
