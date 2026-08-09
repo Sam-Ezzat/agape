@@ -33,6 +33,8 @@ import type {
   UpdateAutoAssignmentConfigDTO,
   AutoAssignmentExecutionResult,
   AutoAssignmentStatus,
+  PreviewSessionResponse,
+  PreviewEditResult,
 } from '@/types/api';
 import type {
   MessageTemplate,
@@ -727,11 +729,85 @@ export const autoAssignmentApi = {
 
   /**
    * POST /api/auto-assignment/preview
-   * Preview auto-assignment (dry run mode)
+   * Opens (or, if one already exists, resumes) the shared draft for this
+   * house — see PreviewSessionResponse for the sessionId/version needed to
+   * make further edits.
    */
-  preview: async (dto: RunAutoAssignmentDTO): Promise<ApiResponse<AutoAssignmentExecutionResult>> => {
+  preview: async (dto: RunAutoAssignmentDTO): Promise<PreviewSessionResponse> => {
     try {
       const { data } = await apiClient.post('/auto-assignment/preview', dto, { timeout: 300000 });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * GET /api/auto-assignment/preview-session/:conferenceHouseId
+   * Fetch the active shared draft for a house (if any) + activity feed —
+   * used to reopen a draft (e.g. on page refresh) without re-running preview.
+   */
+  getPreviewSession: async (conferenceHouseId: string): Promise<PreviewSessionResponse | null> => {
+    try {
+      const { data } = await apiClient.get(`/auto-assignment/preview-session/${conferenceHouseId}`);
+      return data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null;
+      }
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * PATCH /api/auto-assignment/preview-session/:id
+   * Apply an edit (unassign/assign/swap) to the shared draft. Returns the
+   * updated draft on success, or `{conflict: true}` (not thrown) if another
+   * admin changed it first — the caller decides how to surface that.
+   */
+  applyPreviewEdit: async (
+    sessionId: string,
+    expectedVersion: number,
+    updatedData: AutoAssignmentExecutionResult,
+    activitySummary: string
+  ): Promise<PreviewEditResult> => {
+    try {
+      const { data } = await apiClient.patch(`/auto-assignment/preview-session/${sessionId}`, {
+        expectedVersion,
+        data: updatedData,
+        activitySummary,
+      });
+      return { success: true, data: data.data, version: data.version };
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        const body = error.response.data;
+        return { success: false, conflict: true, data: body.data, version: body.version, message: body.message };
+      }
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * POST /api/auto-assignment/preview-session/:id/execute
+   * Commits the draft exactly as shown (edits included) instead of
+   * re-running the algorithm, then retires the shared session.
+   */
+  executePreviewSession: async (sessionId: string): Promise<ApiResponse<{ assignmentsCreated: number }>> => {
+    try {
+      const { data } = await apiClient.post(`/auto-assignment/preview-session/${sessionId}/execute`, {}, { timeout: 120000 });
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
+
+  /**
+   * DELETE /api/auto-assignment/preview-session/:id
+   * Discards the shared draft without committing anything.
+   */
+  discardPreviewSession: async (sessionId: string): Promise<ApiResponse<null>> => {
+    try {
+      const { data } = await apiClient.delete(`/auto-assignment/preview-session/${sessionId}`);
       return data;
     } catch (error) {
       return handleApiError(error as Error);

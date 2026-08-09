@@ -31,6 +31,7 @@ model Organization {
   campaigns              MessageCampaign[]
   communicationSettings  CommunicationSettings[]
   auditLogs              AuditLog[]
+  previewSessions        AutoAssignmentPreviewSession[]
 
   @@map("organizations")
 }
@@ -50,6 +51,7 @@ model User {
   // Relations
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   auditLogs      AuditLog[]
+  previewSessionsCreated AutoAssignmentPreviewSession[]
 
   @@index([organizationId])
   @@map("users")
@@ -74,6 +76,7 @@ model ConferenceHouse {
   organization         Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   buildings            Building[]
   autoAssignmentConfig AutoAssignmentConfig?
+  previewSession       AutoAssignmentPreviewSession?
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -311,6 +314,28 @@ model AutoAssignmentConfig {
   
   @@index([conferenceHouseId])
   @@map("auto_assignment_configs")
+}
+
+// WHY: Shared, backend-persisted auto-assignment draft so multiple admins
+// can view/edit the same preview concurrently instead of a private
+// per-browser localStorage copy. One active draft per conference house.
+model AutoAssignmentPreviewSession {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  conferenceHouseId String   @unique @map("conference_house_id") // WHY: enforces "one shared draft per house"
+  buildingIds       String[] @map("building_ids")
+  data              Json     // Full AutoAssignmentExecutionResult (assignments, unassignedAttendees, etc.)
+  version           Int      @default(1) // WHY: optimistic-concurrency token for conflict detection
+  createdById       String   @map("created_by_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organization      Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conferenceHouse   ConferenceHouse @relation(fields: [conferenceHouseId], references: [id], onDelete: Cascade)
+  createdBy         User            @relation(fields: [createdById], references: [id])
+
+  @@index([organizationId])
+  @@map("auto_assignment_preview_sessions")
 }
 
 // ==========================================

@@ -2129,11 +2129,16 @@ export class AutoAssignmentService {
   /**
    * Create room assignment in database
    */
-  private async createAssignment(attendeeId: string, roomId: string, organizationId: string): Promise<void> {
+  private async createAssignment(
+    attendeeId: string,
+    roomId: string,
+    organizationId: string,
+    userId?: string
+  ): Promise<void> {
     await this.assignmentRepository.create({
       attendeeId,
       roomId,
-      assignedBy: 'auto-assignment'
+      assignedBy: userId || 'auto-assignment'
     });
 
     // Create audit log
@@ -2144,12 +2149,30 @@ export class AutoAssignmentService {
       details: {
         attendeeId,
         roomId,
-        assignedBy: 'auto-assignment',
-        reason: 'Auto-assignment execution'
+        assignedBy: userId || 'auto-assignment',
+        reason: userId ? 'Committed from collaborative preview' : 'Auto-assignment execution'
       },
-      performedBy: 'system',
+      performedBy: userId ? undefined : 'system',
+      userId,
       organizationId,
     });
+  }
+
+  /**
+   * Commit an edited preview draft exactly as shown — used by the
+   * collaborative preview session's "Confirm & Execute" instead of
+   * re-running the assignment algorithm, so manual edits (unassign/
+   * reassign/swap) admins made in the shared draft actually survive.
+   */
+  async commitPreviewAssignments(
+    assignments: Array<{ attendeeId: string; roomId: string }>,
+    organizationId: string,
+    userId: string
+  ): Promise<{ assignmentsCreated: number }> {
+    for (const assignment of assignments) {
+      await this.createAssignment(assignment.attendeeId, assignment.roomId, organizationId, userId);
+    }
+    return { assignmentsCreated: assignments.length };
   }
 
   /**

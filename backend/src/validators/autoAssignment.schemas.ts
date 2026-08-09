@@ -49,8 +49,31 @@ export const conferenceHouseIdParamSchema = z.object({
 });
 
 /**
+ * Preview Session ID Param Schema
+ * WHY: Validates route parameter for the shared preview-session endpoints
+ */
+export const previewSessionIdParamSchema = z.object({
+  id: z.string().uuid('Invalid preview session ID'),
+});
+
+/**
+ * Apply Preview Edit Schema
+ * WHY: The frontend already computes the resulting full draft state using
+ * the same pure logic it always has (unassign/assign/swap); the server
+ * just persists it with an optimistic-concurrency version check and logs
+ * a human-readable activity summary.
+ */
+export const applyPreviewEditSchema = z.object({
+  expectedVersion: z.number().int().min(1),
+  data: z.record(z.string(), z.any()),
+  activitySummary: z.string().min(1).max(300),
+});
+
+/**
  * TypeScript Types (inferred from Zod schemas)
  */
 export type RunAutoAssignmentValidationDTO = z.infer<typeof runAutoAssignmentSchema>;
 export type UpdateAutoAssignmentConfigDTO = z.infer<typeof updateAutoAssignmentConfigSchema>;
 export type ConferenceHouseIdParam = z.infer<typeof conferenceHouseIdParamSchema>;
+export type PreviewSessionIdParam = z.infer<typeof previewSessionIdParamSchema>;
+export type ApplyPreviewEditDTO = z.infer<typeof applyPreviewEditSchema>;

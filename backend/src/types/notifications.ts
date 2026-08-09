@@ -42,6 +42,10 @@ export enum NotificationEvent {
   AUTO_ASSIGNMENT_ERROR = 'auto-assignment-error',
   AUTO_ASSIGNMENT_PREVIEW_PROGRESS = 'auto-assignment-preview-progress',
   AUTO_ASSIGNMENT_CONFIG_UPDATED = 'auto-assignment-config-updated',
+
+  // Collaborative preview-session events — pushed to admins viewing the
+  // same shared draft so edits/activity appear live without polling
+  PREVIEW_SESSION_UPDATED = 'preview-session-updated',
 }
 
 /**

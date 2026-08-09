@@ -353,6 +353,30 @@ export interface AutoAssignmentExecutionResult {
   }>;
 }
 
+// WHY: Response shape for the shared, backend-persisted preview draft
+// endpoints — lets multiple admins view/edit the same draft, with a
+// version token for optimistic-concurrency conflict detection.
+export interface PreviewSessionResponse {
+  success: boolean;
+  data: AutoAssignmentExecutionResult;
+  sessionId: string;
+  version: number;
+  buildingIds?: string[];
+  resumedExisting?: boolean;
+  activity?: AuditLog[];
+  message?: string;
+}
+
+// WHY: Returned by a failed edit — either a real error or a 409 conflict
+// (someone else changed the draft first), distinguished by `conflict`.
+export interface PreviewEditResult {
+  success: boolean;
+  conflict?: boolean;
+  data: AutoAssignmentExecutionResult;
+  version: number;
+  message?: string;
+}
+
 export interface AutoAssignmentStatus {
   totalAttendees: number;
   assignedAttendees: number;

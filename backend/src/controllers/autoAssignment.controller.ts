@@ -7,10 +7,12 @@
 
 import { Request, Response } from 'express';
 import { AutoAssignmentService } from '@/services/auto-assignment/AutoAssignmentService';
+import { PreviewSessionService, PreviewSessionConflictError } from '@/services/auto-assignment/PreviewSessionService';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
 import {
   RunAutoAssignmentDTO,
   AutoAssignmentProgressEvent,
+  AutoAssignmentExecutionResult,
 } from '@/types/auto-assignment';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
 import { AttendeeRepository } from '@/repositories/AttendeeRepository';
@@ -23,7 +25,8 @@ export class AutoAssignmentController {
     private autoAssignmentService: AutoAssignmentService,
     private configRepository: AutoAssignmentConfigRepository,
     private attendeeRepository: AttendeeRepository,
-    private roomRepository: RoomRepository
+    private roomRepository: RoomRepository,
+    private previewSessionService: PreviewSessionService
   ) {}
 
   /**
@@ -129,11 +132,19 @@ export class AutoAssignmentController {
     };
 
     try {
-      const result = await this.autoAssignmentService.execute(params, organizationId, onProgress);
+      const actor = { id: req.user!.id, name: req.user!.email };
+      const { session, resumedExisting } = await this.previewSessionService.getOrCreateSession(
+        params,
+        organizationId,
+        actor,
+        onProgress
+      );
+      const result = session.data as unknown as AutoAssignmentExecutionResult;
 
       logger.info('Auto-assignment preview completed', {
         assignmentsWouldCreate: result.assignmentsCreated,
         attendeesProcessed: result.attendeesProcessed,
+        resumedExisting,
       });
 
       // Send completion notification
@@ -142,7 +153,9 @@ export class AutoAssignmentController {
         roomName,
         NotificationEvent.AUTO_ASSIGNMENT_COMPLETE,
         result.success ? NotificationType.SUCCESS : NotificationType.ERROR,
-        `Preview completed: ${result.assignmentsCreated} assignments would be created (no changes made to database)`,
+        resumedExisting
+          ? 'Opened an existing shared draft for this house'
+          : `Preview completed: ${result.assignmentsCreated} assignments would be created (no changes made to database)`,
         'Preview Complete',
         { result }
       );
@@ -150,7 +163,12 @@ export class AutoAssignmentController {
       res.status(200).json({
         success: true,
         data: result,
-        message: 'Preview completed (no changes made to database)',
+        sessionId: session.id,
+        version: session.version,
+        resumedExisting,
+        message: resumedExisting
+          ? 'An active draft for this house already exists — opening it'
+          : 'Preview completed (no changes made to database)',
       });
     } catch (error) {
       logger.error('Auto-assignment preview failed', error);
@@ -263,6 +281,116 @@ export class AutoAssignmentController {
         occupancyRate: roomStats.occupancyRate,
       },
     });
+  }
+
+  /**
+   * GET /api/auto-assignment/preview-session/:conferenceHouseId
+   * Fetch the active shared draft for a house (if any) + recent activity,
+   * so a second admin can open/resume what another admin is working on.
+   */
+  async getPreviewSession(req: Request, res: Response) {
+    const { conferenceHouseId } = req.params;
+    const organizationId = req.user!.organizationId;
+
+    const result = await this.previewSessionService.getSession(conferenceHouseId, organizationId);
+    if (!result) {
+      res.status(404).json({ success: false, message: 'No active draft for this house' });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: result.session.data,
+      sessionId: result.session.id,
+      version: result.session.version,
+      buildingIds: result.session.buildingIds,
+      activity: result.activity,
+    });
+  }
+
+  /**
+   * PATCH /api/auto-assignment/preview-session/:id
+   * Apply an edit (unassign/assign/swap) to the shared draft. The frontend
+   * sends the resulting full draft state (computed with the same pure
+   * logic it always used locally); this just persists it with an
+   * optimistic-concurrency version check so two admins editing at once
+   * can't silently clobber each other.
+   */
+  async applyPreviewEdit(req: Request, res: Response) {
+    const { id } = req.params;
+    const organizationId = req.user!.organizationId;
+    const { expectedVersion, data, activitySummary } = req.body;
+    const actor = { id: req.user!.id, name: req.user!.email };
+
+    try {
+      const session = await this.previewSessionService.applyEdit(
+        id,
+        organizationId,
+        expectedVersion,
+        data,
+        actor,
+        activitySummary
+      );
+
+      const notificationService = getNotificationService();
+      notificationService.notifyRoom(
+        `org:${organizationId}:conference:${session.conferenceHouseId}`,
+        NotificationEvent.PREVIEW_SESSION_UPDATED,
+        NotificationType.INFO,
+        `${actor.name} ${activitySummary}`,
+        'Preview Updated',
+        { sessionId: session.id, version: session.version, activitySummary, actor }
+      );
+
+      res.status(200).json({
+        success: true,
+        data: session.data,
+        version: session.version,
+      });
+    } catch (error) {
+      if (error instanceof PreviewSessionConflictError) {
+        res.status(409).json({
+          success: false,
+          message: 'This draft was just changed by another admin — review the latest version and retry.',
+          data: error.currentSession.data,
+          version: error.currentSession.version,
+        });
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * POST /api/auto-assignment/preview-session/:id/execute
+   * Commits the draft exactly as it stands (edits included) instead of
+   * re-running the algorithm, then retires the shared session.
+   */
+  async executePreviewSession(req: Request, res: Response) {
+    const { id } = req.params;
+    const organizationId = req.user!.organizationId;
+    const actor = { id: req.user!.id, name: req.user!.email };
+
+    const result = await this.previewSessionService.commitSession(id, organizationId, actor);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  }
+
+  /**
+   * DELETE /api/auto-assignment/preview-session/:id
+   * Discards the shared draft without committing anything.
+   */
+  async discardPreviewSession(req: Request, res: Response) {
+    const { id } = req.params;
+    const organizationId = req.user!.organizationId;
+    const actor = { id: req.user!.id, name: req.user!.email };
+
+    await this.previewSessionService.discardSession(id, organizationId, actor);
+
+    res.status(200).json({ success: true });
   }
 
   /**

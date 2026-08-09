@@ -1,9 +1,11 @@
 import { Fragment, useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight, LayoutList, LayoutGrid, Search, UserMinus } from 'lucide-react';
-import { AutoAssignmentExecutionResult, Attendee, AssignmentPreview } from '@/types/api';
+import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight, LayoutList, LayoutGrid, Search, UserMinus, Activity, ChevronDown, ChevronUp } from 'lucide-react';
+import { AutoAssignmentExecutionResult, Attendee, AssignmentPreview, AuditLog } from '@/types/api';
 import { autoAssignmentApi, attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
+import { useSocket } from '@/hooks/useSocket';
+import { NotificationEvent, NotificationPayload } from '@/types/notifications';
 import SwapAttendeesModal from '@/components/SwapAttendeesModal';
 import { SearchDualLanguageService } from '@/search/dual-language';
 
@@ -31,8 +33,18 @@ export default function AutoAssignmentPreviewPage() {
   const [searchParams] = useSearchParams();
   const [previewResult, setPreviewResult] = useState<AutoAssignmentExecutionResult | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [selectedHouseId, setSelectedHouseId] = useState<string | null>(null);
-  const [selectedBuildingIds, setSelectedBuildingIds] = useState<string[]>([]);
+
+  // WHY: The draft is now a shared, backend-persisted session (not
+  // localStorage) — sessionId/version are needed on every edit so the
+  // server can detect if another admin changed it first (optimistic
+  // concurrency). `activity` is the live "who did what" feed.
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [version, setVersion] = useState<number>(1);
+  const [activity, setActivity] = useState<AuditLog[]>([]);
+  const [showActivity, setShowActivity] = useState(true);
+  const socket = useSocket();
   const [sortBy, setSortBy] = useState<SortOption>('room');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [notesView, setNotesView] = useState<NotesView>('original');
@@ -54,34 +66,66 @@ export default function AutoAssignmentPreviewPage() {
   const [selectedUnassignedId, setSelectedUnassignedId] = useState<string | null>(null);
   const [draggedUnassignedId, setDraggedUnassignedId] = useState<string | null>(null);
 
-  // Load preview result from localStorage on mount
+  // Load the shared draft from the backend on mount — this is the source of
+  // truth now (not localStorage), so this page always shows whatever the
+  // current shared state is, including edits other admins already made.
   useEffect(() => {
-    const savedPreview = localStorage.getItem('autoAssignmentPreview');
-    // WHY: fall back to the houseId/buildingIds saved alongside the preview
-    // when they're not in the URL — lets this page be reopened later (e.g.
-    // via the "Resume Preview" banner) without needing the original link,
-    // while still picking up fresh query params if they ARE present.
-    const houseId = searchParams.get('houseId') || localStorage.getItem('autoAssignmentPreviewHouseId');
-    const buildingIdsParam = searchParams.get('buildingIds') || localStorage.getItem('autoAssignmentPreviewBuildingIds');
+    const houseId = searchParams.get('houseId');
 
-    if (savedPreview) {
-      try {
-        const parsed = JSON.parse(savedPreview);
-        setPreviewResult(parsed);
-      } catch (error) {
-        console.error('Failed to parse saved preview:', error);
-      }
+    if (!houseId) {
+      setIsLoadingSession(false);
+      return;
     }
 
-    if (houseId) {
-      setSelectedHouseId(houseId);
-      localStorage.setItem('autoAssignmentPreviewHouseId', houseId);
-    }
-    if (buildingIdsParam) {
-      setSelectedBuildingIds(buildingIdsParam.split(','));
-      localStorage.setItem('autoAssignmentPreviewBuildingIds', buildingIdsParam);
-    }
+    setSelectedHouseId(houseId);
+    setIsLoadingSession(true);
+    autoAssignmentApi
+      .getPreviewSession(houseId)
+      .then((response) => {
+        if (response) {
+          setPreviewResult(response.data);
+          setSessionId(response.sessionId);
+          setVersion(response.version);
+          setActivity(response.activity || []);
+        }
+      })
+      .catch((error) => console.error('Failed to load preview session:', error))
+      .finally(() => setIsLoadingSession(false));
   }, [searchParams]);
+
+  // Live sync: join the conference's socket room and merge in edits other
+  // admins make to this shared draft as they happen, plus append them to
+  // the activity feed — no manual refresh needed.
+  useEffect(() => {
+    if (!socket || !selectedHouseId) return;
+
+    socket.emit('join-conference', selectedHouseId);
+
+    const handleUpdate = (payload: NotificationPayload) => {
+      const data = payload.data as { sessionId?: string; version?: number; activitySummary?: string; actor?: { name: string } } | undefined;
+      if (!data?.sessionId || data.sessionId !== sessionId) return;
+      // Skip echoes of an update this tab already applied.
+      if (data.version !== undefined && data.version <= version) return;
+
+      autoAssignmentApi.getPreviewSession(selectedHouseId).then((response) => {
+        if (response) {
+          setPreviewResult(response.data);
+          setVersion(response.version);
+          setActivity(response.activity || []);
+        }
+      });
+
+      if (data.actor?.name && data.activitySummary) {
+        toastSuccess(`${data.actor.name} ${data.activitySummary}`);
+      }
+    };
+
+    socket.on(NotificationEvent.PREVIEW_SESSION_UPDATED, handleUpdate);
+    return () => {
+      socket.off(NotificationEvent.PREVIEW_SESSION_UPDATED, handleUpdate);
+      socket.emit('leave-conference', selectedHouseId);
+    };
+  }, [socket, selectedHouseId, sessionId, version]);
 
   // Calculate room capacity information
   const roomCapacityMap = useMemo<Map<string, RoomCapacityInfo>>(() => {
@@ -268,28 +312,18 @@ export default function AutoAssignmentPreviewPage() {
   }, [filteredAssignments, roomCapacityMap]);
 
   const handleConfirmAndExecute = async () => {
-    if (!selectedHouseId || selectedBuildingIds.length === 0) {
-      toastError('Missing configuration data');
+    if (!sessionId) {
+      toastError('Missing preview session — reopen the preview and try again');
       return;
     }
 
     try {
       setIsExecuting(true);
-      
-      const response = await autoAssignmentApi.execute({
-        conferenceHouseId: selectedHouseId,
-        buildingIds: selectedBuildingIds,
-        dryRun: false,
-      });
+
+      const response = await autoAssignmentApi.executePreviewSession(sessionId);
 
       if (response.success) {
         toastSuccess(`Successfully assigned ${response.data.assignmentsCreated} attendees`);
-
-        // Clear saved preview — it's now fully obsolete since this was a
-        // real (non-dry-run) execution.
-        clearAllPreviewState();
-
-        // Navigate back to main page
         navigate('/auto-assignment');
       }
     } catch (error) {
@@ -300,27 +334,45 @@ export default function AutoAssignmentPreviewPage() {
     }
   };
 
-  const handleSwapComplete = () => {
-    // For auto-assignment preview, reload the updated preview from localStorage
-    const savedPreview = localStorage.getItem('autoAssignmentPreview');
-    if (savedPreview) {
-      try {
-        const parsed = JSON.parse(savedPreview);
-        setPreviewResult(parsed);
-        toastSuccess('Swap completed! Preview updated.');
-      } catch (error) {
-        console.error('Failed to reload preview:', error);
-      }
+  // WHY: Central save path for every manual edit on this page (unassign,
+  // assign, swap). The draft is a shared backend session now, so edits go
+  // through the server with the current `version` — if another admin saved
+  // an edit first, the server rejects this one (409) instead of silently
+  // overwriting it, and we refresh to their latest state instead.
+  const saveEdit = async (updatedPreview: AutoAssignmentExecutionResult, activitySummary: string): Promise<boolean> => {
+    if (!sessionId) {
+      toastError('Missing preview session — reopen the preview and try again');
+      return false;
     }
+
+    const result = await autoAssignmentApi.applyPreviewEdit(sessionId, version, updatedPreview, activitySummary);
+
+    if (!result.success) {
+      if (result.conflict) {
+        toastError(result.message || 'This draft was just changed by another admin — showing the latest version.');
+        setPreviewResult(result.data);
+        setVersion(result.version);
+      }
+      return false;
+    }
+
+    setPreviewResult(result.data);
+    setVersion(result.version);
+    return true;
   };
 
-  // WHY: This is a dry-run preview — nothing has been persisted to the
-  // database yet, so "unassigning" just removes the attendee from the
-  // in-memory/localStorage preview result (same pattern already used by the
-  // swap modal below). This makes rooms easier to review and frees the
-  // attendee up to be handled differently — either re-run auto-assignment,
-  // or place them manually via the regular attendee/room assignment page.
-  const handleUnassignFromPreview = (attendeeId: string, attendeeName: string) => {
+  const handleSwapComplete = () => {
+    // The swap itself already saved via handlePreviewSwap below (which
+    // calls saveEdit) — nothing further to reload here.
+    toastSuccess('Swap completed! Preview updated.');
+  };
+
+  // WHY: This is a shared draft — nothing has been persisted to real
+  // RoomAssignment rows yet, so "unassigning" just edits the draft (sent
+  // back to the server so other admins see it too). This makes rooms
+  // easier to review and frees the attendee up to be handled differently —
+  // either re-run auto-assignment, or place them manually.
+  const handleUnassignFromPreview = async (attendeeId: string, attendeeName: string) => {
     if (!previewResult?.assignments) return;
 
     const removedAssignment = previewResult.assignments.find(a => a.attendeeId === attendeeId);
@@ -354,15 +406,19 @@ export default function AutoAssignmentPreviewPage() {
       assignmentsCreated: updatedAssignments.length,
     };
 
-    setPreviewResult(updatedPreview);
-    localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
-    toastSuccess(`${attendeeName} moved to unassigned in the preview`);
+    const saved = await saveEdit(
+      updatedPreview,
+      `unassigned ${attendeeName}${removedAssignment ? ` from Room ${removedAssignment.roomNumber}` : ''}`
+    );
+    if (saved) {
+      toastSuccess(`${attendeeName} moved to unassigned in the preview`);
+    }
   };
 
   // WHY: Manually placing an unassigned attendee into a room here is ALSO a
-  // local preview edit, not a real database write — consistent with unassign/
+  // shared draft edit, not a real database write — consistent with unassign/
   // swap above, everything on this page stays a draft until Confirm & Execute.
-  const handleAssignUnassignedToRoom = (attendeeId: string, room: RoomCapacityInfo) => {
+  const handleAssignUnassignedToRoom = async (attendeeId: string, room: RoomCapacityInfo) => {
     if (!previewResult) return;
 
     const unassignedEntry = previewResult.unassignedAttendees?.find(u => u.id === attendeeId);
@@ -402,9 +458,10 @@ export default function AutoAssignmentPreviewPage() {
       assignmentsCreated: updatedAssignments.length,
     };
 
-    setPreviewResult(updatedPreview);
-    localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
-    toastSuccess(`${unassignedEntry.name} assigned to Room ${room.roomNumber}`);
+    const saved = await saveEdit(updatedPreview, `assigned ${unassignedEntry.name} to Room ${room.roomNumber}`);
+    if (saved) {
+      toastSuccess(`${unassignedEntry.name} assigned to Room ${room.roomNumber}`);
+    }
     setSelectedUnassignedId(null);
     setDraggedUnassignedId(null);
   };
@@ -468,9 +525,10 @@ export default function AutoAssignmentPreviewPage() {
         assignments: updatedAssignments,
       };
 
-      setPreviewResult(updatedPreview);
-      localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
-      
+      const groupANames = groupAAssignments.map(a => a.attendeeName).join(', ');
+      const saved = await saveEdit(updatedPreview, `moved ${groupANames} to Room ${targetRoomInfo.roomNumber}`);
+      if (!saved) return { success: false };
+
       return { success: true, data: { valid: true } };
     }
 
@@ -542,9 +600,14 @@ export default function AutoAssignmentPreviewPage() {
       assignments: updatedAssignments,
     };
 
-    setPreviewResult(updatedPreview);
-    localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
-    
+    const groupANames = groupAAssignments.map(a => a.attendeeName).join(', ');
+    const groupBNames = groupBAssignments.map(a => a.attendeeName).join(', ');
+    const saved = await saveEdit(
+      updatedPreview,
+      `swapped ${groupANames} (Room ${groupARoomInfo.roomNumber}) with ${groupBNames} (Room ${groupBRoomInfo.roomNumber})`
+    );
+    if (!saved) return { success: false };
+
     return { success: true, data: { valid: true } };
   };
 
@@ -575,38 +638,40 @@ export default function AutoAssignmentPreviewPage() {
     setSelectedAttendee(null);
   };
 
-  // WHY: Deliberately does NOT clear localStorage — this is the "soft" way
+  // WHY: Deliberately does NOT discard the session — this is the "soft" way
   // back (e.g. accidentally clicking the arrow, or briefly checking the
-  // config screen) and must preserve the in-progress preview + edits so the
-  // "Resume Preview" banner on the config page can pick it back up.
+  // config screen). The draft lives on the backend now (shared across
+  // admins) so it's still there — for anyone — when reopened.
   const handleBackToConfig = () => {
     navigate('/auto-assignment');
   };
 
-  // WHY: Full reset — used by both "Clear & Start Over" and "Exit Preview".
-  // Wipes every localStorage key this flow writes (preview data, timestamp,
-  // houseId/buildingIds) so nothing lingers: no stale "Resume Preview" banner,
-  // no leftover swap/unassign edits, nothing carried into the next dry run.
-  const clearAllPreviewState = () => {
-    localStorage.removeItem('autoAssignmentPreview');
-    localStorage.removeItem('autoAssignmentPreviewTimestamp');
-    localStorage.removeItem('autoAssignmentPreviewHouseId');
-    localStorage.removeItem('autoAssignmentPreviewBuildingIds');
+  // WHY: An explicit, deliberate reset — discards the SHARED draft on the
+  // backend (not just this tab's view of it), so any other admin currently
+  // looking at it will also see it gone. Used by both "Clear & Start Over"
+  // and "Exit Preview".
+  const discardSessionAndLeave = async () => {
+    if (sessionId) {
+      try {
+        await autoAssignmentApi.discardPreviewSession(sessionId);
+      } catch (error) {
+        console.error('Failed to discard preview session:', error);
+      }
+    }
     setPreviewResult(null);
+    navigate('/auto-assignment');
   };
 
   const handleClearPreview = () => {
-    clearAllPreviewState();
-    navigate('/auto-assignment');
+    discardSessionAndLeave();
   };
 
   // WHY: A distinct, explicit "I'm done reviewing this" action — same full
   // reset as Clear & Start Over, but framed as leaving the preview flow
   // entirely (vs. "reset and immediately try different settings").
-  const handleExitPreview = () => {
-    clearAllPreviewState();
+  const handleExitPreview = async () => {
+    await discardSessionAndLeave();
     toastSuccess('Preview closed — ready for a new dry run');
-    navigate('/auto-assignment');
   };
 
   const handleExportCSV = () => {
@@ -642,6 +707,14 @@ export default function AutoAssignmentPreviewPage() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  if (isLoadingSession) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent" />
+      </div>
+    );
+  }
 
   if (!previewResult) {
     return (
@@ -765,7 +838,7 @@ export default function AutoAssignmentPreviewPage() {
       </div>
 
       <div className="max-w-[1700px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-6 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
         <div className="min-w-0">
         {/* Summary Cards */}
         <div className="grid grid-cols-5 gap-4 mb-6">
@@ -1276,10 +1349,43 @@ export default function AutoAssignmentPreviewPage() {
 
         </div>
 
+        {/* Right column: Activity Feed + Unassigned sidebar, stacked
+            together as ONE grid child so they share the second column
+            instead of each becoming a separate (mis-placed) grid cell. */}
+        <div className="flex flex-col gap-6">
+        {/* Activity Feed — shared draft, so this shows what OTHER admins
+            (as well as this one) have done to it, live via socket updates. */}
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <button
+            onClick={() => setShowActivity((v) => !v)}
+            className="w-full px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between text-left"
+          >
+            <span className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+              <Activity size={14} className="text-gray-500" />
+              Activity ({activity.length})
+            </span>
+            {showActivity ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+          </button>
+          {showActivity && (
+            <div className="max-h-64 overflow-y-auto p-3 space-y-2">
+              {activity.length === 0 ? (
+                <div className="text-xs text-gray-500 text-center py-4">No activity yet</div>
+              ) : (
+                activity.map((entry) => (
+                  <div key={entry.id} className="text-xs">
+                    <p className="text-gray-700">{entry.details?.summary || entry.action}</p>
+                    <p className="text-gray-400 mt-0.5">{new Date(entry.createdAt).toLocaleString()}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Sidebar: Unassigned Attendees — drag onto, or click then click, a
             room in the Grid/List view on the left to assign (preview only). */}
         {previewResult.unassignedAttendees && previewResult.unassignedAttendees.length > 0 && (
-          <div className="xl:sticky xl:top-40 bg-white rounded-lg shadow overflow-hidden flex flex-col max-h-[calc(100vh-10rem)]">
+          <div className="lg:sticky lg:top-40 bg-white rounded-lg shadow overflow-hidden flex flex-col max-h-[calc(100vh-10rem)]">
             <div className="px-4 py-3 border-b border-gray-200 bg-amber-50">
               <h3 className="text-sm font-semibold text-amber-900">
                 Unassigned Attendees ({previewResult.unassignedAttendees.length})
@@ -1381,6 +1487,7 @@ export default function AutoAssignmentPreviewPage() {
             )}
           </div>
         )}
+        </div>
         </div>
       </div>
 

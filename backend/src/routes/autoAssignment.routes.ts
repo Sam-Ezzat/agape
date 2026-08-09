@@ -8,17 +8,21 @@
 import { Router } from 'express';
 import { AutoAssignmentController } from '@/controllers/autoAssignment.controller';
 import { AutoAssignmentService } from '@/services/auto-assignment/AutoAssignmentService';
+import { PreviewSessionService } from '@/services/auto-assignment/PreviewSessionService';
 import { AttendeeRepository } from '@/repositories/AttendeeRepository';
 import { RoomRepository } from '@/repositories/RoomRepository';
 import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AuditLogRepository } from '@/repositories/AuditLogRepository';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
+import { AutoAssignmentPreviewSessionRepository } from '@/repositories/AutoAssignmentPreviewSessionRepository';
 import { validate } from '@/middleware/validate';
 import { asyncHandler } from '@/middleware/asyncHandler';
 import {
   runAutoAssignmentSchema,
   updateAutoAssignmentConfigSchema,
   conferenceHouseIdParamSchema,
+  previewSessionIdParamSchema,
+  applyPreviewEditSchema,
 } from '@/validators/autoAssignment.schemas';
 import prisma from '@/utils/prisma-client';
 
@@ -30,6 +34,7 @@ const roomRepository = new RoomRepository(prisma);
 const assignmentRepository = new RoomAssignmentRepository(prisma);
 const auditLogRepository = new AuditLogRepository(prisma);
 const configRepository = new AutoAssignmentConfigRepository(prisma);
+const previewSessionRepository = new AutoAssignmentPreviewSessionRepository(prisma);
 
 // Auto-assignment service (AI enabled by default)
 const autoAssignmentService = new AutoAssignmentService(
@@ -40,12 +45,20 @@ const autoAssignmentService = new AutoAssignmentService(
   configRepository
 );
 
+// Shared, collaborative preview-draft service (see PreviewSessionService)
+const previewSessionService = new PreviewSessionService(
+  previewSessionRepository,
+  auditLogRepository,
+  autoAssignmentService
+);
+
 // Controller (notification service accessed lazily via getNotificationService)
 const autoAssignmentController = new AutoAssignmentController(
   autoAssignmentService,
   configRepository,
   attendeeRepository,
-  roomRepository
+  roomRepository,
+  previewSessionService
 );
 
 /**
@@ -113,6 +126,53 @@ router.get(
   '/status/:conferenceHouseId',
   validate(conferenceHouseIdParamSchema, 'params'),
   asyncHandler(autoAssignmentController.getStatus.bind(autoAssignmentController))
+);
+
+/**
+ * @route   GET /api/auto-assignment/preview-session/:conferenceHouseId
+ * @desc    Fetch the active shared draft for a house (if any) + activity feed
+ * @access  Authenticated
+ */
+router.get(
+  '/preview-session/:conferenceHouseId',
+  validate(conferenceHouseIdParamSchema, 'params'),
+  asyncHandler(autoAssignmentController.getPreviewSession.bind(autoAssignmentController))
+);
+
+/**
+ * @route   PATCH /api/auto-assignment/preview-session/:id
+ * @desc    Apply an edit (unassign/assign/swap) to the shared draft
+ * @access  Authenticated
+ * @body    { expectedVersion, data, activitySummary }
+ * @returns Updated draft + version, or 409 with the current draft on conflict
+ */
+router.patch(
+  '/preview-session/:id',
+  validate(previewSessionIdParamSchema, 'params'),
+  validate(applyPreviewEditSchema, 'body'),
+  asyncHandler(autoAssignmentController.applyPreviewEdit.bind(autoAssignmentController))
+);
+
+/**
+ * @route   POST /api/auto-assignment/preview-session/:id/execute
+ * @desc    Commit the draft exactly as shown (edits included) and retire the session
+ * @access  Authenticated
+ */
+router.post(
+  '/preview-session/:id/execute',
+  validate(previewSessionIdParamSchema, 'params'),
+  asyncHandler(autoAssignmentController.executePreviewSession.bind(autoAssignmentController))
+);
+
+/**
+ * @route   DELETE /api/auto-assignment/preview-session/:id
+ * @desc    Discard the shared draft without committing anything
+ * @access  Authenticated
+ */
+router.delete(
+  '/preview-session/:id',
+  validate(previewSessionIdParamSchema, 'params'),
+  asyncHandler(autoAssignmentController.discardPreviewSession.bind(autoAssignmentController))
 );
 
 export default router;

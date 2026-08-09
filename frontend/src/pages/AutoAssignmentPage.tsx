@@ -21,6 +21,7 @@ import type {
   AutoAssignmentExecutionResult,
   AutoAssignmentStatus,
   Building,
+  PreviewSessionResponse,
 } from '@/types/api';
 import { NotificationEvent } from '@/types/notifications';
 import { Play, Eye, Settings, RotateCcw, Zap } from 'lucide-react';
@@ -91,15 +92,21 @@ export default function AutoAssignmentPage() {
   const [loading, setLoading] = useState(true);
   const [configDirty, setConfigDirty] = useState(false);
 
-  // WHY: Lets an admin who navigated away mid-review (e.g. to check something
-  // on the Attendees page) get back to their in-progress preview — including
-  // any swap/unassign edits already made — instead of it being invisible
-  // once they leave the preview page.
-  const [savedPreviewTimestamp, setSavedPreviewTimestamp] = useState<string | null>(null);
+  // WHY: The draft lives on the backend now (shared across admins), so this
+  // checks whether ANYONE — this admin or another — already has an active
+  // draft for the selected house, so we resume the shared draft instead of
+  // starting a second, conflicting one.
+  const [activeDraftSession, setActiveDraftSession] = useState<PreviewSessionResponse | null>(null);
+  const [draftBannerDismissed, setDraftBannerDismissed] = useState(false);
 
   useEffect(() => {
-    setSavedPreviewTimestamp(localStorage.getItem('autoAssignmentPreviewTimestamp'));
-  }, []);
+    setDraftBannerDismissed(false);
+    if (!selectedHouseId) {
+      setActiveDraftSession(null);
+      return;
+    }
+    autoAssignmentApi.getPreviewSession(selectedHouseId).then(setActiveDraftSession);
+  }, [selectedHouseId]);
 
   // Socket connection
   const socket = useSocket();
@@ -452,26 +459,27 @@ export default function AutoAssignmentPage() {
       // Handle result from HTTP response (fallback if socket event is missed)
       if (response.success && response.data) {
         console.log('✅ Setting executionResult with', response.data.assignments?.length, 'assignments');
-        
-        // Save preview to localStorage (persists across page navigations).
-        // WHY: houseId/buildingIds are saved alongside it so the preview page
-        // can be re-opened later WITHOUT the original URL query params (e.g.
-        // via the "Resume Preview" banner below) and still know which house/
-        // buildings this preview belongs to.
-        localStorage.setItem('autoAssignmentPreview', JSON.stringify(response.data));
-        localStorage.setItem('autoAssignmentPreviewTimestamp', new Date().toISOString());
-        localStorage.setItem('autoAssignmentPreviewHouseId', selectedHouseId);
-        localStorage.setItem('autoAssignmentPreviewBuildingIds', selectedBuildingIds.join(','));
 
         setExecutionResult(response.data);
         setIsPreviewing(false);
         setProgressPercentage(100);
         await loadStatus(selectedHouseId);
-        
-        toastSuccess('Preview completed - opening full results page...');
-        
-        // Navigate to preview page with params
-        navigate(`/auto-assignment/preview?houseId=${selectedHouseId}&buildingIds=${selectedBuildingIds.join(',')}`);
+
+        // WHY: The draft now lives on the backend (shared across admins),
+        // not localStorage — `resumedExisting` means someone already has an
+        // in-progress draft for this house, so we're opening theirs rather
+        // than starting fresh.
+        if (response.resumedExisting) {
+          toastSuccess('An active draft for this house already exists — opening it');
+        } else {
+          toastSuccess('Preview completed - opening full results page...');
+        }
+
+        // Navigate to preview page with params (sessionId lets the preview
+        // page fetch the shared draft directly)
+        navigate(
+          `/auto-assignment/preview?houseId=${selectedHouseId}&buildingIds=${selectedBuildingIds.join(',')}&sessionId=${response.sessionId}`
+        );
       } else {
         console.warn('⚠️ Preview response not successful or missing data:', response);
         setIsPreviewing(false);
@@ -574,35 +582,34 @@ export default function AutoAssignmentPage() {
         </div>
       </div>
 
-      {/* Resume Preview Banner */}
-      {savedPreviewTimestamp && (
+      {/* Active Shared Draft Banner — someone (this admin or another) already
+          has an in-progress draft for the selected house */}
+      {activeDraftSession && !draftBannerDismissed && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Eye className="text-blue-600 shrink-0" size={20} />
             <div>
               <p className="text-sm font-medium text-blue-900">
-                You have an unfinished dry-run preview (including any swaps/unassigns you made)
+                There's an active shared draft for this house (including any manual edits made so far)
               </p>
               <p className="text-xs text-blue-700 mt-0.5">
-                Saved {new Date(savedPreviewTimestamp).toLocaleString()}
+                Anyone can open it and continue editing — it's shared across admins
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => navigate('/auto-assignment/preview')}
+              onClick={() =>
+                navigate(
+                  `/auto-assignment/preview?houseId=${selectedHouseId}&buildingIds=${(activeDraftSession.buildingIds || []).join(',')}&sessionId=${activeDraftSession.sessionId}`
+                )
+              }
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
             >
-              Resume Preview
+              Open Draft
             </button>
             <button
-              onClick={() => {
-                localStorage.removeItem('autoAssignmentPreview');
-                localStorage.removeItem('autoAssignmentPreviewTimestamp');
-                localStorage.removeItem('autoAssignmentPreviewHouseId');
-                localStorage.removeItem('autoAssignmentPreviewBuildingIds');
-                setSavedPreviewTimestamp(null);
-              }}
+              onClick={() => setDraftBannerDismissed(true)}
               className="px-3 py-2 text-blue-700 hover:bg-blue-100 rounded-lg transition-colors text-sm"
             >
               Dismiss

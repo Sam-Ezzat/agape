@@ -42,6 +42,12 @@ export enum NotificationEvent {
   AUTO_ASSIGNMENT_ERROR = 'auto-assignment:error',
   AUTO_ASSIGNMENT_PREVIEW_PROGRESS = 'auto-assignment:preview-progress',
   AUTO_ASSIGNMENT_CONFIG_UPDATED = 'auto-assignment:config-updated',
+
+  // Collaborative preview-session events — matches the backend's literal
+  // string value exactly (NOT the ':'-style pattern above) since this is
+  // subscribed to directly by event name, not just via the generic
+  // 'notification' channel.
+  PREVIEW_SESSION_UPDATED = 'preview-session-updated',
 }
 
 /**
