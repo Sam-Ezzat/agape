@@ -183,6 +183,11 @@ model Attendee {
   conferenceRole    ConferenceRole  @default(ATTENDEE) @map("conference_role")
   notes             String?         @db.Text // Special needs, preferences, medical info
   roomingNotes      String?         @db.Text @map("rooming_notes") // Room assignment preferences
+  // WHY: Cached AI/keyword classification of roomingNotes (ClassifiedNotes shape:
+  // roommateRequests, healthIssues, accessibility flags, family, raw), computed once
+  // in the background after import/create/update instead of re-classifying on every
+  // auto-assignment run. Stale when its embedded `raw` no longer matches roomingNotes.
+  roomingNotesClassification Json?  @map("rooming_notes_classification")
   internalNotes     String?         @db.Text @map("internal_notes") // Admin-only notes
   
   // Check-in Tracking
@@ -294,6 +299,7 @@ model AutoAssignmentConfig {
   staffReservedCapacity     Int      @default(0) @map("staff_reserved_capacity") // Beds reserved for staff
   vipReservedCapacity       Int      @default(0) @map("vip_reserved_capacity") // Beds reserved for VIP
   emergencyReservedCapacity Int      @default(0) @map("emergency_reserved_capacity") // Beds reserved for emergencies
+  leaderReservedSlots       Int      @default(1) @map("leader_reserved_slots") // Beds withheld per room so a leader can be added manually later, regardless of conference role
   enabledRules              String[] @map("enabled_rules") // Array of rule names to enable
   ruleWeights               Json     @default("{}") @map("rule_weights") // Rule name → weight mapping
   optimizationEnabled       Boolean  @default(true) @map("optimization_enabled") // Whether to run optimization
