@@ -17,6 +17,14 @@ import { assignmentApi, attendeeApi, searchApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import type { Attendee } from '@/types/api';
 
+interface EmptyRoomOption {
+  roomId: string;
+  roomNumber: string;
+  buildingName: string;
+  floorNumber: number;
+  capacity: number;
+}
+
 interface SwapAttendeesModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -24,6 +32,10 @@ interface SwapAttendeesModalProps {
   attendees: Attendee[];
   customSwapHandler?: (groupA: string[], groupB: string[], targetRoomId?: string) => Promise<{ success: boolean; data?: any }>;
   useLocalSearch?: boolean; // When true, filter local data by API results (for preview mode)
+  // WHY: `attendees` only carries OCCUPIED rooms (it's built from room
+  // assignments) — without this, a fully empty room can never appear as a
+  // move target here, same gap the auto-assignment preview page had.
+  emptyRooms?: EmptyRoomOption[];
 }
 
 interface SwapValidationResult {
@@ -45,6 +57,7 @@ export default function SwapAttendeesModal({
   attendees,
   customSwapHandler,
   useLocalSearch = false,
+  emptyRooms = [],
 }: SwapAttendeesModalProps) {
   const [selectedGroupA, setSelectedGroupA] = useState<Set<string>>(new Set());
   const [selectedGroupB, setSelectedGroupB] = useState<Set<string>>(new Set());
@@ -304,22 +317,51 @@ export default function SwapAttendeesModal({
     return acc;
   }, {} as Record<string, Attendee[]>);
 
+  // WHY: Merge in fully-empty rooms (no attendees at all, so they'd never
+  // show up via the reduce above) as target-only entries — same fix as the
+  // preview page's "Empty Rooms" section, so a room can be a move target
+  // here too, not just a partially-filled one.
+  const query = searchQuery.toLowerCase().trim();
+  type RoomEntry = { roomId: string; roomNumber: string; buildingName?: string; floorNumber?: number; capacity: number; attendees: Attendee[] };
+  const roomEntries: RoomEntry[] = Object.entries(allAttendeesByRoom).map(([roomId, roomAttendees]) => ({
+    roomId,
+    roomNumber: roomAttendees[0]?.assignment?.room?.roomNumber || 'Unassigned',
+    buildingName: roomAttendees[0]?.assignment?.room?.floor?.building?.name,
+    floorNumber: roomAttendees[0]?.assignment?.room?.floor?.floorNumber,
+    capacity: roomAttendees[0]?.assignment?.room?.capacity || 0,
+    attendees: roomAttendees,
+  }));
+
+  emptyRooms.forEach((room) => {
+    if (allAttendeesByRoom[room.roomId]) return; // already has occupants
+    if (query && !room.roomNumber.toLowerCase().includes(query) && !room.buildingName.toLowerCase().includes(query)) return;
+    roomEntries.push({
+      roomId: room.roomId,
+      roomNumber: room.roomNumber,
+      buildingName: room.buildingName,
+      floorNumber: room.floorNumber,
+      capacity: room.capacity,
+      attendees: [],
+    });
+  });
+
+  // WHY: Order by the room's own numeric sequence, not building name — same
+  // fix applied to the preview page so a continuous room range spread
+  // across buildings (e.g. C1-19/C20-40/C41-55) still displays in order.
+  roomEntries.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+
   // Apply room filter
-  const attendeesByRoom = selectedRoomFilter === 'all' 
-    ? allAttendeesByRoom
-    : Object.fromEntries(
-        Object.entries(allAttendeesByRoom).filter(([roomId]) => roomId === selectedRoomFilter)
-      );
+  const filteredRoomEntries = selectedRoomFilter === 'all'
+    ? roomEntries
+    : roomEntries.filter((room) => room.roomId === selectedRoomFilter);
 
   // Get list of all unique rooms for the filter dropdown
-  const availableRooms = Object.entries(allAttendeesByRoom)
-    .map(([roomId, roomAttendees]) => ({
-      id: roomId,
-      number: roomAttendees[0]?.assignment?.room?.roomNumber || 'Unassigned',
-      count: roomAttendees.length,
-      capacity: roomAttendees[0]?.assignment?.room?.capacity || 0,
-    }))
-    .sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
+  const availableRooms = roomEntries.map((room) => ({
+    id: room.roomId,
+    number: room.roomNumber,
+    count: room.attendees.length,
+    capacity: room.capacity,
+  }));
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -446,7 +488,7 @@ export default function SwapAttendeesModal({
                 </ul>
               ) : targetRoomId ? (
                 <p className="text-sm text-gray-700">
-                  Moving to: {Object.entries(attendeesByRoom).find(([id]) => id === targetRoomId)?.[1]?.[0]?.assignment?.room?.roomNumber || 'Room'}
+                  Moving to: {roomEntries.find((room) => room.roomId === targetRoomId)?.roomNumber || 'Room'}
                 </p>
               ) : (
                 <p className="text-sm text-gray-500">No attendees or target room selected</p>
@@ -528,30 +570,27 @@ export default function SwapAttendeesModal({
                 )}
               </h3>
               <span className="text-sm text-gray-500">
-                Showing {Object.keys(attendeesByRoom).length} of {availableRooms.length} rooms
+                Showing {filteredRoomEntries.length} of {availableRooms.length} rooms
               </span>
             </div>
-            
-            {Object.entries(attendeesByRoom).length === 0 ? (
+
+            {filteredRoomEntries.length === 0 ? (
               <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
                 <Search className="mx-auto text-gray-400 mb-3" size={48} />
                 <p className="text-gray-600 font-medium mb-1">No attendees found</p>
                 <p className="text-sm text-gray-500">
-                  {searchQuery 
+                  {searchQuery
                     ? `No results for "${searchQuery}". Try a different search term.`
                     : 'No attendees available for swapping.'}
                 </p>
               </div>
             ) : (
-              Object.entries(attendeesByRoom).map(([roomId, roomAttendees]) => {
-              const roomNumber =
-                roomAttendees[0]?.assignment?.room?.roomNumber || 'Unassigned';
-              const roomCapacity = roomAttendees[0]?.assignment?.room?.capacity || 0;
+              filteredRoomEntries.map(({ roomId, roomNumber, buildingName, floorNumber, capacity: roomCapacity, attendees: roomAttendees }) => {
               const currentOccupancy = roomAttendees.length;
               const availableSpace = roomCapacity - currentOccupancy;
 
               const isTargetRoom = targetRoomId === roomId;
-              const hasGroupASelections = Array.from(selectedGroupA).some(id => 
+              const hasGroupASelections = Array.from(selectedGroupA).some(id =>
                 roomAttendees.some(a => a.id === id)
               );
 
@@ -563,20 +602,25 @@ export default function SwapAttendeesModal({
                     <div className="flex items-center justify-between">
                       <h4 className="font-medium text-gray-900">
                         Room {roomNumber}
+                        {buildingName && (
+                          <span className="ml-2 text-xs font-normal text-gray-500">
+                            {buildingName}{floorNumber != null ? ` • Floor ${floorNumber}` : ''}
+                          </span>
+                        )}
                       </h4>
                       <div className="flex items-center gap-3 text-sm">
                         <span className="text-gray-600">
                           {currentOccupancy}/{roomCapacity} occupied
                         </span>
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          availableSpace > 0 
-                            ? 'bg-green-100 text-green-800' 
+                          availableSpace > 0
+                            ? 'bg-green-100 text-green-800'
                             : availableSpace === 0
                             ? 'bg-yellow-100 text-yellow-800'
                             : 'bg-red-100 text-red-800'
                         }`}>
-                          {availableSpace > 0 
-                            ? `${availableSpace} available` 
+                          {availableSpace > 0
+                            ? `${availableSpace} available`
                             : availableSpace === 0
                             ? 'Full'
                             : `Over by ${Math.abs(availableSpace)}`}
@@ -597,6 +641,9 @@ export default function SwapAttendeesModal({
                     </div>
                   </div>
                   <div className="divide-y divide-gray-100">
+                    {roomAttendees.length === 0 && (
+                      <p className="px-4 py-3 text-sm text-gray-400 italic">No one assigned yet — empty room</p>
+                    )}
                     {roomAttendees.map((attendee) => {
                       const inGroupA = selectedGroupA.has(attendee.id);
                       const inGroupB = selectedGroupB.has(attendee.id);

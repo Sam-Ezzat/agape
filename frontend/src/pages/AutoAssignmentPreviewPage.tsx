@@ -2,7 +2,7 @@ import { Fragment, useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight, LayoutList, LayoutGrid, Search, UserMinus, Activity, ChevronDown, ChevronUp } from 'lucide-react';
 import { AutoAssignmentExecutionResult, Attendee, AssignmentPreview, AuditLog } from '@/types/api';
-import { autoAssignmentApi, attendeeApi } from '@/services/api.service';
+import { autoAssignmentApi, attendeeApi, buildingApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useSocket } from '@/hooks/useSocket';
 import { NotificationEvent, NotificationPayload } from '@/types/notifications';
@@ -35,6 +35,13 @@ export default function AutoAssignmentPreviewPage() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [selectedHouseId, setSelectedHouseId] = useState<string | null>(null);
+  const [selectedBuildingIds, setSelectedBuildingIds] = useState<string[]>([]);
+
+  // WHY: previewResult.assignments only covers rooms touched by THIS run —
+  // to show truly empty rooms (and rooms with pre-existing occupants this
+  // run didn't touch) we need the full room list for the selected
+  // buildings, with real current occupancy from the database.
+  const [allRoomsList, setAllRoomsList] = useState<RoomCapacityInfo[]>([]);
 
   // WHY: The draft is now a shared, backend-persisted session (not
   // localStorage) — sessionId/version are needed on every edit so the
@@ -87,11 +94,56 @@ export default function AutoAssignmentPreviewPage() {
           setSessionId(response.sessionId);
           setVersion(response.version);
           setActivity(response.activity || []);
+          if (response.buildingIds?.length) {
+            setSelectedBuildingIds(response.buildingIds);
+          }
         }
       })
       .catch((error) => console.error('Failed to load preview session:', error))
       .finally(() => setIsLoadingSession(false));
   }, [searchParams]);
+
+  // Fetch the FULL room list (including empty ones) for the selected
+  // buildings, so the preview can show every room, not just the ones this
+  // run happened to touch.
+  useEffect(() => {
+    if (selectedBuildingIds.length === 0) {
+      setAllRoomsList([]);
+      return;
+    }
+
+    let cancelled = false;
+    Promise.all(selectedBuildingIds.map((id) => buildingApi.getDetails(id)))
+      .then((results) => {
+        if (cancelled) return;
+        const rooms: RoomCapacityInfo[] = [];
+        results.forEach((res) => {
+          if (!res.success || !res.data) return;
+          const building = res.data;
+          (building.floors || []).forEach((floor) => {
+            (floor.rooms || []).forEach((room) => {
+              const existingCount = room.assignments?.length || 0;
+              rooms.push({
+                roomId: room.id,
+                roomNumber: room.roomNumber,
+                buildingName: building.name,
+                floorNumber: floor.floorNumber,
+                capacity: room.capacity,
+                existingCount,
+                newCount: 0,
+                assignedCount: existingCount,
+              });
+            });
+          });
+        });
+        setAllRoomsList(rooms);
+      })
+      .catch((error) => console.error('Failed to load full room list:', error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBuildingIds]);
 
   // Live sync: join the conference's socket room and merge in edits other
   // admins make to this shared draft as they happen, plus append them to
@@ -130,36 +182,40 @@ export default function AutoAssignmentPreviewPage() {
   // Calculate room capacity information
   const roomCapacityMap = useMemo<Map<string, RoomCapacityInfo>>(() => {
     const map = new Map<string, RoomCapacityInfo>();
-    
-    if (!previewResult?.assignments) return map;
 
-    previewResult.assignments.forEach((assignment) => {
-      const roomKey = assignment.roomId;
+    // Baseline: every real room in the selected buildings — including empty
+    // ones — seeded with actual current occupancy from the database. Once
+    // `allRoomsList` has loaded, this is what makes empty rooms visible.
+    allRoomsList.forEach((room) => {
+      map.set(room.roomId, { ...room });
+    });
 
-      if (!map.has(roomKey)) {
-        // Use roomCapacity/existingOccupancy from assignment (added by backend)
+    // Overlay: this run's new assignments on top of the baseline.
+    (previewResult?.assignments || []).forEach((assignment) => {
+      const existing = map.get(assignment.roomId);
+      if (existing) {
+        existing.assignedCount += 1;
+        existing.newCount += 1;
+      } else {
+        // Baseline room list hasn't loaded yet (or doesn't cover this room)
+        // — fall back to the assignment's own room info, as before.
         const capacity = assignment.roomCapacity || 0;
         const existingCount = assignment.existingOccupancy || 0;
-
-        map.set(roomKey, {
+        map.set(assignment.roomId, {
           roomId: assignment.roomId,
           roomNumber: assignment.roomNumber,
           buildingName: assignment.buildingName,
           floorNumber: assignment.floorNumber,
-          assignedCount: existingCount + 1, // pre-existing occupants + this new assignment
+          assignedCount: existingCount + 1,
           existingCount,
           newCount: 1,
           capacity,
         });
-      } else {
-        const info = map.get(roomKey)!;
-        info.assignedCount += 1;
-        info.newCount += 1;
       }
     });
 
     return map;
-  }, [previewResult?.assignments]);
+  }, [allRoomsList, previewResult?.assignments]);
 
   // Dual-language (Arabic/English) fuzzy name search — same engine used on the Attendees page
   const dualLanguageSearch = useMemo(() => new SearchDualLanguageService(), []);
@@ -282,23 +338,37 @@ export default function AutoAssignmentPreviewPage() {
     }
   }, [filteredAssignments, sortBy]);
 
-  // Group assignments by room for the grid view
+  // Group assignments by room for the grid view — seeded from EVERY known
+  // room (including empty ones), not just rooms that ended up with an
+  // assignment, so fully-empty rooms still show up as (draggable) cards.
   const roomsGrouped = useMemo(() => {
-    if (filteredAssignments.length === 0) return [];
-
     const groups = new Map<string, { info: RoomCapacityInfo; assignments: AssignmentPreview[] }>();
 
-    filteredAssignments.forEach((assignment) => {
-      const info = roomCapacityMap.get(assignment.roomId);
-      if (!info) return;
-
-      if (!groups.has(assignment.roomId)) {
-        groups.set(assignment.roomId, { info, assignments: [] });
-      }
-      groups.get(assignment.roomId)!.assignments.push(assignment);
+    roomCapacityMap.forEach((info, roomId) => {
+      groups.set(roomId, { info, assignments: [] });
     });
 
-    const rooms = Array.from(groups.values());
+    filteredAssignments.forEach((assignment) => {
+      const group = groups.get(assignment.roomId);
+      if (group) group.assignments.push(assignment);
+    });
+
+    const query = searchQuery.trim().toLowerCase();
+    let rooms = Array.from(groups.values());
+
+    if (query) {
+      // WHY: An empty room only earns a place in filtered results if the
+      // search itself matches the room (number/building/floor) — otherwise
+      // every empty room would clutter an unrelated attendee-name search.
+      rooms = rooms.filter(
+        (room) =>
+          room.assignments.length > 0 ||
+          [room.info.roomNumber, room.info.buildingName, String(room.info.floorNumber)].some((field) =>
+            field.toLowerCase().includes(query)
+          )
+      );
+    }
+
     rooms.forEach((room) => {
       room.assignments.sort((a, b) => a.attendeeName.localeCompare(b.attendeeName));
     });
@@ -316,7 +386,31 @@ export default function AutoAssignmentPreviewPage() {
     });
 
     return rooms;
-  }, [filteredAssignments, roomCapacityMap]);
+  }, [filteredAssignments, roomCapacityMap, searchQuery]);
+
+  // Empty rooms (zero occupants) for the List view — the list view is
+  // assignment-row-driven so a room with no assignments has no row to
+  // attach a header to; shown instead as their own compact, still-droppable
+  // section rather than restructuring the whole table.
+  const emptyRoomsList = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    let rooms = Array.from(roomCapacityMap.values()).filter((room) => room.assignedCount === 0);
+
+    if (query) {
+      rooms = rooms.filter((room) =>
+        [room.roomNumber, room.buildingName, String(room.floorNumber)].some((field) =>
+          field.toLowerCase().includes(query)
+        )
+      );
+    }
+
+    return rooms.sort((a, b) => {
+      const roomCompare = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
+      if (roomCompare !== 0) return roomCompare;
+      if (a.floorNumber !== b.floorNumber) return a.floorNumber - b.floorNumber;
+      return a.buildingName.localeCompare(b.buildingName, undefined, { numeric: true });
+    });
+  }, [roomCapacityMap, searchQuery]);
 
   const handleConfirmAndExecute = async () => {
     if (!sessionId) {
@@ -494,21 +588,32 @@ export default function AutoAssignmentPreviewPage() {
 
     // CASE 1: Move operation (Group A → Target Room)
     if (targetRoomId && groupB.length === 0) {
-      // Find the target room info from any assignment in that room
+      // Find the target room info from any assignment in that room — but
+      // fall back to roomCapacityMap (which also covers fully empty rooms)
+      // since a genuinely empty room has no assignment to read this from.
       const targetRoomAssignment = previewResult.assignments.find(a => a.roomId === targetRoomId);
-      
-      if (!targetRoomAssignment) {
+      const targetRoomCapacityInfo = roomCapacityMap.get(targetRoomId);
+
+      if (!targetRoomAssignment && !targetRoomCapacityInfo) {
         toastError('Target room not found in preview');
         return { success: false };
       }
 
-      const targetRoomInfo = {
-        roomId: targetRoomAssignment.roomId,
-        roomNumber: targetRoomAssignment.roomNumber,
-        buildingName: targetRoomAssignment.buildingName,
-        floorNumber: targetRoomAssignment.floorNumber,
-        roomCapacity: targetRoomAssignment.roomCapacity,
-      };
+      const targetRoomInfo = targetRoomAssignment
+        ? {
+            roomId: targetRoomAssignment.roomId,
+            roomNumber: targetRoomAssignment.roomNumber,
+            buildingName: targetRoomAssignment.buildingName,
+            floorNumber: targetRoomAssignment.floorNumber,
+            roomCapacity: targetRoomAssignment.roomCapacity,
+          }
+        : {
+            roomId: targetRoomId,
+            roomNumber: targetRoomCapacityInfo!.roomNumber,
+            buildingName: targetRoomCapacityInfo!.buildingName,
+            floorNumber: targetRoomCapacityInfo!.floorNumber,
+            roomCapacity: targetRoomCapacityInfo!.capacity,
+          };
 
       // Move Group A to target room
       const updatedAssignments = previewResult.assignments.map(assignment => {
@@ -858,7 +963,7 @@ export default function AutoAssignmentPreviewPage() {
           <div className="bg-white rounded-lg shadow p-4">
             <div className="text-sm text-gray-600">Rooms Used</div>
             <div className="text-2xl font-bold text-indigo-600 mt-1">
-              {roomCapacityMap.size}
+              {Array.from(roomCapacityMap.values()).filter((r) => r.assignedCount > 0).length}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow p-4">
@@ -1354,6 +1459,51 @@ export default function AutoAssignmentPreviewPage() {
         </div>
         )}
 
+        {/* Empty Rooms — the list view above is assignment-row-driven, so a
+            room with zero occupants has no row to attach a header to; shown
+            here instead as its own compact, still-droppable section. */}
+        {viewMode === 'list' && emptyRoomsList.length > 0 && (
+          <div className="bg-white rounded-lg shadow overflow-hidden mt-4">
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+              <h3 className="text-sm font-semibold text-gray-700">
+                Empty Rooms ({emptyRoomsList.length})
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                No one assigned yet — drag onto, or click an unassigned attendee then click, a room below.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+              {emptyRoomsList.map((room) => {
+                const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedId);
+                return (
+                  <div
+                    key={room.roomId}
+                    onDragOver={(e) => { if (draggedUnassignedId) e.preventDefault(); }}
+                    onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(draggedUnassignedId, room)}
+                    onClick={() => selectedUnassignedId && handleAssignUnassignedToRoom(selectedUnassignedId, room)}
+                    className={`border border-dashed border-gray-300 rounded-lg px-3 py-2 transition-all ${
+                      isDropTarget ? 'ring-2 ring-primary-400 cursor-pointer border-primary-300' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-gray-700">Room {room.roomNumber}</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                        0/{room.capacity}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {room.buildingName} • Floor {room.floorNumber}
+                    </div>
+                    {isDropTarget && (
+                      <p className="text-xs text-primary-600 font-medium mt-1">Drop to assign here</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         </div>
 
         {/* Right column: Activity Feed + Unassigned sidebar, stacked
@@ -1729,6 +1879,13 @@ export default function AutoAssignmentPreviewPage() {
           onSwapComplete={handleSwapComplete}
           customSwapHandler={handlePreviewSwap}
           useLocalSearch={true}
+          emptyRooms={emptyRoomsList.map((room) => ({
+            roomId: room.roomId,
+            roomNumber: room.roomNumber,
+            buildingName: room.buildingName,
+            floorNumber: room.floorNumber,
+            capacity: room.capacity,
+          }))}
           attendees={previewResult.assignments.map((assignment) => {
             const roomCapacity = roomCapacityMap.get(assignment.roomId)?.capacity || 0;
             

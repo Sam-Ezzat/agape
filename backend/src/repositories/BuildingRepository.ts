@@ -91,6 +91,12 @@ export class BuildingRepository extends BaseRepository<Building, Prisma.Building
           include: {
             rooms: {
               orderBy: { roomNumber: 'asc' },
+              // WHY: Callers (e.g. the auto-assignment preview page) need
+              // real current occupancy per room — including rooms with zero
+              // assignments — not just the rooms touched by a given run.
+              include: {
+                assignments: true,
+              },
             },
           },
         },

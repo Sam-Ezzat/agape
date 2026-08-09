@@ -703,6 +703,21 @@ export const buildingApi = {
       return handleApiError(error as Error);
     }
   },
+
+  /**
+   * GET /api/buildings/:id/details
+   * Get building with floors -> rooms (including each room's current
+   * assignments), for building the full room list of a building —
+   * including rooms with zero occupants.
+   */
+  getDetails: async (id: string): Promise<ApiResponse<Building>> => {
+    try {
+      const { data } = await apiClient.get(`/buildings/${id}/details`);
+      return data;
+    } catch (error) {
+      return handleApiError(error as Error);
+    }
+  },
 };
 
 /**
