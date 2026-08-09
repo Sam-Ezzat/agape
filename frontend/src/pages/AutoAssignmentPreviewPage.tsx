@@ -1473,7 +1473,7 @@ export default function AutoAssignmentPreviewPage() {
                           {[u.church, u.governorate, u.area].filter(Boolean).join(' • ') || u.reason}
                         </p>
                         {u.roomingNotes && (
-                          <p className="text-xs text-blue-600 mt-0.5 truncate">📝 {u.roomingNotes}</p>
+                          <p className="text-xs text-blue-600 mt-0.5 whitespace-pre-wrap break-words">📝 {u.roomingNotes}</p>
                         )}
                       </div>
                       <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
