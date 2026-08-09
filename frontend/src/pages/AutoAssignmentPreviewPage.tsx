@@ -70,7 +70,11 @@ export default function AutoAssignmentPreviewPage() {
   // roomCapacityMap), so no separate room fetch is needed.
   const [unassignedSearchQuery, setUnassignedSearchQuery] = useState('');
   const [unassignedGenderFilter, setUnassignedGenderFilter] = useState<'ALL' | 'MALE' | 'FEMALE'>('ALL');
-  const [selectedUnassignedId, setSelectedUnassignedId] = useState<string | null>(null);
+  // WHY: Multi-select — a Set so several attendees can be picked (click to
+  // toggle each) and assigned to one room in a single action. Deliberately
+  // NOT reset by search/filter changes so typing in the search box doesn't
+  // lose a selection made before searching.
+  const [selectedUnassignedIds, setSelectedUnassignedIds] = useState<Set<string>>(new Set());
   const [draggedUnassignedId, setDraggedUnassignedId] = useState<string | null>(null);
 
   // Load the shared draft from the backend on mount — this is the source of
@@ -516,29 +520,38 @@ export default function AutoAssignmentPreviewPage() {
     }
   };
 
-  // WHY: Manually placing an unassigned attendee into a room here is ALSO a
+  // WHY: Manually placing unassigned attendee(s) into a room here is ALSO a
   // shared draft edit, not a real database write — consistent with unassign/
   // swap above, everything on this page stays a draft until Confirm & Execute.
-  const handleAssignUnassignedToRoom = async (attendeeId: string, room: RoomCapacityInfo) => {
-    if (!previewResult) return;
+  // Accepts multiple IDs so a multi-selection can be assigned to one room in
+  // a single action instead of one at a time.
+  const handleAssignUnassignedToRoom = async (attendeeIds: string[], room: RoomCapacityInfo) => {
+    if (!previewResult || attendeeIds.length === 0) return;
 
-    const unassignedEntry = previewResult.unassignedAttendees?.find(u => u.id === attendeeId);
-    if (!unassignedEntry) return;
+    const unassignedEntries = attendeeIds
+      .map((id) => previewResult.unassignedAttendees?.find(u => u.id === id))
+      .filter((u): u is NonNullable<typeof u> => Boolean(u));
+    if (unassignedEntries.length === 0) return;
 
-    if (isRoomFull(room)) {
+    const remainingSpace = room.capacity - room.assignedCount;
+    if (remainingSpace <= 0) {
       toastError(`Room ${room.roomNumber} is already full`);
       return;
     }
+    if (unassignedEntries.length > remainingSpace) {
+      toastError(`Room ${room.roomNumber} only has ${remainingSpace} space(s) left — ${unassignedEntries.length} selected`);
+      return;
+    }
 
-    const newAssignment: AssignmentPreview = {
-      attendeeId: unassignedEntry.id,
-      attendeeName: unassignedEntry.name,
-      gender: unassignedEntry.gender || undefined,
-      age: unassignedEntry.age ?? undefined,
-      church: unassignedEntry.church,
-      area: unassignedEntry.area,
-      governorate: unassignedEntry.governorate,
-      roomingNotes: unassignedEntry.roomingNotes,
+    const newAssignments: AssignmentPreview[] = unassignedEntries.map((entry) => ({
+      attendeeId: entry.id,
+      attendeeName: entry.name,
+      gender: entry.gender || undefined,
+      age: entry.age ?? undefined,
+      church: entry.church,
+      area: entry.area,
+      governorate: entry.governorate,
+      roomingNotes: entry.roomingNotes,
       roomId: room.roomId,
       roomNumber: room.roomNumber,
       buildingName: room.buildingName,
@@ -548,10 +561,11 @@ export default function AutoAssignmentPreviewPage() {
       score: 1,
       appliedRules: ['manual_assignment'],
       reason: 'Manually assigned during preview review',
-    };
+    }));
 
-    const updatedAssignments = [...(previewResult.assignments || []), newAssignment];
-    const updatedUnassigned = (previewResult.unassignedAttendees || []).filter(u => u.id !== attendeeId);
+    const assignedIds = new Set(unassignedEntries.map((entry) => entry.id));
+    const updatedAssignments = [...(previewResult.assignments || []), ...newAssignments];
+    const updatedUnassigned = (previewResult.unassignedAttendees || []).filter(u => !assignedIds.has(u.id));
     const updatedPreview = {
       ...previewResult,
       assignments: updatedAssignments,
@@ -559,13 +573,24 @@ export default function AutoAssignmentPreviewPage() {
       assignmentsCreated: updatedAssignments.length,
     };
 
-    const saved = await saveEdit(updatedPreview, `assigned ${unassignedEntry.name} to Room ${room.roomNumber}`);
+    const names = unassignedEntries.map((entry) => entry.name).join(', ');
+    const saved = await saveEdit(updatedPreview, `assigned ${names} to Room ${room.roomNumber}`);
     if (saved) {
-      toastSuccess(`${unassignedEntry.name} assigned to Room ${room.roomNumber}`);
+      toastSuccess(
+        unassignedEntries.length === 1
+          ? `${unassignedEntries[0]!.name} assigned to Room ${room.roomNumber}`
+          : `${unassignedEntries.length} attendees assigned to Room ${room.roomNumber}`
+      );
+      setSelectedUnassignedIds(new Set());
     }
-    setSelectedUnassignedId(null);
     setDraggedUnassignedId(null);
   };
+
+  // WHY: Dragging a card that's part of the current multi-selection should
+  // move the WHOLE selection; dragging a card that ISN'T selected should
+  // just move that one card (matches common file-manager drag behavior).
+  const getUnassignedIdsToMove = (draggedId: string): string[] =>
+    selectedUnassignedIds.has(draggedId) ? Array.from(selectedUnassignedIds) : [draggedId];
 
   const handlePreviewSwap = async (groupA: string[], groupB: string[], targetRoomId?: string) => {
     if (!previewResult?.assignments) {
@@ -1064,14 +1089,14 @@ export default function AutoAssignmentPreviewPage() {
                 ? (room.info.assignedCount / room.info.capacity) * 100
                 : 0;
               const roomIsFull = isRoomFull(room.info);
-              const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedId);
+              const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedIds.size > 0);
 
               return (
                 <div
                   key={room.info.roomId}
                   onDragOver={(e) => { if (draggedUnassignedId && !roomIsFull) e.preventDefault(); }}
-                  onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(draggedUnassignedId, room.info)}
-                  onClick={() => selectedUnassignedId && !roomIsFull && handleAssignUnassignedToRoom(selectedUnassignedId, room.info)}
+                  onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(getUnassignedIdsToMove(draggedUnassignedId), room.info)}
+                  onClick={() => selectedUnassignedIds.size > 0 && !roomIsFull && handleAssignUnassignedToRoom(Array.from(selectedUnassignedIds), room.info)}
                   className={`bg-white rounded-lg shadow overflow-hidden flex flex-col transition-all ${
                     isDropTarget && !roomIsFull
                       ? 'ring-2 ring-primary-400 cursor-pointer'
@@ -1228,13 +1253,13 @@ export default function AutoAssignmentPreviewPage() {
                       {/* Room Header Row (only when sorted by room) */}
                       {showRoomHeader && roomCapacity && (() => {
                         const roomIsFull = isRoomFull(roomCapacity);
-                        const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedId);
+                        const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedIds.size > 0);
                         return (
                         <tr
                           key={`header-${assignment.roomId}`}
                           onDragOver={(e) => { if (draggedUnassignedId && !roomIsFull) e.preventDefault(); }}
-                          onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(draggedUnassignedId, roomCapacity)}
-                          onClick={() => selectedUnassignedId && !roomIsFull && handleAssignUnassignedToRoom(selectedUnassignedId, roomCapacity)}
+                          onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(getUnassignedIdsToMove(draggedUnassignedId), roomCapacity)}
+                          onClick={() => selectedUnassignedIds.size > 0 && !roomIsFull && handleAssignUnassignedToRoom(Array.from(selectedUnassignedIds), roomCapacity)}
                           className={`bg-blue-50 border-t-2 border-blue-200 transition-colors ${
                             isDropTarget && !roomIsFull ? 'ring-2 ring-inset ring-primary-400 cursor-pointer' : ''
                           } ${isDropTarget && roomIsFull ? 'opacity-60' : ''}`}
@@ -1474,13 +1499,13 @@ export default function AutoAssignmentPreviewPage() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
               {emptyRoomsList.map((room) => {
-                const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedId);
+                const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedIds.size > 0);
                 return (
                   <div
                     key={room.roomId}
                     onDragOver={(e) => { if (draggedUnassignedId) e.preventDefault(); }}
-                    onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(draggedUnassignedId, room)}
-                    onClick={() => selectedUnassignedId && handleAssignUnassignedToRoom(selectedUnassignedId, room)}
+                    onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(getUnassignedIdsToMove(draggedUnassignedId), room)}
+                    onClick={() => selectedUnassignedIds.size > 0 && handleAssignUnassignedToRoom(Array.from(selectedUnassignedIds), room)}
                     className={`border border-dashed border-gray-300 rounded-lg px-3 py-2 transition-all ${
                       isDropTarget ? 'ring-2 ring-primary-400 cursor-pointer border-primary-300' : ''
                     }`}
@@ -1590,26 +1615,69 @@ export default function AutoAssignmentPreviewPage() {
               </div>
             </div>
 
+            {filteredUnassignedAttendees.length > 0 && (
+              <div className="px-3 py-1.5 border-b border-gray-100 flex items-center justify-between text-xs">
+                <button
+                  onClick={() =>
+                    setSelectedUnassignedIds((prev) => {
+                      const allFilteredSelected = filteredUnassignedAttendees.every((u) => prev.has(u.id));
+                      if (allFilteredSelected) {
+                        // Deselect just the currently-filtered ones, keep any
+                        // selection outside the current search/filter intact.
+                        const next = new Set(prev);
+                        filteredUnassignedAttendees.forEach((u) => next.delete(u.id));
+                        return next;
+                      }
+                      const next = new Set(prev);
+                      filteredUnassignedAttendees.forEach((u) => next.add(u.id));
+                      return next;
+                    })
+                  }
+                  className="text-primary-600 hover:text-primary-800 font-medium"
+                >
+                  {filteredUnassignedAttendees.every((u) => selectedUnassignedIds.has(u.id)) ? 'Deselect all' : 'Select all'}
+                </button>
+                {selectedUnassignedIds.size > 0 && (
+                  <span className="text-gray-500">{selectedUnassignedIds.size} selected</span>
+                )}
+              </div>
+            )}
+
             <div className="flex-1 overflow-y-auto p-2">
               {filteredUnassignedAttendees.length === 0 ? (
                 <div className="text-center py-8 text-sm text-gray-500">
                   {unassignedSearchQuery ? 'No matching attendees' : 'Everyone is assigned!'}
                 </div>
               ) : (
-                filteredUnassignedAttendees.map((u) => (
+                filteredUnassignedAttendees.map((u) => {
+                  const isSelected = selectedUnassignedIds.has(u.id);
+                  return (
                   <div
                     key={u.id}
                     draggable
                     onDragStart={() => setDraggedUnassignedId(u.id)}
                     onDragEnd={() => setDraggedUnassignedId(null)}
-                    onClick={() => setSelectedUnassignedId(selectedUnassignedId === u.id ? null : u.id)}
-                    className={`p-3 mb-1 rounded-lg cursor-pointer border-2 transition-all ${
-                      selectedUnassignedId === u.id
+                    onClick={() =>
+                      setSelectedUnassignedIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(u.id)) next.delete(u.id);
+                        else next.add(u.id);
+                        return next;
+                      })
+                    }
+                    className={`p-3 mb-1 rounded-lg cursor-pointer border-2 transition-all flex items-start gap-2 ${
+                      isSelected
                         ? 'border-primary-500 bg-primary-50'
                         : 'border-transparent hover:bg-gray-50 hover:border-gray-200'
                     } ${draggedUnassignedId === u.id ? 'opacity-50' : ''}`}
                   >
-                    <div className="flex items-center justify-between gap-2">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {}}
+                      className="mt-1 shrink-0 accent-primary-600"
+                    />
+                    <div className="flex items-center justify-between gap-2 flex-1 min-w-0">
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">
                           {u.name}
@@ -1631,15 +1699,22 @@ export default function AutoAssignmentPreviewPage() {
                       </span>
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
 
-            {selectedUnassignedId && (
-              <div className="p-3 border-t border-gray-200 bg-primary-50">
+            {selectedUnassignedIds.size > 0 && (
+              <div className="p-3 border-t border-gray-200 bg-primary-50 flex items-center justify-between gap-2">
                 <p className="text-xs text-primary-700">
-                  💡 Now click a room on the left to assign
+                  💡 {selectedUnassignedIds.size} selected — click (or drag) a room on the left to assign
                 </p>
+                <button
+                  onClick={() => setSelectedUnassignedIds(new Set())}
+                  className="shrink-0 text-xs text-primary-600 hover:text-primary-800 underline"
+                >
+                  Clear
+                </button>
               </div>
             )}
           </div>
