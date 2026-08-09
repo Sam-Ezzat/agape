@@ -69,6 +69,7 @@ export interface AutoAssignmentConfig {
   staffReservedCapacity: number;        // Beds reserved for staff
   vipReservedCapacity: number;          // Beds reserved for VIP
   emergencyReservedCapacity: number;    // Beds reserved for emergencies
+  leaderReservedSlots: number;          // Beds withheld per room for a leader to be added manually later
   enabledRules: string[];               // Rule names to enable
   ruleWeights: Record<string, number>;  // Rule name → weight mapping
   optimizationEnabled: boolean;         // Whether to run optimization pass
@@ -95,9 +96,15 @@ export interface AssignmentResult {
   scoreBreakdown?: Record<string, number>; // Score contribution by each rule
   // Enriched details for preview (populated before returning to client)
   attendeeName?: string;
+  church?: string | null;
+  area?: string | null;
+  governorate?: string | null;
+  roomingNotes?: string | null;
+  parsedRoomingNotes?: string | null; // Clean, human-reviewable list of extracted roommate names (from cached classification)
   roomNumber?: string;
   buildingName?: string;
   floorNumber?: number;
+  existingOccupancy?: number; // Occupants already in the room before this run (manual or prior assignments)
 }
 
 /**
@@ -121,6 +128,21 @@ export interface AutoAssignmentExecutionResult {
   errors: ValidationError[];
   warnings: ValidationError[];
   assignments: AssignmentResult[];
+  // WHY: attendees from the processing pool who did NOT end up in
+  // `assignments` after this run — previously declared on the frontend type
+  // but never actually populated here, so the preview's "Unassigned" list/
+  // count silently showed nothing.
+  unassignedAttendees: Array<{
+    id: string;
+    name: string;
+    reason: string;
+    roomingNotes?: string | null;
+    area?: string | null;
+    governorate?: string | null;
+    church?: string | null;
+    age?: number | null;
+    gender?: string | null;
+  }>;
   executionTimeMs: number;
   stages: StageResult[];
 }
@@ -162,6 +184,7 @@ export interface AutoAssignmentConfigDTO {
   staffReservedCapacity?: number;
   vipReservedCapacity?: number;
   emergencyReservedCapacity?: number;
+  leaderReservedSlots?: number;
   enabledRules?: string[];
   ruleWeights?: Record<string, number>;
   optimizationEnabled?: boolean;

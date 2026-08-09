@@ -14,12 +14,14 @@ import prisma from '@/utils/prisma-client';
 import { getNotificationService } from '@/services/notification.service';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
 import { computeRoomCapacity, generateAmenitiesText } from '@/utils/roomCapacity';
+import { RoomingNotesCacheService } from '@/services/auto-assignment/RoomingNotesCacheService';
 
 export class ExcelController {
   constructor(
     private excelService: ExcelService,
     private attendeeService: AttendeeService,
-    private assignmentRepository: RoomAssignmentRepository
+    private assignmentRepository: RoomAssignmentRepository,
+    private roomingNotesCacheService: RoomingNotesCacheService
   ) {}
 
   /**
@@ -130,6 +132,11 @@ export class ExcelController {
         console.error('Failed to send import notification:', error);
       }
     }
+
+    // WHY: Classify rooming notes now (once) instead of leaving every imported
+    // attendee to be re-classified on every future auto-assignment run. Fire
+    // in the background so the import response isn't held up by AI calls.
+    this.roomingNotesCacheService.classifyAndExpandInBackground(imported);
 
     res.json({
       success: true,

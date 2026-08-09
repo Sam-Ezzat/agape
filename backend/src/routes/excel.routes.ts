@@ -13,6 +13,7 @@ import { AttendeeService } from '@/services/attendee.service';
 import { AttendeeRepository } from '@/repositories/AttendeeRepository';
 import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AuditLogRepository } from '@/repositories/AuditLogRepository';
+import { RoomingNotesCacheService } from '@/services/auto-assignment/RoomingNotesCacheService';
 import { asyncHandler } from '@/middleware/asyncHandler';
 import prisma from '@/utils/prisma-client';
 
@@ -48,11 +49,14 @@ const attendeeService = new AttendeeService(
   auditLogRepository
 );
 
+const roomingNotesCacheService = new RoomingNotesCacheService(attendeeRepository);
+
 const excelService = new ExcelService();
 const excelController = new ExcelController(
   excelService,
   attendeeService,
-  assignmentRepository
+  assignmentRepository,
+  roomingNotesCacheService
 );
 
 /**

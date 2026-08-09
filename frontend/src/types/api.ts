@@ -271,6 +271,7 @@ export interface AutoAssignmentConfig {
   enabledBuildings?: string[];
   buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
   staffReservedCapacity?: number;
+  leaderReservedSlots?: number;
   ruleWeights?: Record<string, number>;
   createdAt: string;
   updatedAt: string;
@@ -291,6 +292,7 @@ export interface UpdateAutoAssignmentConfigDTO {
   enabledBuildings?: string[];
   buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
   staffReservedCapacity?: number;
+  leaderReservedSlots?: number;
   ruleWeights?: Record<string, number>;
 }
 
@@ -299,11 +301,17 @@ export interface AssignmentPreview {
   attendeeName: string;
   gender?: string;                     // Attendee gender for display
   age?: number;                        // Attendee age for display
+  church?: string | null;
+  area?: string | null;
+  governorate?: string | null;
+  roomingNotes?: string | null;        // Attendee's rooming notes/requests, for review
+  parsedRoomingNotes?: string | null;  // Clean, human-reviewable list of extracted roommate names
   roomId: string;
   roomNumber: string;
   buildingName: string;
   floorNumber: number;
   roomCapacity?: number;              // Room capacity for availability calculations
+  existingOccupancy?: number;         // Occupants already in the room before this run (manual or prior assignments)
   score: number;
   appliedRules: string[];
   reason?: string;                    // Explanation of why this assignment was made
@@ -326,6 +334,12 @@ export interface AutoAssignmentExecutionResult {
     id: string;
     name: string;
     reason: string;
+    roomingNotes?: string | null;
+    area?: string | null;
+    governorate?: string | null;
+    church?: string | null;
+    age?: number | null;
+    gender?: string | null;
   }>;
   validationErrors: Array<{
     attendeeId: string;

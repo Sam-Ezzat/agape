@@ -58,13 +58,15 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
           staffReservedCapacity: 0,
           vipReservedCapacity: 0,
           emergencyReservedCapacity: 0,
+          leaderReservedSlots: 1,
           enabledRules: [
             // Default enabled rules (all hard constraints)
             'room_capacity',
             'gender_match',
             'room_type_match',
             'room_availability',
-            'building_enabled'
+            'building_enabled',
+            'leader_reserved_capacity'
           ],
           ruleWeights: {
             // Default weights for soft constraints
@@ -126,6 +128,7 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
         staffReservedCapacity: data.staffReservedCapacity || 0,
         vipReservedCapacity: data.vipReservedCapacity || 0,
         emergencyReservedCapacity: data.emergencyReservedCapacity || 0,
+        leaderReservedSlots: data.leaderReservedSlots ?? 1,
         enabledRules: data.enabledRules || [],
         ruleWeights: (data.ruleWeights || {}) as any,
         optimizationEnabled: data.optimizationEnabled !== false
@@ -136,6 +139,7 @@ export class AutoAssignmentConfigRepository extends BaseRepository<
         staffReservedCapacity: data.staffReservedCapacity,
         vipReservedCapacity: data.vipReservedCapacity,
         emergencyReservedCapacity: data.emergencyReservedCapacity,
+        leaderReservedSlots: data.leaderReservedSlots,
         enabledRules: data.enabledRules,
         ruleWeights: data.ruleWeights as any,
         optimizationEnabled: data.optimizationEnabled,

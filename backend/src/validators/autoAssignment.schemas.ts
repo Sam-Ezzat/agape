@@ -34,6 +34,7 @@ export const updateAutoAssignmentConfigSchema = z.object({
   staffReservedCapacity: z.number().int().min(0).max(1000).optional(),
   vipReservedCapacity: z.number().int().min(0).max(1000).optional(),
   emergencyReservedCapacity: z.number().int().min(0).max(100).optional(),
+  leaderReservedSlots: z.number().int().min(0).max(10).optional(),
   enabledRules: z.array(z.string()).optional(),
   ruleWeights: z.record(z.string(), z.number().min(0).max(1)).optional(),
   optimizationEnabled: z.boolean().optional(),

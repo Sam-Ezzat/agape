@@ -35,6 +35,7 @@ function createMockAttendee(overrides?: Partial<Attendee>): Attendee {
     conferenceRole: ConferenceRole.ATTENDEE,
     notes: null,
     roomingNotes: null,
+    roomingNotesClassification: null,
     internalNotes: null,
     checkedInAt: null,
     checkedOutAt: null,
@@ -143,6 +144,12 @@ describe('AutoAssignmentService — explicit roommate group cohesion end-to-end'
     constructor(private attendees: Attendee[]) {}
     async findAllByOrganization(): Promise<Attendee[]> {
       return this.attendees;
+    }
+    async update(id: string, data: any): Promise<any> {
+      // WHY: Stage 3's cache-first classification persists live-classified
+      // results in the background (RoomingNotesCacheService) — needed so that
+      // call doesn't throw when tests don't otherwise care about persistence.
+      return { id, ...data };
     }
   }
 
@@ -255,5 +262,134 @@ describe('AutoAssignmentService — explicit roommate group cohesion end-to-end'
 
     const attendeeIds = new Set(result.assignments.map(a => a.attendeeId));
     expect(attendeeIds).toEqual(new Set(['a', 'b', 'c', 'd']));
+  });
+
+  it('pulls a newcomer into an existing requested-roommate cluster via a CACHED classification, and joining just one member joins the whole group', async () => {
+    // Saher's note explicitly requests Kero and Rony — a fresh classification.
+    const saher = createMockAttendee({
+      id: 'saher', fullName: 'Saher Ezzat', gender: Gender.MALE, age: 22,
+      roomingNotes: 'with Kero and Rony',
+      roomingNotesClassification: {
+        roommateRequests: ['Kero', 'Rony'],
+        healthIssues: [], accessibility: false, wheelchair: false, elderly: false,
+        nearBathroom: false, nearElevator: false, family: false, noPreference: false,
+        other: [], raw: 'with Kero and Rony',
+      } as unknown as any,
+    });
+    const kero = createMockAttendee({ id: 'kero', fullName: 'Kero', gender: Gender.MALE, age: 24 });
+    const rony = createMockAttendee({ id: 'rony', fullName: 'Rony', gender: Gender.MALE, age: 26 });
+
+    // A newcomer mentions ONLY Kero. Crucially, their raw note text is phrased
+    // so the keyword-fallback regex would NOT extract anything live ("Kero" is
+    // never preceded by a trigger word like "with"/"roommate") — the ONLY way
+    // this attendee ends up connected to Kero is if Stage 3 actually reads the
+    // pre-computed CACHE below instead of re-classifying the note live. This
+    // proves the cache is what's driving grouping, not a lucky regex match.
+    const newcomerRaw = 'Kero is basically my brother, been friends forever';
+    const newcomer = createMockAttendee({
+      id: 'newcomer', fullName: 'Newcomer', gender: Gender.MALE, age: 23,
+      roomingNotes: newcomerRaw,
+      roomingNotesClassification: {
+        roommateRequests: ['Kero'],
+        healthIssues: [], accessibility: false, wheelchair: false, elderly: false,
+        nearBathroom: false, nearElevator: false, family: false, noPreference: false,
+        other: [], raw: newcomerRaw,
+      } as unknown as any,
+    });
+
+    const attendees = [saher, kero, rony, newcomer];
+    const room = makeRoom({ capacity: 4, individualBeds: 4 });
+
+    const service = new AutoAssignmentService(
+      new MockAttendeeRepository(attendees) as any,
+      new MockRoomRepository([room]) as any,
+      new MockRoomAssignmentRepository() as any,
+      new MockAuditLogRepository() as any,
+      new MockAutoAssignmentConfigRepository() as any,
+      { useAI: false }
+    );
+
+    const params: RunAutoAssignmentDTO = {
+      conferenceHouseId: 'house-1',
+      buildingIds: ['building-1'],
+      dryRun: true,
+      options: { onlyUnassigned: false }
+    };
+
+    const result = await service.execute(params, 'org-1');
+
+    expect(result.success).toBe(true);
+    expect(result.assignments).toHaveLength(4);
+
+    const roomIds = new Set(result.assignments.map(a => a.roomId));
+    expect(roomIds.size).toBe(1); // Saher, Kero, Rony, AND the newcomer all together
+
+    const attendeeIds = new Set(result.assignments.map(a => a.attendeeId));
+    expect(attendeeIds).toEqual(new Set(['saher', 'kero', 'rony', 'newcomer']));
+  });
+
+  it('keeps a leftover pair together in one room instead of scattering them into two separate rooms, when a friend group exceeds the biggest available room', async () => {
+    // 6 mutual friends, but every room in this venue only holds 4. Splitting
+    // large groups previously always grabbed the biggest bucket that fit the
+    // CURRENT remainder — after peeling off 4, the leftover 2 didn't match
+    // any bucket size, so it fell back to size-1 chunks TWICE, scattering the
+    // pair into two lone placements instead of keeping them together.
+    const names = ['Person One', 'Person Two', 'Person Three', 'Person Four', 'Person Five', 'Person Six'];
+    const ids = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
+    const attendees = names.map((fullName, i) =>
+      createMockAttendee({
+        id: ids[i],
+        fullName,
+        gender: Gender.MALE,
+        age: 20 + i,
+        // Only the first person's note is needed — HierarchicalGroupingService
+        // adds a reciprocal edge for a one-directional mention, so everyone
+        // they name ends up in the same connected component.
+        roomingNotes: i === 0 ? `with ${names.slice(1).join(', ')}` : null,
+      })
+    );
+
+    const rooms = [
+      makeRoom({
+        id: 'room-1', roomNumber: '101', capacity: 4, individualBeds: 4,
+        floor: { floorNumber: 1, building: { id: 'building-1', name: 'Building A', conferenceHouseId: 'house-1' } }
+      }),
+      makeRoom({
+        id: 'room-2', roomNumber: '102', capacity: 4, individualBeds: 4,
+        floor: { floorNumber: 1, building: { id: 'building-1', name: 'Building A', conferenceHouseId: 'house-1' } }
+      }),
+    ];
+
+    const service = new AutoAssignmentService(
+      new MockAttendeeRepository(attendees) as any,
+      new MockRoomRepository(rooms) as any,
+      new MockRoomAssignmentRepository() as any,
+      new MockAuditLogRepository() as any,
+      new MockAutoAssignmentConfigRepository() as any,
+      { useAI: false }
+    );
+
+    const params: RunAutoAssignmentDTO = {
+      conferenceHouseId: 'house-1',
+      buildingIds: ['building-1'],
+      dryRun: true,
+      options: { onlyUnassigned: false }
+    };
+
+    const result = await service.execute(params, 'org-1');
+
+    expect(result.success).toBe(true);
+    expect(result.assignments).toHaveLength(6);
+
+    const byRoom = new Map<string, string[]>();
+    for (const a of result.assignments) {
+      if (!byRoom.has(a.roomId)) byRoom.set(a.roomId, []);
+      byRoom.get(a.roomId)!.push(a.attendeeId);
+    }
+    const roomSizes = Array.from(byRoom.values()).map(m => m.length).sort((a, b) => b - a);
+
+    // Must be [4, 2] — the leftover pair sharing ONE room. The bug produced
+    // [4, 1, 1]: the pair split into two separate single-occupant rooms.
+    expect(roomSizes).toEqual([4, 2]);
   });
 });

@@ -13,13 +13,18 @@ import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams, UnassignedF
 import { AppError } from '@/middleware/errorHandler';
 import { getNotificationService } from './notification.service';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
+import { RoomingNotesCacheService } from './auto-assignment/RoomingNotesCacheService';
 
 export class AttendeeService {
+  private roomingNotesCacheService: RoomingNotesCacheService;
+
   constructor(
     private attendeeRepository: AttendeeRepository,
     private assignmentRepository: RoomAssignmentRepository,
     private auditLogRepository: AuditLogRepository
-  ) {}
+  ) {
+    this.roomingNotesCacheService = new RoomingNotesCacheService(attendeeRepository);
+  }
 
   /**
    * Create new attendee
@@ -32,6 +37,12 @@ export class AttendeeService {
     notify: boolean = true
   ): Promise<Attendee> {
     const attendee = await this.attendeeRepository.create({ ...data, organizationId });
+
+    // WHY: Classify rooming notes now instead of leaving it to be re-classified
+    // on every future auto-assignment run, then expand any requested-roommate
+    // cluster this attendee connects to so every member's cache reflects the
+    // full group.
+    this.roomingNotesCacheService.classifyAndExpandInBackground([attendee]);
 
     // Create audit log
     await this.auditLogRepository.createLog({
@@ -109,6 +120,10 @@ export class AttendeeService {
     }
 
     const updated = await this.attendeeRepository.updateScoped(id, organizationId, data);
+
+    // WHY: Re-classify only if roomingNotes actually changed (no-ops when
+    // fresh), then re-expand clusters — an edit here can join/split a chain.
+    this.roomingNotesCacheService.classifyAndExpandInBackground([updated]);
 
     // Create audit log
     await this.auditLogRepository.createLog({

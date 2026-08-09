@@ -1,20 +1,24 @@
-import { useState, useEffect, useMemo } from 'react';
+import { Fragment, useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight, LayoutList, LayoutGrid } from 'lucide-react';
+import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight, LayoutList, LayoutGrid, Search, UserMinus } from 'lucide-react';
 import { AutoAssignmentExecutionResult, Attendee, AssignmentPreview } from '@/types/api';
 import { autoAssignmentApi, attendeeApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import SwapAttendeesModal from '@/components/SwapAttendeesModal';
+import { SearchDualLanguageService } from '@/search/dual-language';
 
 type SortOption = 'room' | 'attendee' | 'score' | 'building';
 type ViewMode = 'list' | 'grid';
+type NotesView = 'original' | 'parsed';
 
 interface RoomCapacityInfo {
   roomId: string;
   roomNumber: string;
   buildingName: string;
   floorNumber: number;
-  assignedCount: number;
+  assignedCount: number; // TRUE total occupancy: pre-existing + newly assigned in this run
+  existingCount: number; // Occupants already in the room before this run (manual or prior assignments)
+  newCount: number;      // Attendees newly assigned to this room in this run
   capacity: number;
 }
 
@@ -31,6 +35,8 @@ export default function AutoAssignmentPreviewPage() {
   const [selectedBuildingIds, setSelectedBuildingIds] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<SortOption>('room');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [notesView, setNotesView] = useState<NotesView>('original');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Attendee modal state
   const [showAttendeeModal, setShowAttendeeModal] = useState(false);
@@ -40,11 +46,23 @@ export default function AutoAssignmentPreviewPage() {
   // Swap modal state
   const [showSwapModal, setShowSwapModal] = useState(false);
 
+  // Manual assignment (unassigned attendees -> rooms) state — targets the
+  // same rooms already rendered in the Grid/List views below (via
+  // roomCapacityMap), so no separate room fetch is needed.
+  const [unassignedSearchQuery, setUnassignedSearchQuery] = useState('');
+  const [unassignedGenderFilter, setUnassignedGenderFilter] = useState<'ALL' | 'MALE' | 'FEMALE'>('ALL');
+  const [selectedUnassignedId, setSelectedUnassignedId] = useState<string | null>(null);
+  const [draggedUnassignedId, setDraggedUnassignedId] = useState<string | null>(null);
+
   // Load preview result from localStorage on mount
   useEffect(() => {
     const savedPreview = localStorage.getItem('autoAssignmentPreview');
-    const houseId = searchParams.get('houseId');
-    const buildingIds = searchParams.get('buildingIds');
+    // WHY: fall back to the houseId/buildingIds saved alongside the preview
+    // when they're not in the URL — lets this page be reopened later (e.g.
+    // via the "Resume Preview" banner) without needing the original link,
+    // while still picking up fresh query params if they ARE present.
+    const houseId = searchParams.get('houseId') || localStorage.getItem('autoAssignmentPreviewHouseId');
+    const buildingIdsParam = searchParams.get('buildingIds') || localStorage.getItem('autoAssignmentPreviewBuildingIds');
 
     if (savedPreview) {
       try {
@@ -55,8 +73,14 @@ export default function AutoAssignmentPreviewPage() {
       }
     }
 
-    if (houseId) setSelectedHouseId(houseId);
-    if (buildingIds) setSelectedBuildingIds(buildingIds.split(','));
+    if (houseId) {
+      setSelectedHouseId(houseId);
+      localStorage.setItem('autoAssignmentPreviewHouseId', houseId);
+    }
+    if (buildingIdsParam) {
+      setSelectedBuildingIds(buildingIdsParam.split(','));
+      localStorage.setItem('autoAssignmentPreviewBuildingIds', buildingIdsParam);
+    }
   }, [searchParams]);
 
   // Calculate room capacity information
@@ -67,33 +91,114 @@ export default function AutoAssignmentPreviewPage() {
 
     previewResult.assignments.forEach((assignment) => {
       const roomKey = assignment.roomId;
-      
+
       if (!map.has(roomKey)) {
-        // Use roomCapacity from assignment (added by backend)
-        const capacity = (assignment as any).roomCapacity || 0;
-        
+        // Use roomCapacity/existingOccupancy from assignment (added by backend)
+        const capacity = assignment.roomCapacity || 0;
+        const existingCount = assignment.existingOccupancy || 0;
+
         map.set(roomKey, {
           roomId: assignment.roomId,
           roomNumber: assignment.roomNumber,
           buildingName: assignment.buildingName,
           floorNumber: assignment.floorNumber,
-          assignedCount: 1,
-          capacity: capacity,
+          assignedCount: existingCount + 1, // pre-existing occupants + this new assignment
+          existingCount,
+          newCount: 1,
+          capacity,
         });
       } else {
         const info = map.get(roomKey)!;
         info.assignedCount += 1;
+        info.newCount += 1;
       }
     });
 
     return map;
   }, [previewResult?.assignments]);
 
+  // Dual-language (Arabic/English) fuzzy name search — same engine used on the Attendees page
+  const dualLanguageSearch = useMemo(() => new SearchDualLanguageService(), []);
+
+  // Search across attendee name (dual-language), room number, rooming notes,
+  // age, building, and floor — a single query box matching "any kind of data"
+  const filteredAssignments = useMemo(() => {
+    const assignments = previewResult?.assignments || [];
+    const query = searchQuery.trim();
+    if (!query) return assignments;
+
+    // Name matching goes through the dual-language engine the same way the
+    // Attendees page does: generate normalized/transliterated/dictionary
+    // candidate strings for the query, then substring-match them against each
+    // attendee's name — NOT whole-string similarity scoring. searchWithScoring()
+    // compares the ENTIRE query against the ENTIRE name via Levenshtein distance
+    // against a 70% threshold, which is designed for "is this candidate
+    // approximately equal to this text" (typo correction), not "does this
+    // longer name contain what I typed" — a short query like "Ahmed" against a
+    // full name "Ahmed Mohamed Ali" scores far below 70% and was silently
+    // filtered out, which is why name search wasn't returning results.
+    const queryLower = query.toLowerCase();
+    const nameCandidates = [queryLower, ...dualLanguageSearch.generateSearchCandidates(query).map(c => c.toLowerCase())];
+    const nameMatchIds = new Set(
+      assignments
+        .filter((a) => {
+          const nameLower = a.attendeeName.toLowerCase();
+          return nameCandidates.some((candidate) => candidate && nameLower.includes(candidate));
+        })
+        .map((a) => a.attendeeId)
+    );
+
+    return assignments.filter((a) => {
+      if (nameMatchIds.has(a.attendeeId)) return true;
+      const plainFields = [
+        a.roomNumber,
+        a.buildingName,
+        String(a.floorNumber ?? ''),
+        a.age != null ? String(a.age) : '',
+        a.roomingNotes || '',
+        a.parsedRoomingNotes || '',
+        a.church || '',
+        a.governorate || '',
+        a.area || '',
+      ];
+      return plainFields.some((field) => field.toLowerCase().includes(queryLower));
+    });
+  }, [previewResult?.assignments, searchQuery, dualLanguageSearch]);
+
+  // Search across unassigned attendees — name via the dual-language engine
+  // (same as the main search above), plus rooming notes/area/governorate/
+  // church via plain substring matching.
+  const filteredUnassignedAttendees = useMemo(() => {
+    let unassigned = previewResult?.unassignedAttendees || [];
+
+    if (unassignedGenderFilter !== 'ALL') {
+      unassigned = unassigned.filter((u) => (u.gender || '').toUpperCase() === unassignedGenderFilter);
+    }
+
+    const query = unassignedSearchQuery.trim();
+    if (!query) return unassigned;
+
+    const queryLower = query.toLowerCase();
+    const nameCandidates = [queryLower, ...dualLanguageSearch.generateSearchCandidates(query).map(c => c.toLowerCase())];
+
+    return unassigned.filter((u) => {
+      const nameLower = u.name.toLowerCase();
+      if (nameCandidates.some((candidate) => candidate && nameLower.includes(candidate))) return true;
+
+      const plainFields = [u.roomingNotes || '', u.area || '', u.governorate || '', u.church || ''];
+      return plainFields.some((field) => field.toLowerCase().includes(queryLower));
+    });
+  }, [previewResult?.unassignedAttendees, unassignedSearchQuery, unassignedGenderFilter, dualLanguageSearch]);
+
+  // A room (from roomCapacityMap, the same rooms already shown in the
+  // Grid/List views below) is a valid drop/click target while it has space.
+  const isRoomFull = (room: RoomCapacityInfo): boolean => room.assignedCount >= room.capacity;
+
   // Sort assignments based on selected sort option
   const sortedAssignments = useMemo(() => {
-    if (!previewResult?.assignments) return [];
+    if (filteredAssignments.length === 0) return [];
 
-    const assignments = [...previewResult.assignments];
+    const assignments = [...filteredAssignments];
 
     switch (sortBy) {
       case 'room':
@@ -127,15 +232,15 @@ export default function AutoAssignmentPreviewPage() {
       default:
         return assignments;
     }
-  }, [previewResult?.assignments, sortBy]);
+  }, [filteredAssignments, sortBy]);
 
   // Group assignments by room for the grid view
   const roomsGrouped = useMemo(() => {
-    if (!previewResult?.assignments) return [];
+    if (filteredAssignments.length === 0) return [];
 
     const groups = new Map<string, { info: RoomCapacityInfo; assignments: AssignmentPreview[] }>();
 
-    previewResult.assignments.forEach((assignment) => {
+    filteredAssignments.forEach((assignment) => {
       const info = roomCapacityMap.get(assignment.roomId);
       if (!info) return;
 
@@ -160,7 +265,7 @@ export default function AutoAssignmentPreviewPage() {
     });
 
     return rooms;
-  }, [previewResult?.assignments, roomCapacityMap]);
+  }, [filteredAssignments, roomCapacityMap]);
 
   const handleConfirmAndExecute = async () => {
     if (!selectedHouseId || selectedBuildingIds.length === 0) {
@@ -179,10 +284,11 @@ export default function AutoAssignmentPreviewPage() {
 
       if (response.success) {
         toastSuccess(`Successfully assigned ${response.data.assignmentsCreated} attendees`);
-        
-        // Clear saved preview
-        localStorage.removeItem('autoAssignmentPreview');
-        
+
+        // Clear saved preview — it's now fully obsolete since this was a
+        // real (non-dry-run) execution.
+        clearAllPreviewState();
+
         // Navigate back to main page
         navigate('/auto-assignment');
       }
@@ -206,6 +312,79 @@ export default function AutoAssignmentPreviewPage() {
         console.error('Failed to reload preview:', error);
       }
     }
+  };
+
+  // WHY: This is a dry-run preview — nothing has been persisted to the
+  // database yet, so "unassigning" just removes the attendee from the
+  // in-memory/localStorage preview result (same pattern already used by the
+  // swap modal below). This makes rooms easier to review and frees the
+  // attendee up to be handled differently — either re-run auto-assignment,
+  // or place them manually via the regular attendee/room assignment page.
+  const handleUnassignFromPreview = (attendeeId: string, attendeeName: string) => {
+    if (!previewResult?.assignments) return;
+
+    const updatedAssignments = previewResult.assignments.filter(a => a.attendeeId !== attendeeId);
+    const updatedPreview = {
+      ...previewResult,
+      assignments: updatedAssignments,
+      // Keep the "Assignments Created" summary card in sync — it's otherwise
+      // a static count from the original run and wouldn't reflect the removal.
+      assignmentsCreated: updatedAssignments.length,
+    };
+
+    setPreviewResult(updatedPreview);
+    localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
+    toastSuccess(`${attendeeName} removed from this room in the preview`);
+  };
+
+  // WHY: Manually placing an unassigned attendee into a room here is ALSO a
+  // local preview edit, not a real database write — consistent with unassign/
+  // swap above, everything on this page stays a draft until Confirm & Execute.
+  const handleAssignUnassignedToRoom = (attendeeId: string, room: RoomCapacityInfo) => {
+    if (!previewResult) return;
+
+    const unassignedEntry = previewResult.unassignedAttendees?.find(u => u.id === attendeeId);
+    if (!unassignedEntry) return;
+
+    if (isRoomFull(room)) {
+      toastError(`Room ${room.roomNumber} is already full`);
+      return;
+    }
+
+    const newAssignment: AssignmentPreview = {
+      attendeeId: unassignedEntry.id,
+      attendeeName: unassignedEntry.name,
+      gender: unassignedEntry.gender || undefined,
+      age: unassignedEntry.age ?? undefined,
+      church: unassignedEntry.church,
+      area: unassignedEntry.area,
+      governorate: unassignedEntry.governorate,
+      roomingNotes: unassignedEntry.roomingNotes,
+      roomId: room.roomId,
+      roomNumber: room.roomNumber,
+      buildingName: room.buildingName,
+      floorNumber: room.floorNumber,
+      roomCapacity: room.capacity,
+      existingOccupancy: room.existingCount,
+      score: 1,
+      appliedRules: ['manual_assignment'],
+      reason: 'Manually assigned during preview review',
+    };
+
+    const updatedAssignments = [...(previewResult.assignments || []), newAssignment];
+    const updatedUnassigned = (previewResult.unassignedAttendees || []).filter(u => u.id !== attendeeId);
+    const updatedPreview = {
+      ...previewResult,
+      assignments: updatedAssignments,
+      unassignedAttendees: updatedUnassigned,
+      assignmentsCreated: updatedAssignments.length,
+    };
+
+    setPreviewResult(updatedPreview);
+    localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
+    toastSuccess(`${unassignedEntry.name} assigned to Room ${room.roomNumber}`);
+    setSelectedUnassignedId(null);
+    setDraggedUnassignedId(null);
   };
 
   const handlePreviewSwap = async (groupA: string[], groupB: string[], targetRoomId?: string) => {
@@ -374,13 +553,37 @@ export default function AutoAssignmentPreviewPage() {
     setSelectedAttendee(null);
   };
 
+  // WHY: Deliberately does NOT clear localStorage — this is the "soft" way
+  // back (e.g. accidentally clicking the arrow, or briefly checking the
+  // config screen) and must preserve the in-progress preview + edits so the
+  // "Resume Preview" banner on the config page can pick it back up.
   const handleBackToConfig = () => {
     navigate('/auto-assignment');
   };
 
-  const handleClearPreview = () => {
+  // WHY: Full reset — used by both "Clear & Start Over" and "Exit Preview".
+  // Wipes every localStorage key this flow writes (preview data, timestamp,
+  // houseId/buildingIds) so nothing lingers: no stale "Resume Preview" banner,
+  // no leftover swap/unassign edits, nothing carried into the next dry run.
+  const clearAllPreviewState = () => {
     localStorage.removeItem('autoAssignmentPreview');
+    localStorage.removeItem('autoAssignmentPreviewTimestamp');
+    localStorage.removeItem('autoAssignmentPreviewHouseId');
+    localStorage.removeItem('autoAssignmentPreviewBuildingIds');
     setPreviewResult(null);
+  };
+
+  const handleClearPreview = () => {
+    clearAllPreviewState();
+    navigate('/auto-assignment');
+  };
+
+  // WHY: A distinct, explicit "I'm done reviewing this" action — same full
+  // reset as Clear & Start Over, but framed as leaving the preview flow
+  // entirely (vs. "reset and immediately try different settings").
+  const handleExitPreview = () => {
+    clearAllPreviewState();
+    toastSuccess('Preview closed — ready for a new dry run');
     navigate('/auto-assignment');
   };
 
@@ -445,9 +648,9 @@ export default function AutoAssignmentPreviewPage() {
             <div className="flex items-center gap-4">
               <button
                 onClick={handleBackToConfig}
-                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <ArrowLeft size={20} />
+                <ArrowLeft size={18} />
               </button>
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">Assignment Preview Results</h1>
@@ -457,52 +660,92 @@ export default function AutoAssignmentPreviewPage() {
               </div>
             </div>
             
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowSwapModal(true)}
-                className="px-4 py-2 border border-blue-300 text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2"
+                className="px-2.5 py-1.5 border border-blue-300 text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1.5 text-sm"
               >
-                <ArrowLeftRight size={16} />
+                <ArrowLeftRight size={14} />
                 Swap Attendees
               </button>
               <button
                 onClick={handleExportCSV}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
+                className="px-2.5 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1.5 text-sm"
               >
-                <Download size={16} />
+                <Download size={14} />
                 Export CSV
               </button>
               <button
                 onClick={handleClearPreview}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
+                className="px-2.5 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1.5 text-sm"
               >
-                <RotateCcw size={16} />
+                <RotateCcw size={14} />
                 Clear & Start Over
+              </button>
+              <button
+                onClick={handleExitPreview}
+                title="Close this preview and reset — the next dry run starts completely fresh"
+                className="px-2.5 py-1.5 border border-red-300 text-red-700 bg-red-50 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1.5 text-sm"
+              >
+                <X size={14} />
+                Exit Preview
               </button>
               <button
                 onClick={handleConfirmAndExecute}
                 disabled={isExecuting}
-                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2 font-medium"
+                className="px-4 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 text-sm font-medium"
               >
                 {isExecuting ? (
                   <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent" />
                     Executing...
                   </>
                 ) : (
                   <>
-                    <Play size={18} />
+                    <Play size={15} />
                     Confirm & Execute
                   </>
                 )}
               </button>
             </div>
           </div>
+
+          {/* Search — kept inside the same sticky header bar so it stays
+              visible while scrolling, instead of scrolling away with the
+              summary cards/table below. */}
+          <div className="pb-4">
+            <div className="relative">
+              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by attendee name (Arabic or English), room number, rooming notes, age, building, or floor..."
+                className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label="Clear search"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            {searchQuery.trim() && (
+              <div className="text-xs text-gray-500 mt-2">
+                {filteredAssignments.length} of {previewResult.assignments?.length || 0} assignments match "{searchQuery}"
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="max-w-[1700px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-6 items-start">
+        <div className="min-w-0">
+        {/* Summary Cards */}
         <div className="grid grid-cols-5 gap-4 mb-6">
           <div className="bg-white rounded-lg shadow p-4">
             <div className="text-sm text-gray-600">Assignments Created</div>
@@ -554,6 +797,30 @@ export default function AutoAssignmentPreviewPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <label className="text-sm font-medium text-gray-700">Notes:</label>
+            <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden">
+              <button
+                onClick={() => setNotesView('original')}
+                className={`px-3 py-2 text-sm font-medium transition-colors ${
+                  notesView === 'original' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+                title="Show the raw rooming note as written"
+              >
+                Original
+              </button>
+              <button
+                onClick={() => setNotesView('parsed')}
+                className={`px-3 py-2 text-sm font-medium transition-colors border-l border-gray-300 ${
+                  notesView === 'parsed' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+                title="Show the clean list of names the AI extracted from the note"
+              >
+                Parsed
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
             {sortBy === 'room' && viewMode === 'list' && (
               <div className="text-sm text-gray-600">
                 <span className="font-medium">Room View:</span> Assignments grouped by room with capacity indicators
@@ -589,9 +856,23 @@ export default function AutoAssignmentPreviewPage() {
               const capacityPercent = room.info.capacity
                 ? (room.info.assignedCount / room.info.capacity) * 100
                 : 0;
+              const roomIsFull = isRoomFull(room.info);
+              const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedId);
 
               return (
-                <div key={room.info.roomId} className="bg-white rounded-lg shadow overflow-hidden flex flex-col">
+                <div
+                  key={room.info.roomId}
+                  onDragOver={(e) => { if (draggedUnassignedId && !roomIsFull) e.preventDefault(); }}
+                  onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(draggedUnassignedId, room.info)}
+                  onClick={() => selectedUnassignedId && !roomIsFull && handleAssignUnassignedToRoom(selectedUnassignedId, room.info)}
+                  className={`bg-white rounded-lg shadow overflow-hidden flex flex-col transition-all ${
+                    isDropTarget && !roomIsFull
+                      ? 'ring-2 ring-primary-400 cursor-pointer'
+                      : isDropTarget && roomIsFull
+                      ? 'opacity-60'
+                      : ''
+                  }`}
+                >
                   {/* Room Card Header */}
                   <div className="bg-blue-50 border-b border-blue-200 px-4 py-3">
                     <div className="flex items-center justify-between">
@@ -632,27 +913,63 @@ export default function AutoAssignmentPreviewPage() {
                   {/* Attendee List */}
                   <div className="px-4 py-3 flex-1 space-y-2">
                     {room.assignments.map((assignment) => (
-                      <div key={assignment.attendeeId} className="flex items-center justify-between gap-2 text-sm">
-                        <button
-                          onClick={() => handleAttendeeClick(assignment.attendeeId)}
-                          className="text-blue-600 hover:text-blue-800 flex items-center gap-1.5 transition-colors min-w-0"
-                        >
-                          <User size={13} className="shrink-0" />
-                          <span className="truncate">{assignment.attendeeName}</span>
-                        </button>
-                        <span
-                          className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
-                            assignment.score >= 0.8
-                              ? 'bg-green-100 text-green-800'
-                              : assignment.score >= 0.6
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-orange-100 text-orange-800'
-                          }`}
-                        >
-                          {(assignment.score * 100).toFixed(0)}%
-                        </span>
+                      <div key={assignment.attendeeId} className="text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleAttendeeClick(assignment.attendeeId); }}
+                            className="text-blue-600 hover:text-blue-800 flex items-center gap-1.5 transition-colors min-w-0"
+                          >
+                            <User size={13} className="shrink-0" />
+                            <span className="truncate">{assignment.attendeeName}</span>
+                          </button>
+                          <span
+                            className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
+                              assignment.score >= 0.8
+                                ? 'bg-green-100 text-green-800'
+                                : assignment.score >= 0.6
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-orange-100 text-orange-800'
+                            }`}
+                          >
+                            {(assignment.score * 100).toFixed(0)}%
+                          </span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleUnassignFromPreview(assignment.attendeeId, assignment.attendeeName); }}
+                            className="shrink-0 text-gray-400 hover:text-red-600 transition-colors"
+                            title="Unassign from this room (preview only)"
+                          >
+                            <UserMinus size={14} />
+                          </button>
+                        </div>
+                        {(assignment.church || assignment.governorate || assignment.area) && (
+                          <p className="text-xs text-gray-500 pl-5 truncate">
+                            {[assignment.church, assignment.governorate, assignment.area].filter(Boolean).join(' • ')}
+                          </p>
+                        )}
+                        {notesView === 'parsed' ? (
+                          assignment.parsedRoomingNotes ? (
+                            <div className="text-xs text-gray-500 pl-5 mt-0.5 whitespace-pre-wrap break-words">
+                              📝 {assignment.parsedRoomingNotes}
+                            </div>
+                          ) : assignment.roomingNotes ? (
+                            <div className="text-xs text-gray-400 italic pl-5 mt-0.5">
+                              Not parsed yet — showing original: "{assignment.roomingNotes}"
+                            </div>
+                          ) : null
+                        ) : (
+                          assignment.roomingNotes && (
+                            <div className="text-xs text-gray-500 pl-5 mt-0.5 whitespace-pre-wrap break-words">
+                              📝 {assignment.roomingNotes}
+                            </div>
+                          )
+                        )}
                       </div>
                     ))}
+                    {draggedUnassignedId && !roomIsFull && (
+                      <p className="text-xs text-primary-600 font-medium pt-1 border-t border-dashed border-primary-300">
+                        Drop to assign here
+                      </p>
+                    )}
                   </div>
                 </div>
               );
@@ -674,6 +991,7 @@ export default function AutoAssignmentPreviewPage() {
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Floor</th>
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Score</th>
                   <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-1/2">Match Analysis</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -692,18 +1010,29 @@ export default function AutoAssignmentPreviewPage() {
                     : 0;
 
                   return (
-                    <>
+                    <Fragment key={assignment.attendeeId}>
                       {/* Divider between room groups (not before first room) */}
                       {showRoomHeader && idx > 0 && (
                         <tr key={`divider-${assignment.roomId}`} className="border-t-4 border-gray-300">
-                          <td colSpan={7} className="h-0 p-0"></td>
+                          <td colSpan={8} className="h-0 p-0"></td>
                         </tr>
                       )}
                       
                       {/* Room Header Row (only when sorted by room) */}
-                      {showRoomHeader && roomCapacity && (
-                        <tr key={`header-${assignment.roomId}`} className="bg-blue-50 border-t-2 border-blue-200">
-                          <td colSpan={7} className="px-3 py-3">
+                      {showRoomHeader && roomCapacity && (() => {
+                        const roomIsFull = isRoomFull(roomCapacity);
+                        const isDropTarget = Boolean(draggedUnassignedId || selectedUnassignedId);
+                        return (
+                        <tr
+                          key={`header-${assignment.roomId}`}
+                          onDragOver={(e) => { if (draggedUnassignedId && !roomIsFull) e.preventDefault(); }}
+                          onDrop={() => draggedUnassignedId && handleAssignUnassignedToRoom(draggedUnassignedId, roomCapacity)}
+                          onClick={() => selectedUnassignedId && !roomIsFull && handleAssignUnassignedToRoom(selectedUnassignedId, roomCapacity)}
+                          className={`bg-blue-50 border-t-2 border-blue-200 transition-colors ${
+                            isDropTarget && !roomIsFull ? 'ring-2 ring-inset ring-primary-400 cursor-pointer' : ''
+                          } ${isDropTarget && roomIsFull ? 'opacity-60' : ''}`}
+                        >
+                          <td colSpan={8} className="px-3 py-3">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3">
                                 <span className="text-sm font-bold text-blue-900">
@@ -712,6 +1041,9 @@ export default function AutoAssignmentPreviewPage() {
                                 <span className="text-xs text-blue-700">
                                   {roomCapacity.buildingName} • Floor {roomCapacity.floorNumber}
                                 </span>
+                                {draggedUnassignedId && !roomIsFull && (
+                                  <span className="text-xs text-primary-600 font-medium">Drop to assign here</span>
+                                )}
                               </div>
                               <div className="flex items-center gap-3">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
@@ -721,10 +1053,13 @@ export default function AutoAssignmentPreviewPage() {
                                   'bg-orange-100 text-orange-800'
                                 }`}>
                                   {roomCapacity.assignedCount}/{roomCapacity.capacity} assigned
+                                  {roomCapacity.existingCount > 0 && (
+                                    <span className="font-normal opacity-75"> ({roomCapacity.existingCount} existing + {roomCapacity.newCount} new)</span>
+                                  )}
                                 </span>
                                 {/* Capacity visual bar */}
                                 <div className="w-32 h-2 bg-gray-200 rounded-full overflow-hidden">
-                                  <div 
+                                  <div
                                     className={`h-full transition-all ${
                                       capacityPercent >= 100 ? 'bg-green-500' :
                                       capacityPercent >= 75 ? 'bg-blue-500' :
@@ -738,7 +1073,8 @@ export default function AutoAssignmentPreviewPage() {
                             </div>
                           </td>
                         </tr>
-                      )}
+                        );
+                      })()}
                       
                       {/* Assignment Row */}
                       <tr key={`assignment-${idx}`} className={`hover:bg-gray-50 ${
@@ -753,6 +1089,11 @@ export default function AutoAssignmentPreviewPage() {
                             <User size={14} />
                             {assignment.attendeeName}
                           </button>
+                          {(assignment.church || assignment.governorate || assignment.area) && (
+                            <p className="text-xs text-gray-500 pl-5 mt-0.5 truncate max-w-[180px]">
+                              {[assignment.church, assignment.governorate, assignment.area].filter(Boolean).join(' • ')}
+                            </p>
+                          )}
                         </td>
                         <td className="px-3 py-4 text-sm text-gray-900">
                           <div className="flex items-center gap-2">
@@ -858,17 +1199,27 @@ export default function AutoAssignmentPreviewPage() {
                           </div>
                         )} */}
 
-                        {/* Special Notes */}
-                        {assignment.reason && assignment.reason.includes('Notes:') && (
-                          <div className="mt-2 pt-2 border-t border-gray-200">
-                            <div className="text-xs">
-                              <span className="text-gray-500 font-medium">📝 Notes: </span>
-                              <span className="text-gray-700">
-                                {assignment.reason.split('Notes:')[1]?.replace(/[".]/g, '').trim()}
-                              </span>
-                            </div>
+                        {/* Rooming Notes — shown for everyone, not just when a match rule referenced them */}
+                        <div className="mt-2 pt-2 border-t border-gray-200">
+                          <div className="text-xs">
+                            <span className="text-gray-500 font-medium">
+                              📝 {notesView === 'parsed' ? 'Parsed' : 'Notes'}:{' '}
+                            </span>
+                            {notesView === 'parsed' ? (
+                              assignment.parsedRoomingNotes ? (
+                                <span className="text-gray-700 whitespace-pre-wrap break-words">{assignment.parsedRoomingNotes}</span>
+                              ) : assignment.roomingNotes ? (
+                                <span className="text-gray-400 italic">Not parsed yet — showing original: "{assignment.roomingNotes}"</span>
+                              ) : (
+                                <span className="text-gray-400 italic">No notes</span>
+                              )
+                            ) : assignment.roomingNotes ? (
+                              <span className="text-gray-700 whitespace-pre-wrap break-words">{assignment.roomingNotes}</span>
+                            ) : (
+                              <span className="text-gray-400 italic">No notes</span>
+                            )}
                           </div>
-                        )}
+                        </div>
                         
                         {/* Warnings */}
                         {assignment.warnings && assignment.warnings.length > 0 && (
@@ -881,8 +1232,18 @@ export default function AutoAssignmentPreviewPage() {
                         )}
                       </div>
                     </td>
+                    <td className="px-3 py-4 text-sm">
+                      <button
+                        onClick={() => handleUnassignFromPreview(assignment.attendeeId, assignment.attendeeName)}
+                        className="text-gray-500 hover:text-red-600 flex items-center gap-1 transition-colors"
+                        title="Unassign from this room (preview only)"
+                      >
+                        <UserMinus size={14} />
+                        Unassign
+                      </button>
+                    </td>
                   </tr>
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -891,25 +1252,114 @@ export default function AutoAssignmentPreviewPage() {
         </div>
         )}
 
-        {/* Unassigned Attendees */}
+        </div>
+
+        {/* Sidebar: Unassigned Attendees — drag onto, or click then click, a
+            room in the Grid/List view on the left to assign (preview only). */}
         {previewResult.unassignedAttendees && previewResult.unassignedAttendees.length > 0 && (
-          <div className="mt-6 bg-amber-50 rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold text-amber-900 mb-4">
-              Unassigned Attendees ({previewResult.unassignedAttendees.length})
-            </h3>
-            <div className="space-y-2">
-              {previewResult.unassignedAttendees.map((u, idx) => (
-                <div key={idx} className="flex items-start gap-3 text-sm">
-                  <span className="font-medium text-amber-900">{idx + 1}.</span>
-                  <div className="flex-1">
-                    <div className="font-medium text-amber-900">{u.name}</div>
-                    <div className="text-amber-700">{u.reason}</div>
-                  </div>
-                </div>
-              ))}
+          <div className="xl:sticky xl:top-40 bg-white rounded-lg shadow overflow-hidden flex flex-col max-h-[calc(100vh-10rem)]">
+            <div className="px-4 py-3 border-b border-gray-200 bg-amber-50">
+              <h3 className="text-sm font-semibold text-amber-900">
+                Unassigned Attendees ({previewResult.unassignedAttendees.length})
+              </h3>
+              <p className="text-xs text-amber-700 mt-1">
+                Drag onto a room, or click one then click a room, in the list/grid on the left. Preview only, until Confirm & Execute.
+              </p>
             </div>
+
+            <div className="p-3 border-b border-gray-200">
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={unassignedSearchQuery}
+                  onChange={(e) => setUnassignedSearchQuery(e.target.value)}
+                  placeholder="Search name, rooming notes, area, governorate, church..."
+                  className="w-full pl-9 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {unassignedSearchQuery && (
+                  <button
+                    onClick={() => setUnassignedSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    aria-label="Clear search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1 mt-2">
+                {(['ALL', 'MALE', 'FEMALE'] as const).map((g) => (
+                  <button
+                    key={g}
+                    onClick={() => setUnassignedGenderFilter(g)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                      unassignedGenderFilter === g
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {g === 'ALL' ? 'All' : g === 'MALE' ? 'Male' : 'Female'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-2">
+              {filteredUnassignedAttendees.length === 0 ? (
+                <div className="text-center py-8 text-sm text-gray-500">
+                  {unassignedSearchQuery ? 'No matching attendees' : 'Everyone is assigned!'}
+                </div>
+              ) : (
+                filteredUnassignedAttendees.map((u) => (
+                  <div
+                    key={u.id}
+                    draggable
+                    onDragStart={() => setDraggedUnassignedId(u.id)}
+                    onDragEnd={() => setDraggedUnassignedId(null)}
+                    onClick={() => setSelectedUnassignedId(selectedUnassignedId === u.id ? null : u.id)}
+                    className={`p-3 mb-1 rounded-lg cursor-pointer border-2 transition-all ${
+                      selectedUnassignedId === u.id
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-transparent hover:bg-gray-50 hover:border-gray-200'
+                    } ${draggedUnassignedId === u.id ? 'opacity-50' : ''}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {u.name}
+                          {u.gender && (
+                            <span className="ml-1.5 text-xs font-normal text-gray-400">
+                              ({u.gender.toLowerCase() === 'male' ? 'M' : u.gender.toLowerCase() === 'female' ? 'F' : u.gender})
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {[u.church, u.governorate, u.area].filter(Boolean).join(' • ') || u.reason}
+                        </p>
+                        {u.roomingNotes && (
+                          <p className="text-xs text-blue-600 mt-0.5 truncate">📝 {u.roomingNotes}</p>
+                        )}
+                      </div>
+                      <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                        Unassigned
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {selectedUnassignedId && (
+              <div className="p-3 border-t border-gray-200 bg-primary-50">
+                <p className="text-xs text-primary-700">
+                  💡 Now click a room on the left to assign
+                </p>
+              </div>
+            )}
           </div>
         )}
+        </div>
       </div>
 
       {/* Attendee Details Modal */}

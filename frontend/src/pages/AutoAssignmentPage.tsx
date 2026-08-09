@@ -77,6 +77,7 @@ export default function AutoAssignmentPage() {
   const [status, setStatus] = useState<AutoAssignmentStatus | null>(null);
   const [ruleWeights, setRuleWeights] = useState(DEFAULT_RULE_WEIGHTS);
   const [staffReservedCapacity, setStaffReservedCapacity] = useState(0.15);
+  const [leaderReservedSlots, setLeaderReservedSlots] = useState(1);
   
   const [isExecuting, setIsExecuting] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -89,7 +90,17 @@ export default function AutoAssignmentPage() {
   
   const [loading, setLoading] = useState(true);
   const [configDirty, setConfigDirty] = useState(false);
-  
+
+  // WHY: Lets an admin who navigated away mid-review (e.g. to check something
+  // on the Attendees page) get back to their in-progress preview — including
+  // any swap/unassign edits already made — instead of it being invisible
+  // once they leave the preview page.
+  const [savedPreviewTimestamp, setSavedPreviewTimestamp] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSavedPreviewTimestamp(localStorage.getItem('autoAssignmentPreviewTimestamp'));
+  }, []);
+
   // Socket connection
   const socket = useSocket();
   
@@ -234,7 +245,11 @@ export default function AutoAssignmentPage() {
           // Backend sends integer percentage (0-50), convert to decimal (0.0-0.5)
           setStaffReservedCapacity(configData.staffReservedCapacity / 100);
         }
-        
+
+        if (configData.leaderReservedSlots !== undefined) {
+          setLeaderReservedSlots(configData.leaderReservedSlots);
+        }
+
         if (configData.enabledBuildings) {
           setSelectedBuildingIds(configData.enabledBuildings);
         }
@@ -303,6 +318,7 @@ export default function AutoAssignmentPage() {
         ruleWeights,
         // Backend expects integer percentage (0-50), convert from decimal (0.0-0.5)
         staffReservedCapacity: Math.round(staffReservedCapacity * 100),
+        leaderReservedSlots,
       });
       
       toastSuccess('Configuration saved');
@@ -437,10 +453,16 @@ export default function AutoAssignmentPage() {
       if (response.success && response.data) {
         console.log('✅ Setting executionResult with', response.data.assignments?.length, 'assignments');
         
-        // Save preview to localStorage (persists across page navigations)
+        // Save preview to localStorage (persists across page navigations).
+        // WHY: houseId/buildingIds are saved alongside it so the preview page
+        // can be re-opened later WITHOUT the original URL query params (e.g.
+        // via the "Resume Preview" banner below) and still know which house/
+        // buildings this preview belongs to.
         localStorage.setItem('autoAssignmentPreview', JSON.stringify(response.data));
         localStorage.setItem('autoAssignmentPreviewTimestamp', new Date().toISOString());
-        
+        localStorage.setItem('autoAssignmentPreviewHouseId', selectedHouseId);
+        localStorage.setItem('autoAssignmentPreviewBuildingIds', selectedBuildingIds.join(','));
+
         setExecutionResult(response.data);
         setIsPreviewing(false);
         setProgressPercentage(100);
@@ -551,7 +573,44 @@ export default function AutoAssignmentPage() {
           </p>
         </div>
       </div>
-      
+
+      {/* Resume Preview Banner */}
+      {savedPreviewTimestamp && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Eye className="text-blue-600 shrink-0" size={20} />
+            <div>
+              <p className="text-sm font-medium text-blue-900">
+                You have an unfinished dry-run preview (including any swaps/unassigns you made)
+              </p>
+              <p className="text-xs text-blue-700 mt-0.5">
+                Saved {new Date(savedPreviewTimestamp).toLocaleString()}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => navigate('/auto-assignment/preview')}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+            >
+              Resume Preview
+            </button>
+            <button
+              onClick={() => {
+                localStorage.removeItem('autoAssignmentPreview');
+                localStorage.removeItem('autoAssignmentPreviewTimestamp');
+                localStorage.removeItem('autoAssignmentPreviewHouseId');
+                localStorage.removeItem('autoAssignmentPreviewBuildingIds');
+                setSavedPreviewTimestamp(null);
+              }}
+              className="px-3 py-2 text-blue-700 hover:bg-blue-100 rounded-lg transition-colors text-sm"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Status Cards */}
       {status && (
         <div className="grid grid-cols-5 gap-4">
@@ -867,7 +926,37 @@ export default function AutoAssignmentPage() {
                 Percentage of room capacity reserved for staff members (max 50%)
               </p>
             </div>
-            
+
+            <div className="mt-6 pt-6 border-t">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-gray-700 flex-1">
+                  Leader Reserved Slots
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="1"
+                    value={leaderReservedSlots}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value, 10);
+                      const clamped = isNaN(value) ? 0 : Math.max(0, Math.min(10, value));
+                      setLeaderReservedSlots(clamped);
+                      setConfigDirty(true);
+                    }}
+                    className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  />
+                  <span className="text-sm text-gray-600">bed(s)/room</span>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Beds kept empty in every room so a leader can be assigned manually afterward,
+                even if no one in the current group carries the Leader role. Leaders/VIPs placed
+                by auto-assignment may still use this space themselves.
+              </p>
+            </div>
+
             {configDirty && (
               <button
                 onClick={handleSaveConfig}

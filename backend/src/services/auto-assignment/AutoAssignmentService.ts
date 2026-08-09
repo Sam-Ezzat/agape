@@ -9,6 +9,7 @@ import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepositor
 import { AuditLogRepository } from '@/repositories/AuditLogRepository';
 import { AutoAssignmentConfigRepository } from '@/repositories/AutoAssignmentConfigRepository';
 import { RoomingNotesClassifier } from './RoomingNotesClassifier';
+import { RoomingNotesCacheService } from './RoomingNotesCacheService';
 import { HierarchicalGroupingService, AttendeeGroup as HierarchicalGroup } from './HierarchicalGroupingService';
 import { RoomProximityMatcher, RoomWithDetails as ProximityRoom } from './RoomProximityMatcher';
 import { AIGroupEnhancementService } from './AIGroupEnhancementService';
@@ -22,7 +23,8 @@ import {
   AssignmentResult,
   ValidationError,
   StageResult,
-  RunAutoAssignmentDTO
+  RunAutoAssignmentDTO,
+  ClassifiedNotes
 } from '@/types/auto-assignment';
 import logger from '@/utils/logger';
 import { mapWithConcurrency } from '@/utils/concurrency';
@@ -33,6 +35,7 @@ import { GenderMatchRule } from './rules/hard/GenderMatchRule';
 import { RoomTypeMatchRule } from './rules/hard/RoomTypeMatchRule';
 import { RoomAvailabilityRule } from './rules/hard/RoomAvailabilityRule';
 import { BuildingEnabledRule } from './rules/hard/BuildingEnabledRule';
+import { LeaderReservedCapacityRule } from './rules/hard/LeaderReservedCapacityRule';
 
 // Import soft constraint rules
 import { SameChurchRule } from './rules/soft/SameChurchRule';
@@ -87,6 +90,7 @@ interface RoomWithDetails {
  */
 export class AutoAssignmentService {
   private classifier: RoomingNotesClassifier;
+  private roomingNotesCacheService: RoomingNotesCacheService;
   private hierarchicalGrouping: HierarchicalGroupingService;
   private proximityMatcher: RoomProximityMatcher;
   private aiEnhancer: AIGroupEnhancementService;
@@ -104,9 +108,10 @@ export class AutoAssignmentService {
       useAI?: boolean;  // Allow disabling AI for tests
     }
   ) {
-    this.classifier = new RoomingNotesClassifier({ 
+    this.classifier = new RoomingNotesClassifier({
       useAI: options?.useAI !== false  // Default to true, but allow override
     });
+    this.roomingNotesCacheService = new RoomingNotesCacheService(attendeeRepository);
     this.hierarchicalGrouping = new HierarchicalGroupingService();
     this.proximityMatcher = new RoomProximityMatcher();
     this.aiEnhancer = new AIGroupEnhancementService({
@@ -184,7 +189,16 @@ export class AutoAssignmentService {
 
       const allAttendees = await this.attendeeRepository.findAllByOrganization(organizationId);
       const availableRooms = await this.loadAvailableRooms(enabledBuildings, organizationId);
-      
+
+      // WHY: availableRooms' currentOccupancy/currentAssignments get mutated in
+      // place as THIS run makes new assignments (needed for correct in-run
+      // scoring/capacity checks) — snapshot the real pre-run occupancy now so
+      // the preview can later report "already occupied" separately from "newly
+      // assigned here", instead of the preview silently only reflecting new
+      // assignments and making manually/previously-assigned rooms look emptier
+      // than they really are.
+      const initialRoomOccupancy = new Map(availableRooms.map(r => [r.id, r.currentOccupancy]));
+
       // Filter out deleted attendees
       let unassignedAttendees = allAttendees.filter(a => !a.deletedAt);
       
@@ -225,23 +239,44 @@ export class AutoAssignmentService {
         stage: { number: 3, name: 'Classify Notes', status: 'started' }
       });
 
-      // Classify all rooming notes for AI enhancement.
-      // WHY: Each classification is an independent OpenAI call — awaiting them
-      // one at a time serializes network latency across every attendee, which
-      // is what was pushing total execution past the frontend's HTTP timeout.
-      // A bounded concurrency limit keeps requests parallel without tripping
-      // OpenAI rate limits.
-      const classifications = new Map();
-      const classificationResults = await mapWithConcurrency(
-        unassignedAttendees,
-        8,
-        async (attendee) => ({
-          attendeeId: attendee.id,
-          classified: await this.classifier.classify(attendee.roomingNotes),
-        })
-      );
-      for (const { attendeeId, classified } of classificationResults) {
-        classifications.set(attendeeId, classified);
+      // Classify rooming notes for AI enhancement — cache-first.
+      // WHY: Attendees imported/created/edited already had their notes classified
+      // and persisted in the background (see RoomingNotesCacheService) — reusing
+      // that avoids re-paying AI latency/cost for the same note on every run.
+      // Only attendees with a missing/stale cache (edge case: background job
+      // hasn't caught up yet) get classified live here, with bounded concurrency
+      // so it doesn't serialize network latency the way a plain loop would.
+      const classifications = new Map<string, ClassifiedNotes>();
+      const staleAttendees: Attendee[] = [];
+
+      for (const attendee of unassignedAttendees) {
+        const cached = attendee.roomingNotesClassification as unknown as ClassifiedNotes | null;
+        if (cached && RoomingNotesCacheService.isFresh(attendee)) {
+          classifications.set(attendee.id, cached);
+        } else if (attendee.roomingNotes?.trim()) {
+          staleAttendees.push(attendee);
+        }
+        // else: no rooming notes — nothing to classify, leave unset (every
+        // consumer of `classifications` already guards with optional chaining)
+      }
+
+      if (staleAttendees.length > 0) {
+        const classificationResults = await mapWithConcurrency(
+          staleAttendees,
+          8,
+          async (attendee) => ({
+            attendeeId: attendee.id,
+            classified: await this.classifier.classify(attendee.roomingNotes),
+          })
+        );
+        for (const { attendeeId, classified } of classificationResults) {
+          classifications.set(attendeeId, classified);
+        }
+
+        // Persist the results we JUST computed so future runs hit the cache
+        // (persistResultsInBackground writes them directly — it does not
+        // re-invoke the classifier the way classifyAndPersist() would).
+        this.roomingNotesCacheService.persistResultsInBackground(classificationResults);
       }
 
       stages.push({
@@ -249,7 +284,7 @@ export class AutoAssignmentService {
         name: 'Classify Notes',
         status: 'completed',
         durationMs: Date.now() - stage3Start,
-        details: `AI-powered note classification complete (${classifications.size} attendees)`
+        details: `${classifications.size} attendee(s) classified (${classifications.size - staleAttendees.length} cached, ${staleAttendees.length} classified live)`
       });
 
       this.emitProgress(onProgress, {
@@ -428,8 +463,29 @@ export class AutoAssignmentService {
       const enrichedAssignments = await this.enrichAssignmentDetails(
         assignments,
         unassignedAttendees,
-        availableRooms
+        availableRooms,
+        initialRoomOccupancy
       );
+
+      // WHY: `unassignedAttendees` (the variable) is the processing POOL, not
+      // "people who remain unassigned" — build the actual leftover list by
+      // excluding whoever made it into `assignments`, and attach the reason
+      // from `errors` when one was recorded for them.
+      const assignedIdsThisRun = new Set(assignments.map(a => a.attendeeId));
+      const errorReasonByAttendeeId = new Map(errors.map(e => [e.attendeeId, e.reason]));
+      const stillUnassigned = unassignedAttendees
+        .filter(a => !assignedIdsThisRun.has(a.id))
+        .map(a => ({
+          id: a.id,
+          name: a.fullName,
+          reason: errorReasonByAttendeeId.get(a.id) || 'No suitable room found',
+          roomingNotes: a.roomingNotes,
+          area: a.area,
+          governorate: a.governorate,
+          church: a.church,
+          age: a.age,
+          gender: a.gender,
+        }));
 
       // Build result
       // Success = workflow completed all stages (even if no assignments made)
@@ -441,6 +497,7 @@ export class AutoAssignmentService {
         errors,
         warnings,
         assignments: enrichedAssignments,  // Use enriched assignments with full details
+        unassignedAttendees: stillUnassigned,
         executionTimeMs: Date.now() - startTime,
         stages
       };
@@ -480,6 +537,7 @@ export class AutoAssignmentService {
         }],
         warnings: [],
         assignments: [],
+        unassignedAttendees: [],
         executionTimeMs: Date.now() - startTime,
         stages
       };
@@ -698,8 +756,17 @@ export class AutoAssignmentService {
     let subGroupIndex = 0;
 
     while (remaining.length > 0) {
-      // Find best size for remaining members
-      let bestSize = optimalSizes.find(size => size <= remaining.length) || 1;
+      // WHY: previously this always grabbed the largest bucket that fit the
+      // CURRENT remainder, even when the remainder itself was small enough to
+      // fit in one room untouched — e.g. a 6-person group with only 4-bed
+      // rooms available would peel off 4, then peel the last 2 off ONE AT A
+      // TIME (no bucket size "2" exists), scattering a pair that should have
+      // stayed together into two lone individuals. If the whole remainder
+      // already fits in the largest available room, keep it as one chunk
+      // instead of continuing to bucket it.
+      let bestSize = remaining.length <= maxRoomCapacity
+        ? remaining.length
+        : (optimalSizes.find(size => size <= remaining.length) || maxRoomCapacity);
 
       // Take members for this sub-group
       const subGroupMembers = remaining.slice(0, bestSize);
@@ -739,6 +806,7 @@ export class AutoAssignmentService {
     this.engine.registerRule(new RoomTypeMatchRule());
     this.engine.registerRule(new RoomAvailabilityRule());
     this.engine.registerRule(new BuildingEnabledRule(enabledBuildings));
+    this.engine.registerRule(new LeaderReservedCapacityRule(config.leaderReservedSlots ?? 1));
 
     // Register soft constraint rules with configured weights
     const weights = config.ruleWeights || {};
@@ -2108,7 +2176,8 @@ export class AutoAssignmentService {
   private async enrichAssignmentDetails(
     assignments: AssignmentResult[],
     attendees: Attendee[],
-    rooms: RoomWithDetails[]
+    rooms: RoomWithDetails[],
+    initialRoomOccupancy: Map<string, number> = new Map()
   ): Promise<any[]> {
     // Create lookup maps for O(1) access
     const attendeeMap = new Map(
@@ -2131,13 +2200,32 @@ export class AutoAssignmentService {
         return assignment;  // Return original if data missing
       }
 
+      const cachedClassification = attendee.roomingNotesClassification as unknown as ClassifiedNotes | null;
+
       return {
         ...assignment,
         attendeeName: attendee.fullName,
         gender: attendee.gender,
         age: attendee.age,
+        church: attendee.church,
+        area: attendee.area,
+        governorate: attendee.governorate,
+        roomingNotes: attendee.roomingNotes,
+        // WHY: a clean, human-reviewable list of what the classifier understood
+        // from the raw note (e.g. "Saher Ezzat - Kero - Rony"), so staff can
+        // visually confirm the extraction was correct without reading the
+        // free-text note. Only populated when the cache is fresh — a stale/
+        // missing cache means classification hasn't caught up with an edit yet.
+        parsedRoomingNotes: (cachedClassification && cachedClassification.roommateRequests?.length && cachedClassification.raw === (attendee.roomingNotes || '').trim())
+          ? cachedClassification.roommateRequests.join(' - ')
+          : null,
         roomNumber: room.roomNumber,
         roomCapacity: room.capacity,
+        // WHY: occupants already in this room before this run (manual
+        // assignments or attendees excluded via onlyUnassigned) — the
+        // frontend needs this to show TRUE total occupancy, since this
+        // assignment list only ever contains NEW placements from this run.
+        existingOccupancy: initialRoomOccupancy.get(room.id) ?? 0,
         buildingName: room.floor.building.name,
         floorNumber: room.floor.floorNumber
       };
