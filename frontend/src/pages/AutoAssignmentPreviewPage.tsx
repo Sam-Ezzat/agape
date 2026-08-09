@@ -323,10 +323,32 @@ export default function AutoAssignmentPreviewPage() {
   const handleUnassignFromPreview = (attendeeId: string, attendeeName: string) => {
     if (!previewResult?.assignments) return;
 
+    const removedAssignment = previewResult.assignments.find(a => a.attendeeId === attendeeId);
     const updatedAssignments = previewResult.assignments.filter(a => a.attendeeId !== attendeeId);
+
+    // Send the attendee back to the "Unassigned" sidebar so they aren't lost
+    // from the preview entirely — mirrors handleAssignUnassignedToRoom below.
+    const updatedUnassigned = removedAssignment
+      ? [
+          ...(previewResult.unassignedAttendees || []),
+          {
+            id: removedAssignment.attendeeId,
+            name: removedAssignment.attendeeName,
+            reason: 'Manually unassigned from preview',
+            roomingNotes: removedAssignment.roomingNotes,
+            area: removedAssignment.area,
+            governorate: removedAssignment.governorate,
+            church: removedAssignment.church,
+            age: removedAssignment.age,
+            gender: removedAssignment.gender,
+          },
+        ]
+      : previewResult.unassignedAttendees;
+
     const updatedPreview = {
       ...previewResult,
       assignments: updatedAssignments,
+      unassignedAttendees: updatedUnassigned,
       // Keep the "Assignments Created" summary card in sync — it's otherwise
       // a static count from the original run and wouldn't reflect the removal.
       assignmentsCreated: updatedAssignments.length,
@@ -334,7 +356,7 @@ export default function AutoAssignmentPreviewPage() {
 
     setPreviewResult(updatedPreview);
     localStorage.setItem('autoAssignmentPreview', JSON.stringify(updatedPreview));
-    toastSuccess(`${attendeeName} removed from this room in the preview`);
+    toastSuccess(`${attendeeName} moved to unassigned in the preview`);
   };
 
   // WHY: Manually placing an unassigned attendee into a room here is ALSO a
