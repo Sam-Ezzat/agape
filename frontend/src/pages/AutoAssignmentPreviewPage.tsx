@@ -250,14 +250,18 @@ export default function AutoAssignmentPreviewPage() {
           // CRITICAL: Sort by roomId first to ensure all attendees in same room are together
           // This prevents other rooms from intersecting the same room's rows
           if (a.roomId !== b.roomId) {
-            // For different rooms, sort by building -> floor -> room number
-            if (a.buildingName !== b.buildingName) {
-              return a.buildingName.localeCompare(b.buildingName);
-            }
+            // WHY: Order by the room's own numeric sequence first (e.g. C1,
+            // C2, ... C55), NOT by which building it happens to belong to —
+            // buildings often just carve up one continuous room range, so
+            // grouping by building name first would scatter C1-19/C20-40/
+            // C41-55 out of order. Building/floor are only tiebreakers for
+            // the rare case of a genuine room-number collision.
+            const roomCompare = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
+            if (roomCompare !== 0) return roomCompare;
             if (a.floorNumber !== b.floorNumber) {
               return a.floorNumber - b.floorNumber;
             }
-            return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
+            return a.buildingName.localeCompare(b.buildingName, undefined, { numeric: true });
           }
           // Same room: sort by attendee name for consistency
           return a.attendeeName.localeCompare(b.attendeeName);
@@ -269,7 +273,7 @@ export default function AutoAssignmentPreviewPage() {
       case 'building':
         return assignments.sort((a, b) => {
           if (a.buildingName !== b.buildingName) {
-            return a.buildingName.localeCompare(b.buildingName);
+            return a.buildingName.localeCompare(b.buildingName, undefined, { numeric: true });
           }
           return a.attendeeName.localeCompare(b.attendeeName);
         });
@@ -299,13 +303,16 @@ export default function AutoAssignmentPreviewPage() {
       room.assignments.sort((a, b) => a.attendeeName.localeCompare(b.attendeeName));
     });
     rooms.sort((a, b) => {
-      if (a.info.buildingName !== b.info.buildingName) {
-        return a.info.buildingName.localeCompare(b.info.buildingName);
-      }
+      // WHY: Same priority as the list view's "room" sort — order by the
+      // room's own numeric sequence first, not by building name, so a
+      // continuous room range spread across buildings (e.g. C1-19 in
+      // Orange, C20-40 in Apple, C41-55 in Mango) still displays in order.
+      const roomCompare = a.info.roomNumber.localeCompare(b.info.roomNumber, undefined, { numeric: true });
+      if (roomCompare !== 0) return roomCompare;
       if (a.info.floorNumber !== b.info.floorNumber) {
         return a.info.floorNumber - b.info.floorNumber;
       }
-      return a.info.roomNumber.localeCompare(b.info.roomNumber, undefined, { numeric: true });
+      return a.info.buildingName.localeCompare(b.info.buildingName, undefined, { numeric: true });
     });
 
     return rooms;
