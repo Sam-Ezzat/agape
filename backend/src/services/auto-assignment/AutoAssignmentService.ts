@@ -211,15 +211,13 @@ export class AutoAssignmentService {
       // same attendee hits the attendeeId @unique constraint).
       const onlyUnassigned = params.options?.onlyUnassigned !== false;
       if (onlyUnassigned) {
-        const assignedAttendeeIds = new Set<string>();
-        
-        // Collect all currently assigned attendee IDs from room assignments
-        for (const room of availableRooms) {
-          for (const assignment of room.currentAssignments) {
-            assignedAttendeeIds.add(assignment.attendeeId);
-          }
-        }
-        
+        // WHY: Must check assignments ORG-WIDE, not just within this run's
+        // selected buildings (`availableRooms` only covers those) — an
+        // attendee already assigned in a DIFFERENT, unselected building is
+        // otherwise invisible to this filter and gets re-placed into a new
+        // room in the selected building, leaving them double-booked.
+        const assignedAttendeeIds = await this.assignmentRepository.findAssignedAttendeeIds(organizationId);
+
         // Filter out assigned attendees
         unassignedAttendees = unassignedAttendees.filter(
           a => !assignedAttendeeIds.has(a.id)

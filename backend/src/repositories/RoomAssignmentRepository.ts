@@ -15,6 +15,23 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
   }
 
   /**
+   * All attendeeIds with a real room assignment ANYWHERE in the
+   * organization, regardless of building.
+   * WHY: Auto-assignment's "exclude already-assigned attendees" filter must
+   * not be scoped to just the buildings selected for this run — otherwise
+   * an attendee already assigned in a DIFFERENT (unselected) building looks
+   * "unassigned" and gets re-placed into a new room in the selected
+   * building, leaving them double-booked.
+   */
+  async findAssignedAttendeeIds(organizationId: string): Promise<Set<string>> {
+    const assignments = await this.prisma.roomAssignment.findMany({
+      where: { room: { floor: { building: { conferenceHouse: { organizationId } } } } },
+      select: { attendeeId: true },
+    });
+    return new Set(assignments.map(a => a.attendeeId));
+  }
+
+  /**
    * Find assignment by ID with full details
    * WHY: Common query to show assignment with attendee and room info
    */

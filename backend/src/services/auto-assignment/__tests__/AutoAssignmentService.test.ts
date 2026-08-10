@@ -40,6 +40,9 @@ class MockRoomAssignmentRepository {
   async findByAttendeeId(): Promise<any> {
     return null;
   }
+  async findAssignedAttendeeIds(): Promise<Set<string>> {
+    return new Set();
+  }
 }
 
 class MockAuditLogRepository {
