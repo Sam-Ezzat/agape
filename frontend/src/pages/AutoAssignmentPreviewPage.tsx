@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Play, RotateCcw, ArrowLeft, Download, AlertTriangle, ArrowUpDown, X, User, ArrowLeftRight, LayoutList, LayoutGrid, Search, UserMinus, Activity, ChevronDown, ChevronUp } from 'lucide-react';
 import { AutoAssignmentExecutionResult, Attendee, AssignmentPreview, AuditLog } from '@/types/api';
@@ -49,6 +49,14 @@ export default function AutoAssignmentPreviewPage() {
   // concurrency). `activity` is the live "who did what" feed.
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [version, setVersion] = useState<number>(1);
+  // WHY: The socket handler below fetches the latest session async — by the
+  // time that fetch resolves, a NEWER edit (local or from another admin)
+  // may have already landed. Reading `version` from the effect's closure at
+  // that point would be stale; a ref always reflects the current value at
+  // resolve-time, so we can discard an out-of-order response instead of
+  // regressing the UI to older data.
+  const versionRef = useRef(version);
+  useEffect(() => { versionRef.current = version; }, [version]);
   const [activity, setActivity] = useState<AuditLog[]>([]);
   const [showActivity, setShowActivity] = useState(true);
   const socket = useSocket();
@@ -164,7 +172,12 @@ export default function AutoAssignmentPreviewPage() {
       if (data.version !== undefined && data.version <= version) return;
 
       autoAssignmentApi.getPreviewSession(selectedHouseId).then((response) => {
-        if (response) {
+        // WHY: Re-check against the LATEST version (via ref, not the
+        // closure's `version`) now that the fetch has resolved — a newer
+        // edit may have landed while this was in flight. Applying an
+        // out-of-order response here would silently regress the UI back to
+        // older data (e.g. a since-superseded isExisting/roomId).
+        if (response && response.version > versionRef.current) {
           setPreviewResult(response.data);
           setVersion(response.version);
           setActivity(response.activity || []);
