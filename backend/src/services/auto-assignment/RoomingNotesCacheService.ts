@@ -9,7 +9,7 @@ import { AttendeeRepository } from '@/repositories/AttendeeRepository';
 import { RoomingNotesClassifier } from './RoomingNotesClassifier';
 import { mapWithConcurrency } from '@/utils/concurrency';
 import { ClassifiedNotes } from '@/types/auto-assignment';
-import { buildNameIndex, resolveRequestedRoommate } from './nameResolution';
+import { buildNameIndex, resolveRequestedRoommate, MAX_ROOMMATE_GROUP_SIZE } from './nameResolution';
 import logger from '@/utils/logger';
 
 function emptyClassification(raw: string): ClassifiedNotes {
@@ -177,6 +177,22 @@ export class RoomingNotesCacheService {
       }
 
       if (component.length < 2) continue; // nothing to expand for a lone node
+
+      // WHY: Same ceiling as HierarchicalGroupingService's live grouping —
+      // without it, a "hub" attendee mentioned by many unrelated requesters
+      // (e.g. a well-known servant/leader) merges every one of those
+      // separate small requests into one giant component, and writing that
+      // component's full name list into every member's cache is exactly
+      // what produces a "20-30 names under one person's parsed note"
+      // disaster that then PERSISTS and compounds on every future import.
+      // Skip expansion entirely for an oversized component — leave each
+      // member's own originally-typed request list as-is in the cache.
+      if (component.length > MAX_ROOMMATE_GROUP_SIZE) {
+        logger.warn(
+          `Skipping cache expansion for an oversized roommate cluster of ${component.length} attendees (exceeds MAX_ROOMMATE_GROUP_SIZE=${MAX_ROOMMATE_GROUP_SIZE}) — likely a shared "hub" name merging unrelated requests.`
+        );
+        continue;
+      }
 
       // Canonical full-name list for the whole cluster (including self, per
       // the requested format) — written verbatim from each member's stored

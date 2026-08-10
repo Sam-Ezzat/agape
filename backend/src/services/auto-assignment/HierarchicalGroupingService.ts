@@ -12,7 +12,7 @@
 import { Attendee, Gender } from '@prisma/client';
 import { ClassifiedNotes } from '@/types/auto-assignment';
 import logger from '@/utils/logger';
-import { buildNameIndex, resolveRequestedRoommate } from './nameResolution';
+import { buildNameIndex, resolveRequestedRoommate, MAX_ROOMMATE_GROUP_SIZE } from './nameResolution';
 
 export interface AttendeeGroup {
   id: string;
@@ -39,6 +39,14 @@ export interface GroupingResult {
    * when they couldn't all be placed together as one group.
    */
   requestedRoommateMap: Map<string, Set<string>>;
+  /**
+   * Connected components that exceeded MAX_ROOMMATE_GROUP_SIZE and were
+   * deliberately NOT formed into one rooming_notes group (see
+   * createRoomingNotesGroups) — surfaced so the caller can warn instead of
+   * silently either merging or dropping these attendees. They still fall
+   * through to church/governorate grouping normally.
+   */
+  oversizedGroups: Array<{ attendeeIds: string[] }>;
 }
 
 export class HierarchicalGroupingService {
@@ -55,7 +63,7 @@ export class HierarchicalGroupingService {
     const processedIds = new Set<string>();
 
     // Phase 1: Rooming Notes Groups (Priority 1)
-    const { groups: roomingGroups, requestedRoommateMap } = this.createRoomingNotesGroups(attendees, classifications, processedIds);
+    const { groups: roomingGroups, requestedRoommateMap, oversizedGroups } = this.createRoomingNotesGroups(attendees, classifications, processedIds);
     groups.push(...roomingGroups);
     logger.info(`Created ${roomingGroups.length} rooming notes groups`, {
       attendeesGrouped: processedIds.size,
@@ -85,7 +93,7 @@ export class HierarchicalGroupingService {
       ungroupedAttendees: ungroupedIds.size,
     });
 
-    return { groups, ungroupedAttendeeIds: ungroupedIds, requestedRoommateMap };
+    return { groups, ungroupedAttendeeIds: ungroupedIds, requestedRoommateMap, oversizedGroups };
   }
 
   /**
@@ -96,8 +104,9 @@ export class HierarchicalGroupingService {
     attendees: Attendee[],
     classifications: Map<string, ClassifiedNotes>,
     processedIds: Set<string>
-  ): { groups: AttendeeGroup[]; requestedRoommateMap: Map<string, Set<string>> } {
+  ): { groups: AttendeeGroup[]; requestedRoommateMap: Map<string, Set<string>>; oversizedGroups: Array<{ attendeeIds: string[] }> } {
     const groups: AttendeeGroup[] = [];
+    const oversizedGroups: Array<{ attendeeIds: string[] }> = [];
     const attendeeMap = new Map(attendees.map(a => [a.id, a]));
 
     // WHY: Built once (O(N)) instead of re-scanning the full attendee list for
@@ -161,6 +170,22 @@ export class HierarchicalGroupingService {
         }
       }
 
+      // WHY: A one-way mention deliberately pulls in a whole existing group
+      // (see RoommateGrouping.test.ts) — that's correct for a real small
+      // friend group, but with no ceiling a "hub" attendee mentioned by many
+      // UNRELATED requesters merges every one of those separate small
+      // requests into one giant component through the shared hub node. Skip
+      // forming a group for it (and don't mark members processed) so they
+      // still fall through to church/governorate grouping normally, instead
+      // of either silently ballooning or being dropped entirely.
+      if (groupMembers.size > MAX_ROOMMATE_GROUP_SIZE) {
+        logger.warn(
+          `Skipping oversized rooming-notes group of ${groupMembers.size} attendees (exceeds MAX_ROOMMATE_GROUP_SIZE=${MAX_ROOMMATE_GROUP_SIZE}) — likely a shared "hub" name merging unrelated requests. Falling through to church/governorate grouping instead.`
+        );
+        oversizedGroups.push({ attendeeIds: Array.from(groupMembers) });
+        continue;
+      }
+
       // Create group
       if (groupMembers.size > 0) {
         const groupAttendees = Array.from(groupMembers)
@@ -197,7 +222,7 @@ export class HierarchicalGroupingService {
       }
     }
 
-    return { groups, requestedRoommateMap: adjacencyMap };
+    return { groups, requestedRoommateMap: adjacencyMap, oversizedGroups };
   }
 
   /**

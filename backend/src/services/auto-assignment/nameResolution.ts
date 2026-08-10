@@ -8,6 +8,21 @@ import { Attendee } from '@prisma/client';
 import logger from '@/utils/logger';
 
 /**
+ * Hard cap on how many attendees a single requested-roommate connected
+ * component can contain, in both HierarchicalGroupingService (live
+ * grouping) and RoomingNotesCacheService (cache expansion).
+ *
+ * WHY: One-way mentions are deliberately allowed to pull a whole existing
+ * group together (see RoommateGrouping.test.ts) — that's correct for a
+ * real small friend group. But with no size limit, a "hub" attendee
+ * mentioned by many UNRELATED requesters (e.g. a well-known servant/
+ * leader everyone asks to be near) merges every one of those unrelated
+ * small requests into one giant component through the shared hub node —
+ * this is the single place to tune that ceiling.
+ */
+export const MAX_ROOMMATE_GROUP_SIZE = 10;
+
+/**
  * Normalize a name for comparison: trim, lowercase, collapse whitespace.
  */
 export function normalizeName(name: string): string {

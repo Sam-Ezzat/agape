@@ -185,4 +185,55 @@ describe('RoomingNotesCacheService.expandRoommateClusters', () => {
     await service.expandRoommateClusters([expandedA, expandedB]);
     expect(repo.updateCalls).toHaveLength(0);
   });
+
+  it('skips expansion for an oversized "hub" cluster instead of writing the giant merged name list into every member\'s cache', async () => {
+    // 11 unrelated requesters all one-way mention the same hub attendee —
+    // each mention resolves correctly, but expanding this into everyone's
+    // cache is exactly the "20-30 names under one person's parsed note"
+    // corruption this cap exists to prevent.
+    const hub = createMockAttendee({ id: 'hub', fullName: 'Fr Mina' });
+    const requesters = Array.from({ length: 10 }, (_, i) =>
+      createMockAttendee({
+        id: `req${i}`,
+        fullName: `Requester ${i}`,
+        roomingNotes: 'with Fr Mina',
+        roomingNotesClassification: classification(['Fr Mina'], 'with Fr Mina') as any,
+      })
+    );
+
+    const repo = new MockAttendeeRepository();
+    const service = new RoomingNotesCacheService(repo as any);
+
+    await service.expandRoommateClusters([hub, ...requesters]);
+
+    expect(repo.updateCalls).toHaveLength(0);
+  });
+
+  it('still expands a normal small cluster when a separate oversized hub cluster exists in the same run', async () => {
+    const hub = createMockAttendee({ id: 'hub', fullName: 'Fr Mina' });
+    const requesters = Array.from({ length: 10 }, (_, i) =>
+      createMockAttendee({
+        id: `req${i}`,
+        fullName: `Requester ${i}`,
+        roomingNotes: 'with Fr Mina',
+        roomingNotesClassification: classification(['Fr Mina'], 'with Fr Mina') as any,
+      })
+    );
+    const a = createMockAttendee({
+      id: 'a', fullName: 'Alice', roomingNotes: 'with Bob',
+      roomingNotesClassification: classification(['Bob'], 'with Bob') as any,
+    });
+    const b = createMockAttendee({ id: 'b', fullName: 'Bob', roomingNotes: null, roomingNotesClassification: null });
+
+    const repo = new MockAttendeeRepository();
+    const service = new RoomingNotesCacheService(repo as any);
+
+    await service.expandRoommateClusters([hub, ...requesters, a, b]);
+
+    const updatedIds = new Set(repo.updateCalls.map(c => c.id));
+    expect(updatedIds.has('a')).toBe(true);
+    expect(updatedIds.has('b')).toBe(true);
+    expect(updatedIds.has('hub')).toBe(false);
+    expect(updatedIds.has('req0')).toBe(false);
+  });
 });

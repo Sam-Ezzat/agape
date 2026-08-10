@@ -299,11 +299,12 @@ export class AutoAssignmentService {
         stage: { number: 4, name: 'Hierarchical Grouping', status: 'started' }
       });
 
-      const groups = await this.createHierarchicalGroupsWithSubgrouping(
+      const { groups, warnings: groupingWarnings } = await this.createHierarchicalGroupsWithSubgrouping(
         unassignedAttendees,
         classifications,
         availableRooms
       );
+      warnings.push(...groupingWarnings);
 
       stages.push({
         stage: 4,
@@ -591,7 +592,7 @@ export class AutoAssignmentService {
     attendees: Attendee[],
     classifications: Map<string, any>,
     availableRooms: RoomWithDetails[] = []
-  ): Promise<AttendeeGroup[]> {
+  ): Promise<{ groups: AttendeeGroup[]; warnings: ValidationError[] }> {
     logger.info('Creating hierarchical groups with sub-grouping');
 
     // WHY: Room capacities vary (especially now that king beds exist alongside
@@ -691,8 +692,27 @@ export class AutoAssignmentService {
       });
     }
 
+    // WHY: Attendees whose requested-roommate cluster was too large to
+    // safely auto-group (see HierarchicalGroupingService's MAX_ROOMMATE_GROUP_SIZE
+    // check) still got placed normally via church/governorate grouping above —
+    // surface a warning per affected attendee so an admin can review whether
+    // the request was actually legitimate (a big family) or a false "hub" merge.
+    const warnings: ValidationError[] = [];
+    for (const oversized of result.oversizedGroups) {
+      for (const attendeeId of oversized.attendeeIds) {
+        const attendee = attendeeMap.get(attendeeId);
+        warnings.push({
+          attendeeId,
+          attendeeName: attendee?.fullName || 'Unknown',
+          reason: `Requested roommate group has ${oversized.attendeeIds.length} people, exceeding the safe auto-group limit — placed via church/governorate grouping instead. Review and assign manually if this was a real group.`,
+          violatedRule: 'roommate_group_size_limit',
+          severity: 'warning',
+        });
+      }
+    }
+
     logger.info(`Hierarchical grouping complete: ${allGroups.length} final groups`);
-    return allGroups;
+    return { groups: allGroups, warnings };
   }
 
   /**

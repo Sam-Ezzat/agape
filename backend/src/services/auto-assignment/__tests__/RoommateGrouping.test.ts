@@ -137,6 +137,56 @@ describe('HierarchicalGroupingService — mutual roommate request graph', () => 
     );
     expect(sharedGroup).toBeUndefined();
   });
+
+  it('does not merge unrelated requesters into one giant group just because they all mention the same "hub" attendee', () => {
+    // 11 different, otherwise-unconnected people each one-way mention the
+    // SAME hub attendee (e.g. "please put me near Fr. Mina") — every single
+    // mention resolves correctly and unambiguously to the one real Mina, but
+    // the BFS must not collapse all 11 unrelated requests into one group.
+    const hub = createMockAttendee({ id: 'hub', fullName: 'Fr Mina', gender: Gender.MALE });
+    const requesterIds = Array.from({ length: 10 }, (_, i) => `req${i}`);
+    const requesters = requesterIds.map((id, i) =>
+      createMockAttendee({ id, fullName: `Requester ${i}`, gender: Gender.MALE })
+    );
+    const attendees = [hub, ...requesters];
+
+    const classifications = new Map<string, ClassifiedNotes>(
+      requesterIds.map(id => [id, emptyClassification({ roommateRequests: ['Fr Mina'] })])
+    );
+
+    const result = service.createHierarchicalGroups(attendees, classifications);
+
+    // No single rooming_notes group should contain all 11 — the cap (10)
+    // must have kept this from forming as one group at all.
+    const oversizedFormed = result.groups.some(g => g.type === 'rooming_notes' && g.attendeeIds.size > 10);
+    expect(oversizedFormed).toBe(false);
+    expect(result.oversizedGroups.length).toBeGreaterThan(0);
+    expect(result.oversizedGroups[0]!.attendeeIds).toHaveLength(11);
+  });
+
+  it('still merges a legitimate small group normally when a separate oversized hub cluster exists in the same run', () => {
+    // Regression guard: the size cap must only reject the ACTUAL oversized
+    // component, not suppress grouping globally.
+    const hub = createMockAttendee({ id: 'hub', fullName: 'Fr Mina', gender: Gender.FEMALE });
+    const requesterIds = Array.from({ length: 10 }, (_, i) => `req${i}`);
+    const requesters = requesterIds.map((id, i) =>
+      createMockAttendee({ id, fullName: `Requester ${i}`, gender: Gender.FEMALE })
+    );
+    const a = createMockAttendee({ id: 'a', fullName: 'Alice', gender: Gender.FEMALE });
+    const b = createMockAttendee({ id: 'b', fullName: 'Bob', gender: Gender.FEMALE });
+    const attendees = [hub, ...requesters, a, b];
+
+    const classifications = new Map<string, ClassifiedNotes>([
+      ...requesterIds.map((id): [string, ClassifiedNotes] => [id, emptyClassification({ roommateRequests: ['Fr Mina'] })]),
+      ['a', emptyClassification({ roommateRequests: ['Bob'] })],
+    ]);
+
+    const result = service.createHierarchicalGroups(attendees, classifications);
+
+    const smallGroup = result.groups.find(g => g.type === 'rooming_notes' && g.attendeeIds.has('a'));
+    expect(smallGroup).toBeDefined();
+    expect(Array.from(smallGroup!.attendeeIds).sort()).toEqual(['a', 'b']);
+  });
 });
 
 describe('AutoAssignmentService — explicit roommate group cohesion end-to-end', () => {
