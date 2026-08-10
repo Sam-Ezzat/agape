@@ -37,10 +37,10 @@ interface NavItem {
   children?: NavChild[];
 }
 
-// WhatsApp/communication needs headless Chrome, which currently OOMs the
-// production Render plan. Hidden from nav until the plan is upgraded (or the
-// backend moves off Puppeteer) - see WHATSAPP_TROUBLESHOOTING.md.
-const COMMUNICATION_ENABLED = false;
+// WhatsApp/communication needs headless Chrome, which can OOM the
+// production Render plan if it's on a low memory tier - see
+// WHATSAPP_TROUBLESHOOTING.md if it crashes there.
+const COMMUNICATION_ENABLED = true;
 
 export default function Sidebar() {
   const location = useLocation();
