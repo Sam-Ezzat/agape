@@ -136,6 +136,35 @@ describe('HierarchicalGroupingService — mutual roommate request graph', () => 
       g => g.attendeeIds.has('r') && (g.attendeeIds.has('m1') || g.attendeeIds.has('m2'))
     );
     expect(sharedGroup).toBeUndefined();
+
+    // WHY: previously this silent skip only ever reached the server log —
+    // it must now be surfaced so an admin reviewing the preview can see it.
+    expect(result.unresolvedRoommateRequests).toHaveLength(1);
+    expect(result.unresolvedRoommateRequests[0]).toMatchObject({
+      requesterId: 'r',
+      requestedName: 'Mohamed Ali',
+      reason: 'ambiguous',
+      candidateCount: 2,
+    });
+  });
+
+  it('surfaces a "not_found" unresolved request when the requested name matches nobody', () => {
+    const requester = createMockAttendee({ id: 'r', fullName: 'Sara', gender: Gender.FEMALE });
+    const unrelated = createMockAttendee({ id: 'u', fullName: 'Peter', gender: Gender.FEMALE });
+    const attendees = [requester, unrelated];
+
+    const classifications = new Map<string, ClassifiedNotes>([
+      ['r', emptyClassification({ roommateRequests: ['Zzyxxq Nonexistent'] })],
+    ]);
+
+    const result = service.createHierarchicalGroups(attendees, classifications);
+
+    expect(result.unresolvedRoommateRequests).toHaveLength(1);
+    expect(result.unresolvedRoommateRequests[0]).toMatchObject({
+      requesterId: 'r',
+      requestedName: 'Zzyxxq Nonexistent',
+      reason: 'not_found',
+    });
   });
 
   it('does not merge unrelated requesters into one giant group just because they all mention the same "hub" attendee', () => {

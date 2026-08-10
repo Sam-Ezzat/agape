@@ -642,6 +642,24 @@ export class AutoAssignmentService {
           continue;
         }
 
+        // WHY: Same reasoning as rooming_notes above — an area group is an
+        // explicit affinity grouping (same neighborhood), not a fallback
+        // heuristic like church/governorate. Splitting it by medical/VIP
+        // status and then into separate 5-year age buckets was exactly the
+        // bug already fixed for rooming_notes: a 20-person area group
+        // spanning ages 8-65 would fragment into 6-8 independent age-bucket
+        // groups, each finding rooms on its own with zero coordination —
+        // "same area" ends up scattered across the building instead of
+        // adjacent. Keep the whole area cohort together; splitLargeGroup
+        // + proximity-based placement below already handle spreading a
+        // group too big for one room across ADJACENT rooms as one
+        // coordinated unit.
+        if (genderGroup.type === 'area') {
+          const areaSubGroups = this.splitLargeGroup(genderGroup, attendees, 'area', maxRoomCapacity, roomCapacities);
+          allGroups.push(...areaSubGroups);
+          continue;
+        }
+
         // Step 2b: Extract medical/VIP cases (church/governorate groups only —
         // these are heuristic groupings, so medical/VIP members get dedicated
         // handling rather than diluting an age-bucketed room)
@@ -716,6 +734,24 @@ export class AutoAssignmentService {
       }
     }
 
+    // WHY: A rooming-notes request that couldn't be safely resolved (ambiguous
+    // name, or no match at all) previously only reached the server log —
+    // nobody reviewing the preview could tell "the algorithm decided not to
+    // combine them" from "your typo/nickname didn't match anyone." Surface it.
+    for (const unresolved of result.unresolvedRoommateRequests) {
+      const requester = attendeeMap.get(unresolved.requesterId);
+      const reason = unresolved.reason === 'ambiguous'
+        ? `Requested roommate "${unresolved.requestedName}" matches ${unresolved.candidateCount} different attendees — couldn't tell which one was meant, so this request was skipped.`
+        : `Requested roommate "${unresolved.requestedName}" doesn't match any attendee's name — check for a typo or nickname.`;
+      warnings.push({
+        attendeeId: unresolved.requesterId,
+        attendeeName: requester?.fullName || 'Unknown',
+        reason,
+        violatedRule: 'roommate_name_unresolved',
+        severity: 'warning',
+      });
+    }
+
     logger.info(`Hierarchical grouping complete: ${allGroups.length} final groups`);
     return { groups: allGroups, warnings };
   }
@@ -727,7 +763,7 @@ export class AutoAssignmentService {
   private splitLargeGroup(
     hierGroup: HierarchicalGroup,
     attendees: Attendee[],
-    groupCategory: 'medical' | 'vip' | 'age' | 'roommate',
+    groupCategory: 'medical' | 'vip' | 'age' | 'roommate' | 'area',
     maxRoomCapacity: number = 8,
     roomCapacities: number[] = []
   ): AttendeeGroup[] {
@@ -744,6 +780,8 @@ export class AutoAssignmentService {
       groupType = GroupType.ROOMMATE;
     } else if (hierGroup.metadata.hasFamily) {
       groupType = GroupType.FAMILY;
+    } else if (hierGroup.type === 'area') {
+      groupType = GroupType.AREA;
     } else if (hierGroup.type === 'church') {
       groupType = GroupType.CHURCH;
     } else {
@@ -1022,13 +1060,14 @@ export class AutoAssignmentService {
       group.members = group.members.filter(m => !assignedIds.has(m.id));
     }
 
-    // For other multi-member groups (CHURCH, GOVERNORATE, FAMILY), try proximity-based assignment.
+    // For other multi-member groups (CHURCH, GOVERNORATE, FAMILY, AREA), try proximity-based assignment.
     // This also covers any ROOMMATE remainder that didn't fit in a single room above
     // (previously roommate leftovers went straight to fully independent per-attendee
     // scoring with zero pull toward staying near the rest of their requested group —
     // now they get the same adjacent/same-floor/same-building fallback as other groups).
     if ((group.type === GroupType.CHURCH || group.type === GroupType.GOVERNORATE ||
-         group.type === GroupType.FAMILY || group.type === GroupType.ROOMMATE)
+         group.type === GroupType.FAMILY || group.type === GroupType.ROOMMATE ||
+         group.type === GroupType.AREA)
         && group.members.length > 1) {
       const proximityResult = await this.tryAssignGroupWithProximity(
         group,
@@ -2352,6 +2391,9 @@ export class AutoAssignmentService {
         break;
       case GroupType.FAMILY:
         priority += 20;
+        break;
+      case GroupType.AREA:
+        priority += 15; // Same-area grouping — above church/governorate, below family
         break;
       case GroupType.CHURCH:
         priority += 10;

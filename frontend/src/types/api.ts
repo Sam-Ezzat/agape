@@ -318,7 +318,7 @@ export interface AssignmentPreview {
   scoreBreakdown?: Record<string, number>; // Score contribution by each rule
   groupInfo?: {                       // Group membership information
     groupId: string;
-    groupType: 'roommate' | 'family' | 'church' | 'governorate' | 'individual';
+    groupType: 'roommate' | 'family' | 'area' | 'church' | 'governorate' | 'individual';
     groupSize: number;
     roommatesInSameRoom?: number;      // How many roommates assigned to this room
   };

@@ -3,25 +3,35 @@
  * 
  * WHY: Creates prioritized groups for auto-assignment
  * Phase 1: Rooming notes groups (highest priority)
- * Phase 2: Church groups (medium priority)
- * Phase 3: Governorate groups (lowest priority)
- * 
+ * Phase 2: Area groups (same neighborhood → adjacent rooms)
+ * Phase 3: Church groups
+ * Phase 4: Governorate groups (lowest priority)
+ *
  * SOLID: Single Responsibility - Only handles grouping logic
  */
 
 import { Attendee, Gender } from '@prisma/client';
 import { ClassifiedNotes } from '@/types/auto-assignment';
 import logger from '@/utils/logger';
-import { buildNameIndex, resolveRequestedRoommate, MAX_ROOMMATE_GROUP_SIZE } from './nameResolution';
+import { buildNameIndex, resolveRequestedRoommate, MAX_ROOMMATE_GROUP_SIZE, UnresolvedRoommateRequest } from './nameResolution';
+import { SimilarityService } from '@/search/dual-language';
+
+// WHY 85 not the dual-language module's 70% default: area names are short
+// (often 2-3 words), so a looser threshold risks merging genuinely
+// different neighborhoods that just happen to share several characters.
+// 85% comfortably absorbs a missing/extra/transposed character (real human
+// typos, e.g. "Moharam Bek" vs "Moharam Beik") without over-merging.
+const AREA_SIMILARITY_THRESHOLD = 85;
 
 export interface AttendeeGroup {
   id: string;
-  type: 'rooming_notes' | 'church' | 'governorate' | 'individual';
-  priority: number; // 1 = highest (rooming notes), 2 = church, 3 = governorate
+  type: 'rooming_notes' | 'area' | 'church' | 'governorate' | 'individual';
+  priority: number; // 1 = highest (rooming notes), 2 = area, 3 = church, 4 = governorate
   attendeeIds: Set<string>;
   metadata: {
     church?: string;
     governorate?: string;
+    area?: string;
     roomingReason?: string;
     hasFamily?: boolean;
     hasMedical?: boolean;
@@ -47,6 +57,12 @@ export interface GroupingResult {
    * through to church/governorate grouping normally.
    */
   oversizedGroups: Array<{ attendeeIds: string[] }>;
+  /**
+   * Rooming-notes name requests that could NOT be safely resolved to a real
+   * attendee (ambiguous match or no match at all) — previously only ever
+   * logged server-side, invisible to whoever's reviewing the preview.
+   */
+  unresolvedRoommateRequests: UnresolvedRoommateRequest[];
 }
 
 export class HierarchicalGroupingService {
@@ -63,20 +79,27 @@ export class HierarchicalGroupingService {
     const processedIds = new Set<string>();
 
     // Phase 1: Rooming Notes Groups (Priority 1)
-    const { groups: roomingGroups, requestedRoommateMap, oversizedGroups } = this.createRoomingNotesGroups(attendees, classifications, processedIds);
+    const { groups: roomingGroups, requestedRoommateMap, oversizedGroups, unresolvedRoommateRequests } = this.createRoomingNotesGroups(attendees, classifications, processedIds);
     groups.push(...roomingGroups);
     logger.info(`Created ${roomingGroups.length} rooming notes groups`, {
       attendeesGrouped: processedIds.size,
     });
 
-    // Phase 2: Church Groups (Priority 2)
+    // Phase 2: Area Groups (Priority 2) — same neighborhood, placed in adjacent rooms
+    const areaGroups = this.createAreaGroups(attendees, processedIds);
+    groups.push(...areaGroups);
+    logger.info(`Created ${areaGroups.length} area groups`, {
+      attendeesGrouped: processedIds.size,
+    });
+
+    // Phase 3: Church Groups (Priority 3)
     const churchGroups = this.createChurchGroups(attendees, processedIds);
     groups.push(...churchGroups);
     logger.info(`Created ${churchGroups.length} church groups`, {
       attendeesGrouped: processedIds.size,
     });
 
-    // Phase 3: Governorate Groups (Priority 3)
+    // Phase 4: Governorate Groups (Priority 4)
     const governorateGroups = this.createGovernorateGroups(attendees, processedIds);
     groups.push(...governorateGroups);
     logger.info(`Created ${governorateGroups.length} governorate groups`, {
@@ -93,7 +116,7 @@ export class HierarchicalGroupingService {
       ungroupedAttendees: ungroupedIds.size,
     });
 
-    return { groups, ungroupedAttendeeIds: ungroupedIds, requestedRoommateMap, oversizedGroups };
+    return { groups, ungroupedAttendeeIds: ungroupedIds, requestedRoommateMap, oversizedGroups, unresolvedRoommateRequests };
   }
 
   /**
@@ -104,9 +127,15 @@ export class HierarchicalGroupingService {
     attendees: Attendee[],
     classifications: Map<string, ClassifiedNotes>,
     processedIds: Set<string>
-  ): { groups: AttendeeGroup[]; requestedRoommateMap: Map<string, Set<string>>; oversizedGroups: Array<{ attendeeIds: string[] }> } {
+  ): {
+    groups: AttendeeGroup[];
+    requestedRoommateMap: Map<string, Set<string>>;
+    oversizedGroups: Array<{ attendeeIds: string[] }>;
+    unresolvedRoommateRequests: UnresolvedRoommateRequest[];
+  } {
     const groups: AttendeeGroup[] = [];
     const oversizedGroups: Array<{ attendeeIds: string[] }> = [];
+    const unresolvedRoommateRequests: UnresolvedRoommateRequest[] = [];
     const attendeeMap = new Map(attendees.map(a => [a.id, a]));
 
     // WHY: Built once (O(N)) instead of re-scanning the full attendee list for
@@ -131,7 +160,13 @@ export class HierarchicalGroupingService {
 
       // Add connections
       for (const roommateName of classification.roommateRequests) {
-        const roommate = resolveRequestedRoommate(roommateName, attendees, nameIndex, attendee.id);
+        const roommate = resolveRequestedRoommate(
+          roommateName,
+          attendees,
+          nameIndex,
+          attendee.id,
+          (info) => unresolvedRoommateRequests.push(info)
+        );
 
         if (roommate && !processedIds.has(roommate.id)) {
           adjacencyMap.get(attendee.id)!.add(roommate.id);
@@ -222,11 +257,83 @@ export class HierarchicalGroupingService {
       }
     }
 
-    return { groups, requestedRoommateMap: adjacencyMap, oversizedGroups };
+    return { groups, requestedRoommateMap: adjacencyMap, oversizedGroups, unresolvedRoommateRequests };
   }
 
   /**
-   * Phase 2: Create church groups for remaining attendees
+   * Phase 2: Create area groups for remaining attendees — attendees from the
+   * same neighborhood/area are placed in adjacent rooms (via
+   * AutoAssignmentService's proximity-based assignment, same mechanism
+   * already used for church/governorate/family groups).
+   *
+   * WHY similarity clustering (not just exact-after-normalization): `area`
+   * is free text (Excel import, no dropdown/whitelist), so beyond casing/
+   * whitespace differences, real HUMAN TYPOS are expected (e.g. "Moharam
+   * Bek" vs "Moharam Beik" — a missing/extra/swapped character). Rather than
+   * reaching for AI, this reuses the Levenshtein-based SimilarityService
+   * already running in this backend for attendee name search
+   * (`@/search/dual-language`) — deterministic, free, and proven on exactly
+   * this kind of short free-text matching. Computed fresh every run (not
+   * cached/persisted) so there's no risk of a bad merge permanently
+   * corrupting stored data, unlike the earlier rooming-notes cache-expansion
+   * issue.
+   */
+  private createAreaGroups(
+    attendees: Attendee[],
+    processedIds: Set<string>
+  ): AttendeeGroup[] {
+    const groups: AttendeeGroup[] = [];
+    const similarity = new SimilarityService();
+    const clusters: Array<{ display: string; ids: Set<string> }> = [];
+
+    for (const attendee of attendees) {
+      if (processedIds.has(attendee.id)) continue;
+      if (!attendee.area || attendee.area.trim() === '') continue;
+
+      const display = attendee.area.trim().replace(/\s+/g, ' ');
+
+      // Join the first existing cluster whose representative is similar
+      // enough (exact/casing/whitespace matches always score 100, so this
+      // subsumes the old exact-match behavior too).
+      let cluster = clusters.find(c => similarity.areSimilar(c.display, display, AREA_SIMILARITY_THRESHOLD));
+      if (!cluster) {
+        cluster = { display, ids: new Set() };
+        clusters.push(cluster);
+      }
+      cluster.ids.add(attendee.id);
+    }
+
+    let groupIndex = 0;
+    for (const { display, ids: attendeeIds } of clusters) {
+      if (attendeeIds.size === 0) continue;
+
+      const groupAttendees = attendees.filter(a => attendeeIds.has(a.id));
+      const hasMedical = groupAttendees.some(a =>
+        a.notes && a.notes.trim().length > 0 &&
+        (a.notes.toLowerCase().includes('medical') || a.notes.toLowerCase().includes('health'))
+      );
+      const hasVIP = groupAttendees.some(a => a.isServant || a.conferenceRole === 'VIP' || a.conferenceRole === 'LEADER');
+
+      groups.push({
+        id: `area-${groupIndex++}`,
+        type: 'area',
+        priority: 2,
+        attendeeIds,
+        metadata: {
+          area: display,
+          hasMedical,
+          hasVIP,
+        },
+      });
+
+      attendeeIds.forEach(id => processedIds.add(id));
+    }
+
+    return groups;
+  }
+
+  /**
+   * Phase 3: Create church groups for remaining attendees
    */
   private createChurchGroups(
     attendees: Attendee[],
@@ -262,7 +369,7 @@ export class HierarchicalGroupingService {
       groups.push({
         id: `church-${groupIndex++}`,
         type: 'church',
-        priority: 2,
+        priority: 3,
         attendeeIds,
         metadata: {
           church,
@@ -279,7 +386,7 @@ export class HierarchicalGroupingService {
   }
 
   /**
-   * Phase 3: Create governorate groups for remaining attendees
+   * Phase 4: Create governorate groups for remaining attendees
    */
   private createGovernorateGroups(
     attendees: Attendee[],
@@ -315,7 +422,7 @@ export class HierarchicalGroupingService {
       groups.push({
         id: `governorate-${groupIndex++}`,
         type: 'governorate',
-        priority: 3,
+        priority: 4,
         attendeeIds,
         metadata: {
           governorate,

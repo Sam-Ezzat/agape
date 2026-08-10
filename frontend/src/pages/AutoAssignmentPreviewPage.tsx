@@ -1400,11 +1400,13 @@ export default function AutoAssignmentPreviewPage() {
                               <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${
                                 assignment.groupInfo.groupType === 'roommate' ? 'bg-blue-100 text-blue-700' :
                                 assignment.groupInfo.groupType === 'family' ? 'bg-purple-100 text-purple-700' :
+                                assignment.groupInfo.groupType === 'area' ? 'bg-teal-100 text-teal-700' :
                                 assignment.groupInfo.groupType === 'church' ? 'bg-green-100 text-green-700' :
                                 'bg-gray-100 text-gray-700'
                               }`}>
-                                {assignment.groupInfo.groupType === 'roommate' ? '🤝' : 
-                                 assignment.groupInfo.groupType === 'family' ? '👨‍👩‍👧‍👦' : 
+                                {assignment.groupInfo.groupType === 'roommate' ? '🤝' :
+                                 assignment.groupInfo.groupType === 'family' ? '👨‍👩‍👧‍👦' :
+                                 assignment.groupInfo.groupType === 'area' ? '📍' :
                                  assignment.groupInfo.groupType === 'church' ? '⛪' : '👥'}
                                 <span className="ml-1">
                                   {assignment.groupInfo.groupType.charAt(0).toUpperCase() + assignment.groupInfo.groupType.slice(1)}

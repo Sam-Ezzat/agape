@@ -9,6 +9,7 @@ import { Attendee, Gender, ConferenceRole } from '@prisma/client';
 export enum GroupType {
   ROOMMATE = 'roommate',         // Explicit roommate requests (bidirectional)
   FAMILY = 'family',             // Family members traveling together
+  AREA = 'area',                 // Same area/neighborhood — priority above church/governorate
   CHURCH = 'church',             // Same church group
   GOVERNORATE = 'governorate',   // Same governorate/region
   INDIVIDUAL = 'individual'      // No group affiliation

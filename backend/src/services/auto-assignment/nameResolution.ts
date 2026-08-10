@@ -45,6 +45,20 @@ export function buildNameIndex(attendees: Attendee[]): Map<string, Attendee[]> {
 }
 
 /**
+ * Reported when a requested roommate name couldn't be safely resolved, so
+ * callers (currently HierarchicalGroupingService) can surface it as a
+ * visible warning instead of it only ever reaching the server log — an
+ * admin looking at "why didn't this rooming request apply?" had no way to
+ * tell "ambiguous name" from "no match at all" from the preview UI before.
+ */
+export interface UnresolvedRoommateRequest {
+  requesterId: string;
+  requestedName: string;
+  reason: 'ambiguous' | 'not_found';
+  candidateCount?: number; // set when reason === 'ambiguous'
+}
+
+/**
  * Resolve a requested roommate's free-text name to a single attendee.
  *
  * WHY: A naive `attendees.find(a => a.fullName.includes(name) ||
@@ -60,7 +74,8 @@ export function resolveRequestedRoommate(
   requestedName: string,
   attendees: Attendee[],
   nameIndex: Map<string, Attendee[]>,
-  excludeAttendeeId: string
+  excludeAttendeeId: string,
+  onUnresolved?: (info: UnresolvedRoommateRequest) => void
 ): Attendee | null {
   const normalized = normalizeName(requestedName);
   if (!normalized) return null;
@@ -72,6 +87,7 @@ export function resolveRequestedRoommate(
     logger.warn(
       `Ambiguous roommate name request "${requestedName}": ${exactMatches.length} attendees share this exact name — skipping to avoid a wrong pairing`
     );
+    onUnresolved?.({ requesterId: excludeAttendeeId, requestedName, reason: 'ambiguous', candidateCount: exactMatches.length });
     return null;
   }
 
@@ -99,6 +115,12 @@ export function resolveRequestedRoommate(
     logger.warn(
       `Ambiguous roommate name request "${requestedName}": ${bestMatches.length} candidates tied on name similarity — skipping to avoid a wrong pairing`
     );
+    onUnresolved?.({ requesterId: excludeAttendeeId, requestedName, reason: 'ambiguous', candidateCount: bestMatches.length });
+    return null;
   }
+
+  // No candidate shares even one name token — a typo, nickname, or the
+  // person simply isn't in this attendee pool.
+  onUnresolved?.({ requesterId: excludeAttendeeId, requestedName, reason: 'not_found' });
   return null;
 }
