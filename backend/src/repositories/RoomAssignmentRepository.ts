@@ -76,6 +76,49 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
   }
 
   /**
+   * Find all real assignments across a set of buildings, with attendee and
+   * room/floor/building details.
+   * WHY: The auto-assignment preview needs to surface ALREADY-assigned
+   * attendees (not just this run's new placements) so admins can see and
+   * manage them alongside the dry-run results.
+   */
+  async findByBuildingIds(buildingIds: string[], organizationId: string) {
+    return this.prisma.roomAssignment.findMany({
+      where: {
+        room: {
+          floor: {
+            buildingId: { in: buildingIds },
+            building: { conferenceHouse: { organizationId } },
+          },
+        },
+      },
+      include: {
+        attendee: true,
+        room: {
+          include: {
+            floor: {
+              include: {
+                building: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Delete an attendee's assignment (if any), scoped to organization.
+   * WHY: Committing an auto-assignment preview draft where a real attendee
+   * was dragged into "Unassigned" needs to release their actual assignment.
+   */
+  async deleteByAttendeeId(attendeeId: string, organizationId: string): Promise<void> {
+    await this.prisma.roomAssignment.deleteMany({
+      where: { attendeeId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
+    });
+  }
+
+  /**
    * Delete assignment scoped to organization (ownership check)
    */
   async deleteScoped(id: string, organizationId: string) {

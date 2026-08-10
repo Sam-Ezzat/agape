@@ -49,7 +49,8 @@ const autoAssignmentService = new AutoAssignmentService(
 const previewSessionService = new PreviewSessionService(
   previewSessionRepository,
   auditLogRepository,
-  autoAssignmentService
+  autoAssignmentService,
+  assignmentRepository
 );
 
 // Controller (notification service accessed lazily via getNotificationService)

@@ -188,31 +188,37 @@ export default function AutoAssignmentPreviewPage() {
     const map = new Map<string, RoomCapacityInfo>();
 
     // Baseline: every real room in the selected buildings — including empty
-    // ones — seeded with actual current occupancy from the database. Once
-    // `allRoomsList` has loaded, this is what makes empty rooms visible.
+    // ones — seeded at zero occupancy. Once `allRoomsList` has loaded, this
+    // is what makes empty rooms visible.
     allRoomsList.forEach((room) => {
-      map.set(room.roomId, { ...room });
+      map.set(room.roomId, { ...room, assignedCount: 0, existingCount: 0, newCount: 0 });
     });
 
-    // Overlay: this run's new assignments on top of the baseline.
+    // WHY: Real, already-assigned attendees are now seeded as `isExisting`
+    // entries in `previewResult.assignments` alongside this run's new
+    // placements (see PreviewSessionService.getOrCreateSession) — a SINGLE
+    // pass over the current, possibly-edited assignments list is both
+    // simpler than a separate "baseline occupancy + overlay" split AND
+    // correctly reflects a MOVED real attendee (they only count toward
+    // their current roomId, not wherever they started).
     (previewResult?.assignments || []).forEach((assignment) => {
       const existing = map.get(assignment.roomId);
       if (existing) {
         existing.assignedCount += 1;
-        existing.newCount += 1;
+        if (assignment.isExisting) existing.existingCount += 1;
+        else existing.newCount += 1;
       } else {
         // Baseline room list hasn't loaded yet (or doesn't cover this room)
         // — fall back to the assignment's own room info, as before.
         const capacity = assignment.roomCapacity || 0;
-        const existingCount = assignment.existingOccupancy || 0;
         map.set(assignment.roomId, {
           roomId: assignment.roomId,
           roomNumber: assignment.roomNumber,
           buildingName: assignment.buildingName,
           floorNumber: assignment.floorNumber,
-          assignedCount: existingCount + 1,
-          existingCount,
-          newCount: 1,
+          assignedCount: 1,
+          existingCount: assignment.isExisting ? 1 : 0,
+          newCount: assignment.isExisting ? 0 : 1,
           capacity,
         });
       }
@@ -498,6 +504,11 @@ export default function AutoAssignmentPreviewPage() {
             church: removedAssignment.church,
             age: removedAssignment.age,
             gender: removedAssignment.gender,
+            // WHY: carried through so committing the draft releases their
+            // REAL room assignment, not just drops a draft-only row.
+            originalRoomId: removedAssignment.isExisting
+              ? removedAssignment.originalRoomId ?? removedAssignment.roomId
+              : undefined,
           },
         ]
       : previewResult.unassignedAttendees;
@@ -561,6 +572,11 @@ export default function AutoAssignmentPreviewPage() {
       score: 1,
       appliedRules: ['manual_assignment'],
       reason: 'Manually assigned during preview review',
+      // WHY: preserve real-attendee identity across an unassign→reassign
+      // round trip so commit still knows this is a move (or a no-op if
+      // they land back in their original room), not a fresh insert.
+      isExisting: Boolean(entry.originalRoomId),
+      originalRoomId: entry.originalRoomId,
     }));
 
     const assignedIds = new Set(unassignedEntries.map((entry) => entry.id));
@@ -982,7 +998,7 @@ export default function AutoAssignmentPreviewPage() {
           <div className="bg-white rounded-lg shadow p-4">
             <div className="text-sm text-gray-600">Assignments Created</div>
             <div className="text-2xl font-bold text-blue-600 mt-1">
-              {previewResult.assignmentsCreated || 0}
+              {(previewResult.assignments || []).filter((a) => !a.isExisting).length}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow p-4">
@@ -1154,17 +1170,23 @@ export default function AutoAssignmentPreviewPage() {
                             <User size={13} className="shrink-0" />
                             <span className="truncate">{assignment.attendeeName}</span>
                           </button>
-                          <span
-                            className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
-                              assignment.score >= 0.8
-                                ? 'bg-green-100 text-green-800'
-                                : assignment.score >= 0.6
-                                ? 'bg-yellow-100 text-yellow-800'
-                                : 'bg-orange-100 text-orange-800'
-                            }`}
-                          >
-                            {(assignment.score * 100).toFixed(0)}%
-                          </span>
+                          {assignment.isExisting ? (
+                            <span className="shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-700">
+                              Already Assigned
+                            </span>
+                          ) : (
+                            <span
+                              className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
+                                assignment.score >= 0.8
+                                  ? 'bg-green-100 text-green-800'
+                                  : assignment.score >= 0.6
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-orange-100 text-orange-800'
+                              }`}
+                            >
+                              {(assignment.score * 100).toFixed(0)}%
+                            </span>
+                          )}
                           <button
                             onClick={(e) => { e.stopPropagation(); handleUnassignFromPreview(assignment.attendeeId, assignment.attendeeName); }}
                             className="shrink-0 text-gray-400 hover:text-red-600 transition-colors"
@@ -1340,13 +1362,19 @@ export default function AutoAssignmentPreviewPage() {
                         <td className="px-3 py-4 text-sm text-gray-600">{assignment.buildingName}</td>
                         <td className="px-3 py-4 text-sm text-gray-600">{assignment.floorNumber}</td>
                     <td className="px-3 py-4 text-sm">
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${
-                        assignment.score >= 0.8 ? 'bg-green-100 text-green-800' :
-                        assignment.score >= 0.6 ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-orange-100 text-orange-800'
-                      }`}>
-                        {(assignment.score * 100).toFixed(0)}%
-                      </span>
+                      {assignment.isExisting ? (
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-gray-200 text-gray-700">
+                          Already Assigned
+                        </span>
+                      ) : (
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          assignment.score >= 0.8 ? 'bg-green-100 text-green-800' :
+                          assignment.score >= 0.6 ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-orange-100 text-orange-800'
+                        }`}>
+                          {(assignment.score * 100).toFixed(0)}%
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-4 text-sm text-gray-700">
                       <div className="space-y-3">

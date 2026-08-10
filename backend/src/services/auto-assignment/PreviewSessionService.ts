@@ -7,8 +7,9 @@
 import { AutoAssignmentPreviewSession } from '@prisma/client';
 import { AutoAssignmentPreviewSessionRepository } from '@/repositories/AutoAssignmentPreviewSessionRepository';
 import { AuditLogRepository } from '@/repositories/AuditLogRepository';
+import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AutoAssignmentService } from './AutoAssignmentService';
-import { AutoAssignmentExecutionResult, RunAutoAssignmentDTO } from '@/types/auto-assignment';
+import { AssignmentResult, AutoAssignmentExecutionResult, RunAutoAssignmentDTO } from '@/types/auto-assignment';
 import { ProgressCallback } from './AutoAssignmentService';
 
 const ENTITY_TYPE = 'preview_session';
@@ -29,7 +30,8 @@ export class PreviewSessionService {
   constructor(
     private sessionRepository: AutoAssignmentPreviewSessionRepository,
     private auditLogRepository: AuditLogRepository,
-    private autoAssignmentService: AutoAssignmentService
+    private autoAssignmentService: AutoAssignmentService,
+    private roomAssignmentRepository: RoomAssignmentRepository
   ) {}
 
   /**
@@ -53,6 +55,38 @@ export class PreviewSessionService {
       organizationId,
       onProgress
     );
+
+    // WHY: The dry-run algorithm only ever processes UNASSIGNED attendees —
+    // anyone who already has a real RoomAssignment is otherwise invisible to
+    // the preview (can't be seen, moved, or swapped). Seed them in here as
+    // `isExisting` entries in the SAME assignments array so the rest of the
+    // page (Grid/List/Swap modal) handles them for free; commit later knows
+    // to insert/move/no-op/delete based on `isExisting`/`originalRoomId`.
+    const realAssignments = await this.roomAssignmentRepository.findByBuildingIds(
+      params.buildingIds || [],
+      organizationId
+    );
+    const existingEntries: AssignmentResult[] = realAssignments.map((ra) => ({
+      attendeeId: ra.attendeeId,
+      roomId: ra.roomId,
+      score: 1,
+      appliedRules: ['already_assigned'],
+      reason: 'Already assigned',
+      attendeeName: ra.attendee.fullName,
+      gender: ra.attendee.gender,
+      age: ra.attendee.age ?? undefined,
+      church: ra.attendee.church,
+      area: ra.attendee.area,
+      governorate: ra.attendee.governorate,
+      roomingNotes: ra.attendee.roomingNotes,
+      roomNumber: ra.room.roomNumber,
+      roomCapacity: ra.room.capacity,
+      buildingName: ra.room.floor.building.name,
+      floorNumber: ra.room.floor.floorNumber,
+      isExisting: true,
+      originalRoomId: ra.roomId,
+    }));
+    result.assignments = [...result.assignments, ...existingEntries];
 
     const session = await this.sessionRepository.createSession({
       organizationId,
@@ -134,15 +168,30 @@ export class PreviewSessionService {
     sessionId: string,
     organizationId: string,
     actor: PreviewSessionActor
-  ): Promise<{ assignmentsCreated: number }> {
+  ): Promise<{ assignmentsCreated: number; assignmentsMoved: number; assignmentsReleased: number }> {
     const session = await this.sessionRepository.findSessionById(sessionId, organizationId);
     if (!session) {
       throw new Error('Preview session not found');
     }
 
     const data = session.data as unknown as AutoAssignmentExecutionResult;
-    const result = await this.autoAssignmentService.commitPreviewAssignments(
-      data.assignments.map((a) => ({ attendeeId: a.attendeeId, roomId: a.roomId })),
+    // WHY: a real, already-assigned attendee who got dragged into
+    // "Unassigned" within the draft needs their actual RoomAssignment
+    // released, not just dropped from the draft's in-memory list.
+    const releasedAttendeeIds = (data.unassignedAttendees || [])
+      .filter((u) => u.originalRoomId)
+      .map((u) => u.id);
+
+    const result = await this.autoAssignmentService.commitPreviewChanges(
+      {
+        assignments: data.assignments.map((a) => ({
+          attendeeId: a.attendeeId,
+          roomId: a.roomId,
+          isExisting: a.isExisting,
+          originalRoomId: a.originalRoomId,
+        })),
+        releasedAttendeeIds,
+      },
       organizationId,
       actor.id
     );
@@ -151,7 +200,12 @@ export class PreviewSessionService {
       action: 'executed',
       entityType: ENTITY_TYPE,
       entityId: sessionId,
-      details: { summary: `${actor.name} confirmed and executed the draft`, assignmentsCreated: result.assignmentsCreated },
+      details: {
+        summary: `${actor.name} confirmed and executed the draft`,
+        assignmentsCreated: result.assignmentsCreated,
+        assignmentsMoved: result.assignmentsMoved,
+        assignmentsReleased: result.assignmentsReleased,
+      },
       userId: actor.id,
       organizationId,
     });

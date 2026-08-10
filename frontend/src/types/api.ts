@@ -323,6 +323,12 @@ export interface AssignmentPreview {
     roommatesInSameRoom?: number;      // How many roommates assigned to this room
   };
   warnings?: string[];                 // Non-critical issues
+  // WHY: Distinguishes a REAL, already-committed room assignment (seeded
+  // into the preview so it can be seen/moved/swapped) from a brand new
+  // placement this dry run made — commit needs this to know whether to
+  // insert, no-op, or move/delete an existing DB row.
+  isExisting?: boolean;
+  originalRoomId?: string;             // Where this attendee actually was in the DB when the draft was created
 }
 
 export interface AutoAssignmentExecutionResult {
@@ -340,6 +346,10 @@ export interface AutoAssignmentExecutionResult {
     church?: string | null;
     age?: number | null;
     gender?: string | null;
+    // WHY: Set when this was a REAL, already-assigned attendee dragged into
+    // "Unassigned" within the draft — commit needs this to release their
+    // actual room assignment, not just drop a draft-only row.
+    originalRoomId?: string;
   }>;
   validationErrors: Array<{
     attendeeId: string;

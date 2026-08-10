@@ -96,6 +96,8 @@ export interface AssignmentResult {
   scoreBreakdown?: Record<string, number>; // Score contribution by each rule
   // Enriched details for preview (populated before returning to client)
   attendeeName?: string;
+  gender?: string | null;
+  age?: number | null;
   church?: string | null;
   area?: string | null;
   governorate?: string | null;
@@ -105,6 +107,12 @@ export interface AssignmentResult {
   buildingName?: string;
   floorNumber?: number;
   existingOccupancy?: number; // Occupants already in the room before this run (manual or prior assignments)
+  // WHY: Distinguishes a REAL, already-committed RoomAssignment (seeded into
+  // the preview session so admins can see/manage it) from a new placement
+  // this dry run made — committing the session needs to know whether to
+  // insert, no-op, or move/delete an existing DB row.
+  isExisting?: boolean;
+  originalRoomId?: string; // Where this attendee actually was in the DB when the session was created
 }
 
 /**
@@ -142,6 +150,10 @@ export interface AutoAssignmentExecutionResult {
     church?: string | null;
     age?: number | null;
     gender?: string | null;
+    // WHY: Set when this attendee was a REAL, already-assigned attendee who
+    // got dragged into "Unassigned" within the draft — commit needs this to
+    // know to release their actual RoomAssignment, not just drop a draft row.
+    originalRoomId?: string;
   }>;
   executionTimeMs: number;
   stages: StageResult[];

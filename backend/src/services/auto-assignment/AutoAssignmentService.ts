@@ -202,8 +202,15 @@ export class AutoAssignmentService {
       // Filter out deleted attendees
       let unassignedAttendees = allAttendees.filter(a => !a.deletedAt);
       
-      // If onlyUnassigned option is set, filter out attendees with existing assignments
-      if (params.options?.onlyUnassigned) {
+      // WHY: Default to true unless a caller EXPLICITLY opts out — the
+      // frontend's preview call never sends `options` at all, so
+      // `params.options?.onlyUnassigned` was always undefined/falsy and this
+      // filter silently never ran, leaving already-assigned attendees
+      // eligible to be algorithmically re-placed into a different room.
+      // Nothing could commit that safely (a second RoomAssignment for the
+      // same attendee hits the attendeeId @unique constraint).
+      const onlyUnassigned = params.options?.onlyUnassigned !== false;
+      if (onlyUnassigned) {
         const assignedAttendeeIds = new Set<string>();
         
         // Collect all currently assigned attendee IDs from room assignments
@@ -2183,16 +2190,58 @@ export class AutoAssignmentService {
    * collaborative preview session's "Confirm & Execute" instead of
    * re-running the assignment algorithm, so manual edits (unassign/
    * reassign/swap) admins made in the shared draft actually survive.
+   *
+   * The draft can contain THREE kinds of change now that real,
+   * already-assigned attendees are surfaced in the preview alongside new
+   * placements:
+   * - a brand new placement (`isExisting` false) → insert.
+   * - a real attendee left in their original room (`isExisting` true,
+   *   `roomId === originalRoomId`) → no DB change needed, already correct.
+   * - a real attendee MOVED to a different room in the draft (`isExisting`
+   *   true, `roomId !== originalRoomId`) → delete the old RoomAssignment,
+   *   then insert at the new room (same delete-then-recreate pattern
+   *   SwapValidationService.executeSwap already uses for live swaps).
+   * - a real attendee dragged into "Unassigned" in the draft
+   *   (`releasedAttendeeIds`) → delete their RoomAssignment.
    */
-  async commitPreviewAssignments(
-    assignments: Array<{ attendeeId: string; roomId: string }>,
+  async commitPreviewChanges(
+    changes: {
+      assignments: Array<{ attendeeId: string; roomId: string; isExisting?: boolean; originalRoomId?: string }>;
+      releasedAttendeeIds: string[];
+    },
     organizationId: string,
     userId: string
-  ): Promise<{ assignmentsCreated: number }> {
-    for (const assignment of assignments) {
-      await this.createAssignment(assignment.attendeeId, assignment.roomId, organizationId, userId);
+  ): Promise<{ assignmentsCreated: number; assignmentsMoved: number; assignmentsReleased: number }> {
+    let assignmentsCreated = 0;
+    let assignmentsMoved = 0;
+
+    for (const assignment of changes.assignments) {
+      if (!assignment.isExisting) {
+        await this.createAssignment(assignment.attendeeId, assignment.roomId, organizationId, userId);
+        assignmentsCreated++;
+        continue;
+      }
+      if (assignment.originalRoomId && assignment.roomId !== assignment.originalRoomId) {
+        await this.assignmentRepository.deleteByAttendeeId(assignment.attendeeId, organizationId);
+        await this.createAssignment(assignment.attendeeId, assignment.roomId, organizationId, userId);
+        assignmentsMoved++;
+      }
+      // else: real attendee, unchanged room — already correct in the DB.
     }
-    return { assignmentsCreated: assignments.length };
+
+    for (const attendeeId of changes.releasedAttendeeIds) {
+      await this.assignmentRepository.deleteByAttendeeId(attendeeId, organizationId);
+      await this.auditLogRepository.createLog({
+        action: 'unassign',
+        entityType: 'room_assignment',
+        entityId: attendeeId,
+        details: { attendeeId, reason: 'Released via collaborative preview draft' },
+        userId,
+        organizationId,
+      });
+    }
+
+    return { assignmentsCreated, assignmentsMoved, assignmentsReleased: changes.releasedAttendeeIds.length };
   }
 
   /**
