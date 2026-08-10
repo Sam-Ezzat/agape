@@ -159,24 +159,34 @@ export default function WhatsAppSetupPage() {
 
           {/* Rate Limits */}
           {status?.rateLimit && isConnected && (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-blue-50 rounded-lg">
-                <p className="text-sm text-gray-600 mb-1">Messages Today</p>
-                <p className="text-2xl font-bold text-blue-600">
-                  {status.rateLimit.dailyCount} / {status.rateLimit.dailyLimit}
-                </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  {status.rateLimit.dailyRemaining} remaining
-                </p>
-              </div>
-              <div className="p-4 bg-green-50 rounded-lg">
-                <p className="text-sm text-gray-600 mb-1">Messages This Hour</p>
-                <p className="text-2xl font-bold text-green-600">
-                  {status.rateLimit.hourlyCount} / {status.rateLimit.hourlyLimit}
-                </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  {status.rateLimit.hourlyRemaining} remaining
-                </p>
+            <div className="space-y-3">
+              {status.rateLimit.warmup && status.rateLimit.warmup.stage !== 'established' && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                  🌱 Warming up ({status.rateLimit.warmup.stage.replace('day', 'Day ')}) — sending at{' '}
+                  {Math.round(status.rateLimit.warmup.limitMultiplier * 100)}% capacity with longer delays
+                  between messages, to protect this number from being flagged. Ramps up to full capacity
+                  over the first week.
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-blue-50 rounded-lg">
+                  <p className="text-sm text-gray-600 mb-1">Messages Today</p>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {status.rateLimit.dailyCount} / {status.rateLimit.dailyLimit}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {status.rateLimit.dailyRemaining} remaining
+                  </p>
+                </div>
+                <div className="p-4 bg-green-50 rounded-lg">
+                  <p className="text-sm text-gray-600 mb-1">Messages This Hour</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    {status.rateLimit.hourlyCount} / {status.rateLimit.hourlyLimit}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {status.rateLimit.hourlyRemaining} remaining
+                  </p>
+                </div>
               </div>
             </div>
           )}

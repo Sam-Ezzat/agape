@@ -18,6 +18,12 @@ import { normalizePhoneNumber } from '@/utils/phone';
 // regardless of any PUPPETEER_CACHE_DIR set (or not set) in the host environment.
 process.env.PUPPETEER_CACHE_DIR = path.join(process.cwd(), '.cache', 'puppeteer');
 
+// WHY: Matches a reply that's ENTIRELY (trim + case-insensitive) one of
+// these opt-out phrases — deliberately not a substring match, so a message
+// that merely mentions "stop" in a longer sentence doesn't false-positive
+// unsubscribe someone.
+const OPT_OUT_KEYWORDS = /^(stop|unsubscribe|opt\s*out|توقف|الغاء الاشتراك|إلغاء الاشتراك|وقف الرسائل)$/i;
+
 export interface WhatsAppStatus {
   isConnected: boolean;
   isReady: boolean;
@@ -28,12 +34,55 @@ export interface WhatsAppStatus {
   loadingMessage?: string;
 }
 
+export interface WarmupInfo {
+  stage: 'unknown' | 'day1' | 'day2-3' | 'day4-7' | 'established';
+  limitMultiplier: number;
+  delayMultiplier: number;
+  hoursSinceActive: number | null;
+}
+
 export interface RateLimitStatus {
-  messagesThisHour: number;
-  messagesThisDay: number;
-  maxPerHour: number;
-  maxPerDay: number;
+  hourlyCount: number;
+  dailyCount: number;
+  hourlyLimit: number;
+  dailyLimit: number;
+  hourlyRemaining: number;
+  dailyRemaining: number;
   canSend: boolean;
+  warmup: WarmupInfo;
+}
+
+/**
+ * Scales send limits down / delay up for a freshly-connected WhatsApp
+ * session, ramping to full configured capacity over a week. A brand-new
+ * number sending at full volume immediately is one of the strongest ban
+ * signals — this spreads that risk out.
+ *
+ * WHY `sessionActiveSince: null` -> 'established' (no throttling): sessions
+ * that were already active before this feature shipped have no recorded
+ * start time — treating that as "day 1" would retroactively (and
+ * incorrectly) throttle an already-trusted, established number.
+ *
+ * Exported as a standalone pure function (not a class method) so it's
+ * directly unit-testable without spinning up a WhatsAppService instance.
+ */
+export function computeWarmupFactor(sessionActiveSince: Date | null, now: Date = new Date()): WarmupInfo {
+  if (!sessionActiveSince) {
+    return { stage: 'established', limitMultiplier: 1, delayMultiplier: 1, hoursSinceActive: null };
+  }
+
+  const hoursSinceActive = (now.getTime() - sessionActiveSince.getTime()) / (60 * 60 * 1000);
+
+  if (hoursSinceActive < 24) {
+    return { stage: 'day1', limitMultiplier: 0.2, delayMultiplier: 2, hoursSinceActive };
+  }
+  if (hoursSinceActive < 72) {
+    return { stage: 'day2-3', limitMultiplier: 0.5, delayMultiplier: 1.5, hoursSinceActive };
+  }
+  if (hoursSinceActive < 168) {
+    return { stage: 'day4-7', limitMultiplier: 0.75, delayMultiplier: 1.2, hoursSinceActive };
+  }
+  return { stage: 'established', limitMultiplier: 1, delayMultiplier: 1, hoursSinceActive };
 }
 
 /**
@@ -54,7 +103,11 @@ export class WhatsAppService {
   private messagesSentThisDay = 0;
   private hourlyResetTimer?: NodeJS.Timeout;
   private dailyResetTimer?: NodeJS.Timeout;
-  
+
+  // WHY: null until this org's session has a recorded first-activation
+  // timestamp (see computeWarmupFactor) — drives the warm-up ramp-up.
+  private sessionActiveSince: Date | null = null;
+
   // Settings
   private settings: {
     delayMin: number;
@@ -97,6 +150,7 @@ export class WhatsAppService {
           maxPerHour: settings.maxMessagesPerHour,
           maxPerDay: settings.maxMessagesPerDay,
         };
+        this.sessionActiveSince = settings.whatsappSessionActiveSince;
       }
     } catch (error) {
       logger.error('Failed to load WhatsApp settings:', error);
@@ -128,7 +182,11 @@ export class WhatsAppService {
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: `org-${this.organizationId}`,
-          dataPath: path.join(process.cwd(), 'whatsapp-sessions', this.organizationId),
+          // WHY: Defaults to the app's own (ephemeral, per-deploy) working
+          // directory. Set DATA_DIR to a Render persistent Disk's mount path
+          // in production so the authenticated session survives redeploys
+          // instead of forcing a QR re-scan every time.
+          dataPath: path.join(process.env.DATA_DIR || process.cwd(), 'whatsapp-sessions', this.organizationId),
         }),
         puppeteer: {
           headless: true,
@@ -236,6 +294,53 @@ export class WhatsAppService {
       this.loadingMessage = message || null;
       this.emit('whatsapp:loading', { percent, message });
     });
+
+    // Incoming message — watch for opt-out/unsubscribe replies.
+    // WHY: repeat-messaging someone who's opted out is a direct path to
+    // being reported/blocked, which is itself a ban signal, and violates
+    // WhatsApp Business policy. This is the only place a recipient can
+    // reach us to ask to stop.
+    this.client.on('message', async (msg) => {
+      try {
+        if (msg.fromMe) return;
+        if (!OPT_OUT_KEYWORDS.test(msg.body.trim())) return;
+
+        // WHY: `msg.from` is WhatsApp's canonical normalized digits, but
+        // `Attendee.phone` is stored as originally typed (may have local
+        // formatting — spaces, dashes, a leading trunk 0, no country code).
+        // A raw string comparison would miss most real matches, so
+        // normalize each candidate the same way sends already do and
+        // compare the canonical forms.
+        const incomingPhone = msg.from.replace('@c.us', '');
+        const candidates = await prisma.attendee.findMany({
+          where: { organizationId: this.organizationId, phone: { not: null }, whatsappOptOut: false },
+          select: { id: true, phone: true },
+        });
+        const matchingIds = candidates
+          .filter((a) => {
+            try {
+              return normalizePhoneNumber(a.phone) === incomingPhone;
+            } catch {
+              return false;
+            }
+          })
+          .map((a) => a.id);
+
+        if (matchingIds.length > 0) {
+          await prisma.attendee.updateMany({
+            where: { id: { in: matchingIds } },
+            data: { whatsappOptOut: true, whatsappOptOutAt: new Date() },
+          });
+          logger.info(`Opt-out recorded for ${incomingPhone} (${matchingIds.length} matching attendee record(s))`);
+          await this.client?.sendMessage(
+            msg.from,
+            'You have been unsubscribed and will not receive further messages. تم إلغاء اشتراكك ولن تصلك رسائل أخرى.'
+          );
+        }
+      } catch (error) {
+        logger.error('Failed to process incoming message for opt-out detection:', error);
+      }
+    });
   }
   
   /**
@@ -249,6 +354,20 @@ export class WhatsAppService {
           whatsappSessionActive: active,
         },
       });
+
+      // WHY: Only stamp the warm-up start time ONCE, on this session's
+      // first-ever activation — a later reconnect of the SAME authenticated
+      // number must not reset the ramp-up clock (see computeWarmupFactor).
+      if (active && !this.sessionActiveSince) {
+        const now = new Date();
+        const result = await prisma.communicationSettings.updateMany({
+          where: { organizationId: this.organizationId, whatsappSessionActiveSince: null },
+          data: { whatsappSessionActiveSince: now },
+        });
+        if (result.count > 0) {
+          this.sessionActiveSince = now;
+        }
+      }
     } catch (error) {
       logger.error('Failed to update session status:', error);
     }
@@ -354,40 +473,54 @@ export class WhatsAppService {
    * Apply rate limiting delay
    */
   private async applyDelay(multiplier: number = 1): Promise<void> {
-    const min = this.settings.delayMin * multiplier;
-    const max = this.settings.delayMax * multiplier;
-    
+    const warmup = computeWarmupFactor(this.sessionActiveSince);
+    const min = this.settings.delayMin * multiplier * warmup.delayMultiplier;
+    const max = this.settings.delayMax * multiplier * warmup.delayMultiplier;
+
     // Random delay between min and max
     const delay = Math.floor(Math.random() * (max - min + 1)) + min;
-    
-    logger.debug(`Applying rate limit delay: ${delay}ms`);
-    
+
+    logger.debug(`Applying rate limit delay: ${delay}ms (warmup stage: ${warmup.stage})`);
+
     return new Promise((resolve) => setTimeout(resolve, delay));
   }
-  
+
   /**
    * Check if we can send more messages (rate limit check)
+   * WHY: Limits are scaled down by the warm-up multiplier for a
+   * freshly-connected session — see computeWarmupFactor.
    */
   checkRateLimit(): boolean {
-    const hourly = this.messagesSentThisHour < this.settings.maxPerHour;
-    const daily = this.messagesSentThisDay < this.settings.maxPerDay;
-    
+    const warmup = computeWarmupFactor(this.sessionActiveSince);
+    const maxPerHour = Math.max(1, Math.floor(this.settings.maxPerHour * warmup.limitMultiplier));
+    const maxPerDay = Math.max(1, Math.floor(this.settings.maxPerDay * warmup.limitMultiplier));
+
+    const hourly = this.messagesSentThisHour < maxPerHour;
+    const daily = this.messagesSentThisDay < maxPerDay;
+
     return hourly && daily;
   }
-  
+
   /**
    * Get rate limit status
    */
   getRateLimitStatus(): RateLimitStatus {
+    const warmup = computeWarmupFactor(this.sessionActiveSince);
+    const hourlyLimit = Math.max(1, Math.floor(this.settings.maxPerHour * warmup.limitMultiplier));
+    const dailyLimit = Math.max(1, Math.floor(this.settings.maxPerDay * warmup.limitMultiplier));
+
     return {
-      messagesThisHour: this.messagesSentThisHour,
-      messagesThisDay: this.messagesSentThisDay,
-      maxPerHour: this.settings.maxPerHour,
-      maxPerDay: this.settings.maxPerDay,
+      hourlyCount: this.messagesSentThisHour,
+      dailyCount: this.messagesSentThisDay,
+      hourlyLimit,
+      dailyLimit,
+      hourlyRemaining: Math.max(0, hourlyLimit - this.messagesSentThisHour),
+      dailyRemaining: Math.max(0, dailyLimit - this.messagesSentThisDay),
       canSend: this.checkRateLimit(),
+      warmup,
     };
   }
-  
+
   /**
    * Start timers to reset rate limit counters
    */

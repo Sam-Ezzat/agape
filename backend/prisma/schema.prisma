@@ -197,7 +197,14 @@ model Attendee {
   checkedInAt       DateTime?       @map("checked_in_at")
   checkedOutAt      DateTime?       @map("checked_out_at")
   checkedInBy       String?         @map("checked_in_by") // Staff member who checked in
-  
+
+  // WHY: Set when the attendee replies with a stop/unsubscribe keyword to a
+  // WhatsApp message (see whatsapp.service.ts's incoming-message handler) —
+  // excluded from all future campaign recipient filtering to avoid
+  // re-messaging someone who opted out (WhatsApp policy + ban risk).
+  whatsappOptOut    Boolean         @default(false) @map("whatsapp_opt_out")
+  whatsappOptOutAt  DateTime?       @map("whatsapp_opt_out_at")
+
   // Timestamps
   createdAt         DateTime        @default(now()) @map("created_at")
   updatedAt         DateTime        @updatedAt @map("updated_at")
@@ -513,6 +520,12 @@ model CommunicationSettings {
   // WhatsApp Settings
   whatsappEnabled       Boolean  @default(true) @map("whatsapp_enabled")
   whatsappSessionActive Boolean  @default(false) @map("whatsapp_session_active")
+  // WHY: First-ever activation timestamp for THIS authenticated session —
+  // used to ramp up send limits/delay gradually for a freshly-connected
+  // number instead of sending at full volume immediately (a strong ban
+  // signal). Deliberately NOT reset on every reconnect of the same session,
+  // only set once when null.
+  whatsappSessionActiveSince DateTime? @map("whatsapp_session_active_since")
   whatsappDelayMin      Int      @default(3000) @map("whatsapp_delay_min")
   whatsappDelayMax      Int      @default(8000) @map("whatsapp_delay_max")
   whatsappBatchSize     Int      @default(10) @map("whatsapp_batch_size")

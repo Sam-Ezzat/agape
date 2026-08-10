@@ -141,6 +141,12 @@ export interface WhatsAppStatus {
     dailyLimit: number;
     hourlyRemaining: number;
     dailyRemaining: number;
+    warmup?: {
+      stage: 'unknown' | 'day1' | 'day2-3' | 'day4-7' | 'established';
+      limitMultiplier: number;
+      delayMultiplier: number;
+      hoursSinceActive: number | null;
+    };
   };
 }
 

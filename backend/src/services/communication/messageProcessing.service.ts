@@ -79,6 +79,29 @@ export class MessageProcessingService {
       throw new Error('WhatsApp is not ready');
     }
 
+    // WHY: Avoid wasting a send attempt (and the ban-risk signal that comes
+    // with it) on a number that isn't even on WhatsApp. Fails OPEN on a
+    // lookup error — a flaky check shouldn't block an otherwise-legitimate
+    // send.
+    let isRegistered = true;
+    try {
+      isRegistered = await whatsappService.isRegisteredUser(phone);
+    } catch (error) {
+      logger.warn(`isRegisteredUser check failed for ${messageId}, proceeding with send:`, error);
+    }
+    if (!isRegistered) {
+      await prisma.message.update({
+        where: { id: messageId },
+        data: {
+          status: MessageStatus.FAILED,
+          failedAt: new Date(),
+          errorMessage: 'Phone number is not registered on WhatsApp',
+        },
+      });
+      logger.warn(`Message permanently failed (not a WhatsApp number): ${messageId}`);
+      return;
+    }
+
     // Update message status to SENDING
     await prisma.message.update({
       where: { id: messageId },

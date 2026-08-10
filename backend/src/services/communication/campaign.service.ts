@@ -237,6 +237,11 @@ export class CampaignService {
     // Phone is required for WhatsApp
     where.phone = { not: null };
 
+    // WHY: Never re-message someone who's opted out (via a "STOP" reply —
+    // see whatsapp.service.ts's incoming-message handler) — required by
+    // WhatsApp Business policy and avoids the ban risk of being reported.
+    where.whatsappOptOut = { not: true };
+
     // Apply filters
     if (filter.conferenceRole) {
       where.conferenceRole = Array.isArray(filter.conferenceRole)
@@ -305,7 +310,27 @@ export class CampaignService {
       },
     });
 
-    return attendees;
+    // WHY: Two Attendee records can share a phone number (e.g. a parent
+    // registered on behalf of a child) — without de-duping, that number
+    // would receive the same campaign twice, which looks like spam and
+    // wastes a send slot. Keeps the FIRST match per normalized number;
+    // an attendee whose phone fails to normalize is left as-is so it still
+    // surfaces as an individually-FAILED message in startCampaign, same as
+    // today, rather than being silently dropped here.
+    const seenPhones = new Set<string>();
+    const deduped = attendees.filter((attendee) => {
+      let normalized: string;
+      try {
+        normalized = normalizePhoneNumber(attendee.phone);
+      } catch {
+        return true;
+      }
+      if (seenPhones.has(normalized)) return false;
+      seenPhones.add(normalized);
+      return true;
+    });
+
+    return deduped;
   }
 
   /**
