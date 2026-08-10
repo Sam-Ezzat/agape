@@ -240,23 +240,25 @@ export class RoomingNotesCacheService {
   }
 
   /**
-   * Classify (cache-first) THEN expand clusters across the whole
-   * organization, all in the background. This is the entry point
-   * import/create/update handlers should call — expansion needs the full
-   * org attendee list re-read AFTER classification finishes writing, since
-   * a newly classified note might connect to an already-existing chain.
+   * Classify (cache-first) in the background. This is the entry point
+   * import/create/update handlers should call.
+   *
+   * WHY (product decision): cluster expansion — rewriting every group
+   * member's cached `roommateRequests` to include everyone else in their
+   * merged group — is DISABLED. It was meant to make future name-matching
+   * more robust and let the "Parsed Notes" review view show the whole
+   * group, but in practice it meant one attendee's Parsed Notes could show
+   * a long list of names they never actually wrote (everyone in their
+   * resolved cluster, "mentioned" on their behalf) — confusing and, when a
+   * cluster merge went wrong, actively misleading. Each attendee's cached
+   * `roommateRequests` now always reflects EXACTLY what that person wrote,
+   * nothing more. Room placement is unaffected: HierarchicalGroupingService
+   * still computes the full transitive roommate graph itself at grouping
+   * time from everyone's individual (unexpanded) requests, same as it
+   * always has — expansion was a display/matching optimization, not a
+   * requirement for grouping to work.
    */
   classifyAndExpandInBackground(attendees: Attendee[]): void {
-    const organizationId = attendees[0]?.organizationId;
-
-    this.classifyAndPersist(attendees)
-      .then(async () => {
-        if (!organizationId) return;
-        const allAttendees = await this.attendeeRepository.findAllByOrganization(organizationId);
-        await this.expandRoommateClusters(allAttendees);
-      })
-      .catch(error => {
-        logger.error('Background rooming notes classification/expansion failed:', error);
-      });
+    this.classifyAndPersistInBackground(attendees);
   }
 }
