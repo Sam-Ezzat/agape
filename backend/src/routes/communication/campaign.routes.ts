@@ -19,6 +19,7 @@ router.post('/:id/start', campaignController.startCampaign);
 router.post('/:id/pause', campaignController.pauseCampaign);
 router.post('/:id/resume', campaignController.resumeCampaign);
 router.post('/:id/cancel', campaignController.cancelCampaign);
+router.post('/:id/retry-failed', campaignController.retryFailedMessages);
 
 // Campaign data
 router.get('/:id/stats', campaignController.getCampaignStats);

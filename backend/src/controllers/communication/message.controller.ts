@@ -7,7 +7,8 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { asyncHandler } from '@/middleware/asyncHandler';
-import { messageQueueService } from '@/services/communication';
+import { messageQueueService, templateService } from '@/services/communication';
+import { normalizePhoneNumber } from '@/utils/phone';
 import logger from '@/utils/logger';
 
 const prisma = new PrismaClient();
@@ -20,7 +21,7 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   const { status, campaignId, attendeeId, limit = 50, offset = 0 } = req.query;
   const organizationId = req.user!.organizationId;
 
-  const where: any = { campaign: { organizationId } };
+  const where: any = { organizationId };
   if (status) where.status = status;
   if (campaignId) where.campaignId = campaignId as string;
   if (attendeeId) where.attendeeId = attendeeId as string;
@@ -63,7 +64,7 @@ export const getMessageById = asyncHandler(async (req: Request, res: Response) =
   const organizationId = req.user!.organizationId;
 
   const message = await prisma.message.findFirst({
-    where: { id, campaign: { organizationId } },
+    where: { id, organizationId },
     include: {
       attendee: true,
       campaign: {
@@ -71,6 +72,7 @@ export const getMessageById = asyncHandler(async (req: Request, res: Response) =
           template: true,
         },
       },
+      template: true,
     },
   });
   
@@ -96,8 +98,7 @@ export const retryMessage = asyncHandler(async (req: Request, res: Response) => 
   const organizationId = req.user!.organizationId;
 
   const message = await prisma.message.findFirst({
-    where: { id, campaign: { organizationId } },
-    include: { campaign: true },
+    where: { id, organizationId },
   });
 
   if (!message) {
@@ -106,7 +107,14 @@ export const retryMessage = asyncHandler(async (req: Request, res: Response) => 
       message: 'Message not found',
     });
   }
-  
+
+  if (!message.campaignId) {
+    return res.status(400).json({
+      success: false,
+      message: 'This message was sent manually and cannot be retried through the queue',
+    });
+  }
+
   if (message.status !== 'FAILED') {
     return res.status(400).json({
       success: false,
@@ -145,6 +153,70 @@ export const retryMessage = asyncHandler(async (req: Request, res: Response) => 
 });
 
 /**
+ * Log a message sent manually via the "copy to WhatsApp" flow (an admin
+ * picks a template, reviews/edits the rendered text, and sends it themselves
+ * through wa.me — no automation, so no ban risk, but we still want it
+ * tracked alongside campaign sends so nobody gets double-messaged and
+ * "who's been contacted" stays accurate).
+ * POST /api/messages/manual
+ */
+export const logManualMessage = asyncHandler(async (req: Request, res: Response) => {
+  const { attendeeId, templateId, body } = req.body;
+  const organizationId = req.user!.organizationId;
+
+  if (!attendeeId || !templateId || !body) {
+    return res.status(400).json({
+      success: false,
+      message: 'attendeeId, templateId, and body are required',
+    });
+  }
+
+  const attendee = await prisma.attendee.findFirst({
+    where: { id: attendeeId, organizationId },
+  });
+
+  if (!attendee) {
+    return res.status(404).json({
+      success: false,
+      message: 'Attendee not found',
+    });
+  }
+
+  let recipient: string;
+  try {
+    recipient = normalizePhoneNumber(attendee.phone);
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error instanceof Error ? error.message : 'Invalid phone number',
+    });
+  }
+
+  const message = await prisma.message.create({
+    data: {
+      organizationId,
+      attendeeId,
+      templateId,
+      recipient,
+      body,
+      channel: 'WHATSAPP',
+      status: 'SENT',
+      sentAt: new Date(),
+    },
+  });
+
+  await templateService.incrementUsageCount(templateId);
+
+  logger.info('Manual WhatsApp message logged:', message.id);
+
+  res.status(201).json({
+    success: true,
+    data: message,
+    message: 'Manual message logged',
+  });
+});
+
+/**
  * Get overall message statistics
  * GET /api/messages/stats
  */
@@ -152,10 +224,10 @@ export const getMessageStats = asyncHandler(async (req: Request, res: Response) 
   const organizationId = req.user!.organizationId;
 
   const [total, sent, failed, pending] = await Promise.all([
-    prisma.message.count({ where: { campaign: { organizationId } } }),
-    prisma.message.count({ where: { status: 'SENT', campaign: { organizationId } } }),
-    prisma.message.count({ where: { status: 'FAILED', campaign: { organizationId } } }),
-    prisma.message.count({ where: { status: { in: ['PENDING', 'QUEUED', 'SENDING'] }, campaign: { organizationId } } }),
+    prisma.message.count({ where: { organizationId } }),
+    prisma.message.count({ where: { status: 'SENT', organizationId } }),
+    prisma.message.count({ where: { status: 'FAILED', organizationId } }),
+    prisma.message.count({ where: { status: { in: ['PENDING', 'QUEUED', 'SENDING'] }, organizationId } }),
   ]);
   
   const successRate = total > 0 ? (sent / total) * 100 : 0;

@@ -1045,7 +1045,16 @@ export const communicationApi = {
         return handleApiError(error as Error);
       }
     },
-    
+
+    retryFailed: async (id: string): Promise<ApiResponse<{ retriedCount: number }>> => {
+      try {
+        const { data } = await apiClient.post(`/communication/campaigns/${id}/retry-failed`);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+
     getStats: async (id: string): Promise<ApiResponse<CampaignStats>> => {
       try {
         const { data } = await apiClient.get(`/communication/campaigns/${id}/stats`);
@@ -1114,8 +1123,17 @@ export const communicationApi = {
         return handleApiError(error as Error);
       }
     },
+
+    logManual: async (dto: { attendeeId: string; templateId: string; body: string }): Promise<ApiResponse<Message>> => {
+      try {
+        const { data } = await apiClient.post('/communication/messages/manual', dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
   },
-  
+
   // WhatsApp APIs
   whatsapp: {
     initialize: async (): Promise<ApiResponse<void>> => {

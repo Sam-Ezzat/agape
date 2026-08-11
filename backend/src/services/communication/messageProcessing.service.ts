@@ -13,7 +13,25 @@ import logger from '@/utils/logger';
 import { MessageJob, messageQueueService } from './messageQueue.service';
 import { getWhatsAppService } from './whatsapp.registry';
 import { campaignService } from './campaign.service';
+import { RateLimitExceededError } from './whatsapp.service';
 import { InvalidPhoneNumberError } from '@/utils/phone';
+
+// WHY: distinct from a real send failure — WhatsApp being briefly
+// disconnected (e.g. mid-reconnect) shouldn't burn one of Bull's limited
+// retry attempts and end up marking every in-flight message permanently
+// FAILED. See onJobFailed's deferral handling below.
+class WhatsAppNotReadyError extends Error {
+  constructor() {
+    super('WhatsApp is not ready');
+    this.name = 'WhatsAppNotReadyError';
+  }
+}
+
+// WHY: how long to wait before retrying a message that only failed because
+// the send was throttled or WhatsApp was briefly disconnected — long enough
+// to plausibly land in the next rate-limit window, short enough that a
+// campaign doesn't stall for hours over a transient blip.
+const DEFERRAL_RETRY_DELAY_MS = 15 * 60 * 1000;
 
 /**
  * Message Processing Service Class
@@ -72,11 +90,21 @@ export class MessageProcessingService {
 
     logger.info(`Processing message: ${messageId}`);
 
+    // WHY: cancelCampaign() flips PENDING/QUEUED messages to CANCELLED but
+    // can't cheaply remove their already-enqueued Bull jobs (no per-campaign
+    // job index) — skip here instead of sending a message its campaign owner
+    // already cancelled.
+    const current = await prisma.message.findUnique({ where: { id: messageId }, select: { status: true } });
+    if (!current || current.status === MessageStatus.CANCELLED) {
+      logger.info(`Skipping message ${messageId}: ${current ? 'campaign cancelled' : 'no longer exists'}`);
+      return;
+    }
+
     // Check if this org's WhatsApp is connected and ready
     const whatsappService = getWhatsAppService(organizationId);
     const status = whatsappService?.getStatus();
     if (!whatsappService || !status?.isReady) {
-      throw new Error('WhatsApp is not ready');
+      throw new WhatsAppNotReadyError();
     }
 
     // WHY: Avoid wasting a send attempt (and the ban-risk signal that comes
@@ -173,9 +201,28 @@ export class MessageProcessingService {
    */
   private async onJobFailed(job: Job<MessageJob>, error: Error): Promise<void> {
     const { messageId, campaignId, organizationId } = job.data;
+    const maxRetries = 3;
+
+    // WHY: rate-limiting and a briefly-disconnected WhatsApp aren't real
+    // delivery failures — they just mean "try again later." Bull's own
+    // attempts/backoff (a few seconds) is far too short for "wait for the
+    // next hourly window," so once Bull gives up, requeue with a much longer
+    // delay instead of marking the message permanently FAILED.
+    if (error instanceof RateLimitExceededError || error instanceof WhatsAppNotReadyError) {
+      if (job.attemptsMade >= maxRetries) {
+        await prisma.message.update({ where: { id: messageId }, data: { status: MessageStatus.PENDING } });
+        await messageQueueService.addMessage(job.data, DEFERRAL_RETRY_DELAY_MS);
+        logger.info(`Message deferred (${error.message}), will retry in ${DEFERRAL_RETRY_DELAY_MS / 1000}s: ${messageId}`);
+      } else {
+        logger.info(`Message send deferred (${error.message}): ${messageId} (attempt ${job.attemptsMade}/${maxRetries})`);
+      }
+
+      // Keep totalPending accurate, but this isn't a failure event.
+      await campaignService.updateCampaignStats(campaignId, organizationId);
+      return;
+    }
 
     // Check if max retries exceeded
-    const maxRetries = 3;
     if (job.attemptsMade >= maxRetries) {
       // Mark message as permanently failed
       await prisma.message.update({

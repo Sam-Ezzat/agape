@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus, Play, Pause, X, Eye, BarChart3, Users, AlertCircle } from 'lucide-react';
+import { Plus, Play, Pause, X, Eye, BarChart3, Users, AlertCircle, RefreshCw } from 'lucide-react';
 import { communicationApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import type { MessageCampaign, CampaignStatus, MessageTemplate, CreateCampaignDTO, Message, MessageStatus } from '@/types/communication';
@@ -120,6 +120,17 @@ export default function CampaignsPage() {
       loadCampaigns();
     } catch (error: any) {
       const errorMsg = error?.response?.data?.message || error?.response?.data?.error || 'Failed to resume campaign';
+      toastError(errorMsg);
+    }
+  };
+
+  const handleRetryFailed = async (id: string) => {
+    try {
+      const response = await communicationApi.campaigns.retryFailed(id);
+      toastSuccess(response.message || 'Failed messages queued for retry');
+      loadCampaigns();
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.message || error?.response?.data?.error || 'Failed to retry messages';
       toastError(errorMsg);
     }
   };
@@ -331,7 +342,17 @@ export default function CampaignsPage() {
                         <X size={18} />
                       </button>
                     )}
-                    
+
+                    {campaign.totalFailed > 0 && campaign.status !== 'DRAFT' && campaign.status !== 'SCHEDULED' && (
+                      <button
+                        onClick={() => handleRetryFailed(campaign.id)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded"
+                        title={`Retry ${campaign.totalFailed} Failed Message(s)`}
+                      >
+                        <RefreshCw size={18} />
+                      </button>
+                    )}
+
                     <button
                       onClick={() => setViewCampaignId(campaign.id)}
                       className="p-2 text-gray-600 hover:bg-gray-100 rounded"
@@ -678,6 +699,16 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
     }
   };
 
+  const handleRetryMessage = async (id: string) => {
+    try {
+      await communicationApi.messages.retry(id);
+      toastSuccess('Message queued for retry');
+      loadMessages();
+    } catch (error) {
+      toastError('Failed to retry message');
+    }
+  };
+
   const statusBadge = (status: MessageStatus) => {
     const badges: Record<MessageStatus, { bg: string; text: string }> = {
       PENDING: { bg: 'bg-gray-100', text: 'text-gray-800' },
@@ -740,7 +771,18 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
                       </p>
                       <p className="text-sm text-gray-600">{message.recipient}</p>
                     </div>
-                    {statusBadge(message.status)}
+                    <div className="flex items-center gap-2">
+                      {statusBadge(message.status)}
+                      {message.status === 'FAILED' && (
+                        <button
+                          onClick={() => handleRetryMessage(message.id)}
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
+                          title="Retry this message"
+                        >
+                          <RefreshCw size={14} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {message.status === 'FAILED' && message.errorMessage && (
                     <div className="mt-2 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded p-2">

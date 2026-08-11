@@ -14,5 +14,6 @@ router.get('/:id', messageController.getMessageById);
 
 // Message actions
 router.post('/:id/retry', messageController.retryMessage);
+router.post('/manual', messageController.logManualMessage);
 
 export default router;

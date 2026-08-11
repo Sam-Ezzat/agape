@@ -12,6 +12,8 @@ import { attendeeApi, assignmentApi, excelApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useSocket } from '@/hooks/useSocket';
 import { normalizePhoneToE164 } from '@/utils/phone';
+import SendWhatsAppModal from '@/components/SendWhatsAppModal';
+import WhatsAppIcon from '@/components/WhatsAppIcon';
 import type { Attendee, AttendeeFilters, ConferenceRole, Gender } from '@/types/api';
 
 export default function AttendeesPage() {
@@ -29,6 +31,7 @@ export default function AttendeesPage() {
   const [deletingAttendee, setDeletingAttendee] = useState<{ id: string; name: string } | null>(null);
   const [assignedWarningAttendee, setAssignedWarningAttendee] = useState<Attendee | null>(null);
   const [unassigning, setUnassigning] = useState(false);
+  const [whatsappAttendee, setWhatsappAttendee] = useState<Attendee | null>(null);
   const socket = useSocket();
   const navigate = useNavigate();
 
@@ -625,6 +628,15 @@ export default function AttendeesPage() {
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                        {attendee.phone && (
+                          <button
+                            onClick={() => setWhatsappAttendee(attendee)}
+                            className="text-green-600 hover:text-green-800 inline-flex items-center"
+                            title="Send WhatsApp message"
+                          >
+                            <WhatsAppIcon size={18} />
+                          </button>
+                        )}
                         <button
                           onClick={() => openEditModal(attendee)}
                           className="text-primary-600 hover:text-primary-900"
@@ -707,6 +719,9 @@ export default function AttendeesPage() {
       {showImportModal && (
         <ImportModal onClose={closeImportModal} onSuccess={handleImportSuccess} />
       )}
+
+      {/* Send WhatsApp Modal */}
+      <SendWhatsAppModal attendee={whatsappAttendee} onClose={() => setWhatsappAttendee(null)} />
 
       {/* Attendee Details Modal */}
       {showDetailsModal && selectedAttendee && (

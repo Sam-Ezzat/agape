@@ -29,6 +29,7 @@ model Organization {
   attendees              Attendee[]
   templates              MessageTemplate[]
   campaigns              MessageCampaign[]
+  messages               Message[]
   communicationSettings  CommunicationSettings[]
   auditLogs              AuditLog[]
   previewSessions        AutoAssignmentPreviewSession[]
@@ -380,6 +381,7 @@ model MessageTemplate {
   // Relations
   organization  Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   campaigns     MessageCampaign[]
+  messages      Message[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -464,15 +466,22 @@ enum MessageChannel {
 // WHY: Individual messages sent to attendees with delivery tracking
 model Message {
   id            String        @id @default(uuid())
-  campaignId    String        @map("campaign_id")
+  // WHY nullable: a message can come from an automated campaign (campaignId
+  // set) OR be logged from the manual "copy to WhatsApp" flow (campaignId
+  // null, templateId set instead) — organizationId is stored directly here
+  // so org-scoped queries (e.g. message stats/list) work the same either
+  // way, without depending on a campaign relation that may not exist.
+  organizationId String?      @map("organization_id")
+  campaignId    String?       @map("campaign_id")
+  templateId    String?       @map("template_id")
   attendeeId    String        @map("attendee_id")
-  
+
   // Message Content
   recipient     String
   subject       String?
   body          String        @db.Text
   attachmentUrl String?       @map("attachment_url")
-  
+
   // Delivery Status
   status        MessageStatus @default(PENDING)
   channel       MessageChannel @default(WHATSAPP)
@@ -481,18 +490,21 @@ model Message {
   readAt        DateTime?     @map("read_at")
   failedAt      DateTime?     @map("failed_at")
   errorMessage  String?       @db.Text @map("error_message")
-  
+
   // Retry Logic
   retryCount    Int           @default(0) @map("retry_count")
   maxRetries    Int           @default(3) @map("max_retries")
-  
+
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
-  
+
   // Relations
-  campaign      MessageCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  organization  Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign      MessageCampaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  template      MessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   attendee      Attendee      @relation(fields: [attendeeId], references: [id], onDelete: Cascade)
-  
+
+  @@index([organizationId])
   @@index([campaignId])
   @@index([attendeeId])
   @@index([status])

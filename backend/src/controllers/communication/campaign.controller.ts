@@ -173,8 +173,13 @@ export const resumeCampaign = asyncHandler(async (req: Request, res: Response) =
 
   const campaign = await campaignService.resumeCampaign(id, organizationId);
 
-  // Resume the queue
+  // Resume the queue, and re-enqueue anything still PENDING — covers jobs
+  // that never made it back into Bull (e.g. the process restarted between
+  // pause and resume) as well as messages the rate limiter deferred.
+  // addCampaignMessages() only picks up PENDING messages, so this is a safe
+  // no-op for anything already queued/active.
   await messageQueueService.resumeQueue();
+  await messageQueueService.addCampaignMessages(id);
 
   logger.info('Campaign resumed:', id);
 
@@ -182,6 +187,37 @@ export const resumeCampaign = asyncHandler(async (req: Request, res: Response) =
     success: true,
     data: campaign,
     message: 'Campaign resumed successfully',
+  });
+});
+
+/**
+ * Retry all failed messages in a campaign
+ * POST /api/campaigns/:id/retry-failed
+ */
+export const retryFailedMessages = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const organizationId = req.user!.organizationId;
+
+  const whatsappService = getWhatsAppService(organizationId);
+  if (!whatsappService || !whatsappService.getStatus().isReady) {
+    return res.status(400).json({
+      success: false,
+      message: 'WhatsApp is not connected. Set it up on the WhatsApp Setup page before retrying messages.',
+    });
+  }
+
+  const retriedCount = await campaignService.retryFailedMessages(id, organizationId);
+
+  if (retriedCount > 0) {
+    await messageQueueService.addCampaignMessages(id);
+  }
+
+  logger.info('Failed messages retried for campaign:', id, retriedCount);
+
+  res.json({
+    success: true,
+    message: retriedCount > 0 ? `${retriedCount} failed message(s) queued for retry` : 'No retriable failed messages found',
+    data: { retriedCount },
   });
 });
 

@@ -392,7 +392,9 @@ export class CampaignService {
 
         return prisma.message.create({
           data: {
+            organizationId,
             campaignId: campaign.id,
+            templateId: campaign.templateId,
             attendeeId: attendee.id,
             recipient: normalizedPhone || attendee.phone!,
             subject,
@@ -472,6 +474,34 @@ export class CampaignService {
 
     logger.info('Campaign resumed:', campaignId);
     return campaign;
+  }
+
+  /**
+   * Reset a campaign's FAILED messages back to PENDING so they can be
+   * re-queued. Excludes permanently-invalid phone numbers — normalization
+   * will fail identically on retry, so resetting those would just waste a
+   * send slot and immediately re-fail (see startCampaign).
+   */
+  async retryFailedMessages(campaignId: string, organizationId: string): Promise<number> {
+    logger.info('Retrying failed messages for campaign:', campaignId);
+
+    await this.getCampaignById(campaignId, organizationId);
+
+    const result = await prisma.message.updateMany({
+      where: {
+        campaignId,
+        status: MessageStatus.FAILED,
+        NOT: { errorMessage: { startsWith: 'Invalid phone number' } },
+      },
+      data: {
+        status: MessageStatus.PENDING,
+        errorMessage: null,
+        failedAt: null,
+      },
+    });
+
+    logger.info(`Reset ${result.count} failed message(s) to pending for retry: ${campaignId}`);
+    return result.count;
   }
 
   /**

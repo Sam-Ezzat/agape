@@ -76,18 +76,30 @@ export class MessageQueueService {
    */
   async addMessage(message: MessageJob, delay: number = 0): Promise<Job<MessageJob>> {
     logger.debug(`Adding message to queue: ${message.messageId}`);
-    
+
+    // WHY: jobId is always the messageId, reused across retries — a message
+    // can be sent, fail, and be retried multiple times over its life. Bull's
+    // add() is a silent no-op if a job with that ID already exists in ANY
+    // state, and this queue keeps failed jobs forever (removeOnFail: false,
+    // for post-mortem analysis) — so without clearing the old job first,
+    // every retry would silently do nothing: the DB row flips back to
+    // PENDING/QUEUED but the message never actually gets reprocessed.
+    const existing = await this.queue.getJob(message.messageId);
+    if (existing) {
+      await existing.remove();
+    }
+
     // Update message status to QUEUED
     await prisma.message.update({
       where: { id: message.messageId },
       data: { status: MessageStatus.QUEUED },
     });
-    
+
     const job = await this.queue.add(message, {
       delay,
       jobId: message.messageId, // Use messageId as jobId for easy tracking
     });
-    
+
     return job;
   }
   

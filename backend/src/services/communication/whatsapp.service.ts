@@ -69,6 +69,18 @@ export interface WarmupInfo {
   hoursSinceActive: number | null;
 }
 
+// WHY: A distinct type from a generic send failure — hitting the hourly/daily
+// cap isn't a real delivery failure, it's "try again once the window opens."
+// messageProcessing.service.ts checks for this specifically so a rate-limited
+// send gets deferred and retried later instead of burning one of Bull's
+// limited retry attempts and ending up permanently marked FAILED.
+export class RateLimitExceededError extends Error {
+  constructor() {
+    super('Rate limit exceeded');
+    this.name = 'RateLimitExceededError';
+  }
+}
+
 export interface RateLimitStatus {
   hourlyCount: number;
   dailyCount: number;
@@ -590,7 +602,7 @@ export class WhatsAppService {
 
     // Check rate limits
     if (!this.checkRateLimit()) {
-      throw new Error('Rate limit exceeded');
+      throw new RateLimitExceededError();
     }
 
     // Validate/normalize before touching WhatsApp — an unnormalized number
@@ -629,7 +641,7 @@ export class WhatsAppService {
 
     // Check rate limits
     if (!this.checkRateLimit()) {
-      throw new Error('Rate limit exceeded');
+      throw new RateLimitExceededError();
     }
 
     // Validate/normalize before touching WhatsApp — see sendMessage() for why.
