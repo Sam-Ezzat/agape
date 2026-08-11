@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Edit2, Trash2, FileText } from 'lucide-react';
 import { communicationApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
+import TemplateFormModal from '@/components/TemplateFormModal';
 import type { MessageTemplate, TemplateCategory } from '@/types/communication';
 
 export default function TemplatesPage() {
@@ -53,12 +54,12 @@ export default function TemplatesPage() {
       CHECK_IN: 'bg-green-100 text-green-800',
       PAYMENT: 'bg-yellow-100 text-yellow-800',
       WELCOME: 'bg-purple-100 text-purple-800',
-      REMINDER: 'bg-orange-100 text-orange-800',
-      ANNOUNCEMENT: 'bg-pink-100 text-pink-800',
-      FOLLOW_UP: 'bg-indigo-100 text-indigo-800',
-      OTHER: 'bg-gray-100 text-gray-800',
+      SCHEDULE: 'bg-orange-100 text-orange-800',
+      TRANSPORTATION: 'bg-indigo-100 text-indigo-800',
+      EMERGENCY: 'bg-red-100 text-red-800',
+      GENERAL: 'bg-gray-100 text-gray-800',
     };
-    return colors[category] || colors.OTHER;
+    return colors[category] || colors.GENERAL;
   };
 
   if (loading) {
@@ -102,14 +103,14 @@ export default function TemplatesPage() {
             className="input w-64"
           >
             <option value="">All Categories</option>
+            <option value="GENERAL">General</option>
             <option value="ROOM_ASSIGNMENT">Room Assignment</option>
             <option value="CHECK_IN">Check-in</option>
             <option value="PAYMENT">Payment</option>
             <option value="WELCOME">Welcome</option>
-            <option value="REMINDER">Reminder</option>
-            <option value="ANNOUNCEMENT">Announcement</option>
-            <option value="FOLLOW_UP">Follow-up</option>
-            <option value="OTHER">Other</option>
+            <option value="SCHEDULE">Schedule</option>
+            <option value="TRANSPORTATION">Transportation</option>
+            <option value="EMERGENCY">Emergency</option>
           </select>
         </div>
       </div>
@@ -200,40 +201,12 @@ export default function TemplatesPage() {
         </div>
       )}
 
-      {/* Template Modal - TODO: Create separate component */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <h2 className="text-2xl font-bold mb-4">
-                {editingTemplate ? 'Edit Template' : 'New Template'}
-              </h2>
-              <p className="text-gray-600 mb-6">
-                Use <code className="bg-gray-100 px-2 py-1 rounded text-sm">{`{{variableName}}`}</code> for dynamic values
-              </p>
-              
-              {/* TODO: Add form */}
-              <div className="text-center text-gray-500 py-8">
-                Template form coming soon...
-                <br />
-                Variables: fullName, phone, email, roomNumber, buildingName, etc.
-              </div>
-              
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setShowModal(false)}
-                  className="btn-secondary flex-1"
-                >
-                  Cancel
-                </button>
-                <button className="btn-primary flex-1">
-                  {editingTemplate ? 'Update' : 'Create'} Template
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <TemplateFormModal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        onSaved={loadTemplates}
+        template={editingTemplate}
+      />
     </div>
   );
 }

@@ -4,15 +4,15 @@
  * Types for message templates, campaigns, and WhatsApp integration
  */
 
-export type TemplateCategory = 
+export type TemplateCategory =
   | 'ROOM_ASSIGNMENT'
   | 'CHECK_IN'
   | 'PAYMENT'
+  | 'GENERAL'
+  | 'EMERGENCY'
   | 'WELCOME'
-  | 'REMINDER'
-  | 'ANNOUNCEMENT'
-  | 'FOLLOW_UP'
-  | 'OTHER';
+  | 'SCHEDULE'
+  | 'TRANSPORTATION';
 
 export type CampaignStatus = 
   | 'DRAFT'
@@ -129,11 +129,13 @@ export interface CommunicationSettings {
 export interface WhatsAppStatus {
   isConnected: boolean;
   isReady: boolean;
+  isInitializing: boolean;
   sessionActive: boolean;
   qrCode?: string;
   lastActivity?: string;
   loadingPercent?: number;
   loadingMessage?: string;
+  initializationError?: string;
   rateLimit?: {
     hourlyCount: number;
     dailyCount: number;
@@ -170,7 +172,7 @@ export interface MessageStats {
 export interface CreateTemplateDTO {
   name: string;
   description?: string;
-  category: string;
+  category: TemplateCategory;
   subject?: string;
   body: string;
   language?: string;
