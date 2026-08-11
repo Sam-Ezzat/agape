@@ -517,8 +517,9 @@ export default function CampaignsPage() {
                         className="input w-full"
                       >
                         <option value="">All</option>
-                        <option value="male">Male</option>
-                        <option value="female">Female</option>
+                        <option value="MALE">Male</option>
+                        <option value="FEMALE">Female</option>
+                        <option value="OTHER">Other</option>
                       </select>
                     </div>
 
@@ -535,9 +536,9 @@ export default function CampaignsPage() {
                         className="input w-full"
                       >
                         <option value="">All</option>
-                        <option value="paid">Paid</option>
-                        <option value="pending">Pending</option>
-                        <option value="unpaid">Unpaid</option>
+                        <option value="PENDING">Pending</option>
+                        <option value="CONFIRMED">Confirmed</option>
+                        <option value="REJECTED">Rejected</option>
                       </select>
                     </div>
 
