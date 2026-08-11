@@ -151,7 +151,12 @@ export class MessageQueueService {
     });
     
     if (messages.length === 0) {
-      logger.warn(`No pending messages found for campaign: ${campaignId}`);
+      // WHY debug not warn: this is the expected steady-state for a campaign
+      // that's fully queued/sent, and is now also hit routinely by
+      // messageProcessing.service.ts's reconciliation sweep — logging it as
+      // a warning would spam the logs every few minutes for every active
+      // campaign with nothing left to do.
+      logger.debug(`No pending messages found for campaign: ${campaignId}`);
       return 0;
     }
     

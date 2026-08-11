@@ -222,18 +222,26 @@ export default function CampaignsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Redis Warning */}
-      {campaigns.some(c => c.status === 'IN_PROGRESS' && c.totalSent === 0) && (
+      {/* Stalled Campaign Warning */}
+      {campaigns.some(c =>
+        c.status === 'IN_PROGRESS' &&
+        c.totalSent === 0 &&
+        c.startedAt &&
+        Date.now() - new Date(c.startedAt).getTime() > 3 * 60 * 1000
+      ) && (
         <div className="card bg-yellow-50 border-yellow-200">
           <div className="flex items-start gap-3">
             <div className="flex-shrink-0 text-yellow-600 text-2xl">⚠️</div>
             <div className="flex-1">
               <h3 className="font-semibold text-yellow-900 mb-1">Campaign Processing Issue</h3>
               <p className="text-sm text-yellow-800 mb-2">
-                You have campaigns marked as "In Progress" but no messages are being sent. This usually means Redis is not running.
+                A campaign has been "In Progress" for a few minutes with nothing sent yet. This can happen if the
+                server restarted right after starting it — the backend automatically re-checks and re-queues
+                stranded campaigns every few minutes, so this usually resolves itself shortly.
               </p>
-              <p className="text-xs text-yellow-700 bg-yellow-100 p-2 rounded font-mono">
-                To fix: Run <strong>redis-server</strong> in a terminal, then restart your backend server.
+              <p className="text-xs text-yellow-700 bg-yellow-100 p-2 rounded">
+                Still stuck after a few minutes? Try <strong>Pause</strong> then <strong>Resume</strong> on the
+                campaign below, and confirm WhatsApp still shows Connected on the Setup page.
               </p>
             </div>
           </div>
@@ -410,9 +418,10 @@ export default function CampaignsPage() {
                 </div>
                 
                 {/* Status Notes */}
-                {campaign.status === 'IN_PROGRESS' && campaign.totalSent === 0 && (
+                {campaign.status === 'IN_PROGRESS' && campaign.totalSent === 0 && campaign.startedAt &&
+                  Date.now() - new Date(campaign.startedAt).getTime() > 3 * 60 * 1000 && (
                   <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-                    ⚠️ Campaign is running but no messages sent yet. Make sure Redis is running: <code className="bg-yellow-100 px-1 rounded">redis-server</code>
+                    ⚠️ Nothing sent yet a few minutes in — should self-recover shortly. If it doesn't, try Pause then Resume.
                   </div>
                 )}
               </div>

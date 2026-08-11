@@ -6,7 +6,7 @@
  */
 
 import { Job } from 'bull';
-import { MessageStatus } from '@prisma/client';
+import { CampaignStatus, MessageStatus } from '@prisma/client';
 import { Server as SocketServer } from 'socket.io';
 import prisma from '@/utils/prisma-client';
 import logger from '@/utils/logger';
@@ -15,6 +15,17 @@ import { getWhatsAppService } from './whatsapp.registry';
 import { campaignService } from './campaign.service';
 import { RateLimitExceededError } from './whatsapp.service';
 import { InvalidPhoneNumberError } from '@/utils/phone';
+
+// WHY: startCampaign() commits the campaign's IN_PROGRESS status and its
+// Message rows in one step, then separately enqueues them into Bull in a
+// later step — not atomic. If the process is interrupted between those two
+// steps (a Render cold-start delay, a deploy restarting the container, etc.)
+// a campaign can end up genuinely stuck: IN_PROGRESS in the DB with PENDING
+// messages that were never actually queued, and nothing left to trigger
+// them. This periodic sweep catches and self-heals that — addCampaignMessages
+// only ever picks up PENDING messages, so it's a safe no-op when there's
+// nothing stranded.
+const RECONCILIATION_INTERVAL_MS = 3 * 60 * 1000;
 
 // WHY: distinct from a real send failure — WhatsApp being briefly
 // disconnected (e.g. mid-reconnect) shouldn't burn one of Bull's limited
@@ -78,10 +89,36 @@ export class MessageProcessingService {
     queue.on('active', (job: Job<MessageJob>) => {
       logger.debug(`Job active: ${job.id}`);
     });
-    
+
+    setInterval(() => {
+      this.reconcileStrandedCampaigns().catch((error) => {
+        logger.error('Campaign reconciliation sweep failed:', error);
+      });
+    }, RECONCILIATION_INTERVAL_MS);
+
     logger.info('Message processor initialized');
   }
-  
+
+  /**
+   * Find IN_PROGRESS campaigns and re-run addCampaignMessages for each —
+   * a no-op if everything's already queued, but recovers any campaign whose
+   * messages were created but never actually made it into Bull. See the
+   * RECONCILIATION_INTERVAL_MS comment for why this can happen.
+   */
+  private async reconcileStrandedCampaigns(): Promise<void> {
+    const activeCampaigns = await prisma.messageCampaign.findMany({
+      where: { status: CampaignStatus.IN_PROGRESS },
+      select: { id: true },
+    });
+
+    for (const campaign of activeCampaigns) {
+      const added = await messageQueueService.addCampaignMessages(campaign.id);
+      if (added > 0) {
+        logger.warn(`Reconciliation: re-queued ${added} stranded pending message(s) for campaign ${campaign.id}`);
+      }
+    }
+  }
+
   /**
    * Process a single message job
    */

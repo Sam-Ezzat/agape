@@ -8,6 +8,7 @@ import { PrismaClient, CampaignStatus, MessageStatus, MessageChannel } from '@pr
 import logger from '@/utils/logger';
 import { templateService } from './template.service';
 import { normalizePhoneNumber, InvalidPhoneNumberError } from '@/utils/phone';
+import { AppError } from '@/middleware/errorHandler';
 
 const prisma = new PrismaClient();
 
@@ -122,12 +123,12 @@ export class CampaignService {
     });
 
     if (!campaign) {
-      throw new Error(`Campaign not found: ${id}`);
+      throw new AppError(404, `Campaign not found: ${id}`);
     }
 
     // Only allow deletion of draft or cancelled campaigns
     if (campaign.status === CampaignStatus.IN_PROGRESS) {
-      throw new Error('Cannot delete campaign in progress. Pause or cancel it first.');
+      throw new AppError(400, 'Cannot delete campaign in progress. Pause or cancel it first.');
     }
 
     await prisma.messageCampaign.delete({
@@ -183,7 +184,7 @@ export class CampaignService {
     });
 
     if (!campaign) {
-      throw new Error(`Campaign not found: ${id}`);
+      throw new AppError(404, `Campaign not found: ${id}`);
     }
 
     return campaign;
@@ -350,19 +351,19 @@ export class CampaignService {
 
     if (campaign.status !== CampaignStatus.DRAFT && campaign.status !== CampaignStatus.SCHEDULED) {
       if (campaign.status === CampaignStatus.IN_PROGRESS) {
-        throw new Error('Campaign is already running. Use Pause to stop it, or wait for it to complete.');
+        throw new AppError(400, 'Campaign is already running. Use Pause to stop it, or wait for it to complete.');
       }
       if (campaign.status === CampaignStatus.PAUSED) {
-        throw new Error('Campaign is paused. Use Resume to continue, or Cancel to stop it.');
+        throw new AppError(400, 'Campaign is paused. Use Resume to continue, or Cancel to stop it.');
       }
-      throw new Error(`Cannot start campaign with status: ${campaign.status}`);
+      throw new AppError(400, `Cannot start campaign with status: ${campaign.status}`);
     }
 
     // Get recipients (scoped to org)
     const recipients = await this.filterRecipients(campaign.targetFilter, organizationId);
 
     if (recipients.length === 0) {
-      throw new Error('No recipients found for campaign');
+      throw new AppError(400, 'No recipients found for campaign');
     }
 
     // Create messages for all recipients. Numbers that can't be normalized to a
