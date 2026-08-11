@@ -672,23 +672,32 @@ interface CampaignMessagesModalProps {
   onClose: () => void;
 }
 
+const MESSAGES_PAGE_SIZE = 50;
+
 function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<MessageStatus | ''>('FAILED');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     loadMessages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId, statusFilter]);
+  }, [campaignId, statusFilter, page]);
+
+  const handleStatusFilterChange = (value: MessageStatus | '') => {
+    setStatusFilter(value);
+    setPage(1);
+  };
 
   const loadMessages = async () => {
     try {
       setLoading(true);
       const response = await communicationApi.campaigns.getMessages(campaignId, {
         status: statusFilter || undefined,
-        limit: 100,
+        limit: MESSAGES_PAGE_SIZE,
+        offset: (page - 1) * MESSAGES_PAGE_SIZE,
       });
       setMessages(response.data || []);
       setTotal(response.total ?? (response.data || []).length);
@@ -698,6 +707,10 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
       setLoading(false);
     }
   };
+
+  const totalPages = Math.max(1, Math.ceil(total / MESSAGES_PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : (page - 1) * MESSAGES_PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * MESSAGES_PAGE_SIZE, total);
 
   const handleRetryMessage = async (id: string) => {
     try {
@@ -741,7 +754,7 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
           <label className="text-sm font-medium text-gray-700">Filter:</label>
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as MessageStatus | '')}
+            onChange={(e) => handleStatusFilterChange(e.target.value as MessageStatus | '')}
             className="input w-48"
           >
             <option value="">All</option>
@@ -750,7 +763,11 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
             <option value="PENDING">Pending</option>
             <option value="QUEUED">Queued</option>
           </select>
-          {!loading && <span className="text-sm text-gray-500">{total} message(s)</span>}
+          {!loading && (
+            <span className="text-sm text-gray-500">
+              {total === 0 ? '0 message(s)' : `Showing ${rangeStart}-${rangeEnd} of ${total}`}
+            </span>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
@@ -795,6 +812,26 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
             </div>
           )}
         </div>
+
+        {totalPages > 1 && (
+          <div className="px-6 py-3 border-t flex items-center justify-between">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1 || loading}
+              className="btn-secondary text-sm disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-gray-600">Page {page} of {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages || loading}
+              className="btn-secondary text-sm disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
