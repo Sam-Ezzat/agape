@@ -22,22 +22,17 @@ export default function WhatsAppSetupPage() {
 
   useEffect(() => {
     // Poll faster while a connection/loading is in progress, slower once settled
-    const isBusy = initializing || (status?.loadingPercent !== undefined && !status?.isReady);
+    const isBusy = initializing || status?.isInitializing || (status?.loadingPercent !== undefined && !status?.isReady);
     const interval = setInterval(loadStatus, isBusy ? 1000 : 3000);
     return () => clearInterval(interval);
-  }, [initializing, status?.loadingPercent, status?.isReady]);
+  }, [initializing, status?.isInitializing, status?.loadingPercent, status?.isReady]);
 
   const loadStatus = async () => {
     try {
       const response = await communicationApi.whatsapp.getStatus();
       setStatus(response.data);
       setLoading(false);
-
-      // Once the backend reports real progress (QR shown, loading, or ready),
-      // the button-level "initializing" spinner has served its purpose.
-      if (response.data.qrCode || response.data.loadingPercent !== undefined || response.data.isReady) {
-        setInitializing(false);
-      }
+      setInitializing(response.data.isInitializing);
     } catch (error) {
       // Silent fail for polling
       setLoading(false);
@@ -84,7 +79,7 @@ export default function WhatsAppSetupPage() {
 
   const isConnected = status?.isReady && status?.sessionActive;
   const hasQR = status?.qrCode;
-  const isLoadingSession = !isConnected && status?.loadingPercent !== undefined;
+  const isLoadingSession = !isConnected && status?.isInitializing;
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -128,8 +123,10 @@ export default function WhatsAppSetupPage() {
                     ? 'WhatsApp is ready to send messages'
                     : hasQR
                     ? 'Scan QR code below to connect'
+                    : status?.initializationError
+                    ? status.initializationError
                     : isLoadingSession
-                    ? `${status?.loadingMessage || 'Loading WhatsApp'}... ${status?.loadingPercent}%`
+                    ? `${status?.loadingMessage || 'Loading WhatsApp'}...`
                     : initializing
                     ? 'Starting connection...'
                     : 'Click Initialize to start connection'}
@@ -156,6 +153,12 @@ export default function WhatsAppSetupPage() {
               )}
             </div>
           </div>
+
+          {status?.initializationError && !isConnected && (
+            <div className="p-4 border border-red-200 bg-red-50 text-sm text-red-700 rounded-lg">
+              {status.initializationError}. Check the backend connection and try Initialize again.
+            </div>
+          )}
 
           {/* Rate Limits */}
           {status?.rateLimit && isConnected && (
@@ -222,16 +225,8 @@ export default function WhatsAppSetupPage() {
 
           {!hasQR && isLoadingSession && (
             <div className="py-12 max-w-md mx-auto">
-              <p className="text-gray-600 mb-4">
-                {status?.loadingMessage || 'Loading WhatsApp'}&hellip;
-              </p>
-              <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                <div
-                  className="bg-green-500 h-3 rounded-full transition-all duration-300"
-                  style={{ width: `${status?.loadingPercent ?? 0}%` }}
-                />
-              </div>
-              <p className="text-sm text-gray-500 mt-2">{status?.loadingPercent ?? 0}%</p>
+              <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mb-4"></div>
+              <p className="text-gray-600">{status?.loadingMessage || 'Loading WhatsApp'}&hellip;</p>
             </div>
           )}
 

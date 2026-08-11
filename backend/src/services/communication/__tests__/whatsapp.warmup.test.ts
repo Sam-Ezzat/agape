@@ -1,5 +1,50 @@
 import { describe, expect, it } from 'vitest';
-import { computeWarmupFactor } from '../whatsapp.service';
+import {
+  computeWarmupFactor,
+  isRecoverableSessionLogout,
+  isTransientInitializationError,
+} from '../whatsapp.service';
+
+describe('isTransientInitializationError', () => {
+  it('recognizes a bounded initialization timeout as retryable', () => {
+    expect(isTransientInitializationError(new Error('WhatsApp client initialization timed out after 45 seconds'))).toBe(true);
+  });
+
+  it('recognizes a stale session cleared after an expired-session logout as retryable', () => {
+    expect(
+      isTransientInitializationError(
+        new Error('WhatsApp session expired (stale session cleared); retrying with a fresh QR code')
+      )
+    ).toBe(true);
+  });
+
+  it('recognizes transient Baileys disconnect codes (timedOut/connectionClosed/restartRequired) as retryable', () => {
+    expect(isTransientInitializationError(new Error('WhatsApp disconnected during initialization (code 408)'))).toBe(true);
+    expect(isTransientInitializationError(new Error('WhatsApp disconnected during initialization (code 428)'))).toBe(true);
+    expect(isTransientInitializationError(new Error('WhatsApp disconnected during initialization (code 515)'))).toBe(true);
+  });
+
+  it('does not classify fatal disconnect codes as transient', () => {
+    expect(isTransientInitializationError(new Error('WhatsApp disconnected during initialization (code 403)'))).toBe(false);
+    expect(isTransientInitializationError(new Error('WhatsApp disconnected during initialization (code 500)'))).toBe(false);
+  });
+
+  it('does not classify unrelated startup failures as transient', () => {
+    expect(isTransientInitializationError(new Error('Failed to download attachment (HTTP 404)'))).toBe(false);
+  });
+});
+
+describe('isRecoverableSessionLogout', () => {
+  it('allows Baileys to reset an expired auth state after a loggedOut (401) disconnect', () => {
+    expect(isRecoverableSessionLogout(401)).toBe(true);
+  });
+
+  it('keeps genuine connection failures fatal during initialization', () => {
+    expect(isRecoverableSessionLogout(403)).toBe(false);
+    expect(isRecoverableSessionLogout(440)).toBe(false);
+    expect(isRecoverableSessionLogout(undefined)).toBe(false);
+  });
+});
 
 describe('computeWarmupFactor', () => {
   const now = new Date('2026-08-11T00:00:00.000Z');
