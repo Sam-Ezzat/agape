@@ -40,6 +40,7 @@ import type {
   MessageTemplate,
   MessageCampaign,
   Message,
+  MessageStatus,
   WhatsAppStatus,
   CampaignStats,
   MessageStats,
@@ -1127,6 +1128,19 @@ export const communicationApi = {
     logManual: async (dto: { attendeeId: string; templateId: string; body: string }): Promise<ApiResponse<Message>> => {
       try {
         const { data } = await apiClient.post('/communication/messages/manual', dto);
+        return data;
+      } catch (error) {
+        return handleApiError(error as Error);
+      }
+    },
+
+    getLastByAttendee: async (
+      attendeeIds: string[]
+    ): Promise<ApiResponse<Record<string, { status: MessageStatus; templateName: string | null; sentAt: string }>>> => {
+      try {
+        const { data } = await apiClient.get('/communication/messages/last-by-attendee', {
+          params: { attendeeIds: attendeeIds.join(',') },
+        });
         return data;
       } catch (error) {
         return handleApiError(error as Error);

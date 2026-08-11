@@ -8,13 +8,16 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
-import { attendeeApi, assignmentApi, excelApi } from '@/services/api.service';
+import { attendeeApi, assignmentApi, excelApi, communicationApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useSocket } from '@/hooks/useSocket';
 import { normalizePhoneToE164 } from '@/utils/phone';
 import SendWhatsAppModal from '@/components/SendWhatsAppModal';
 import WhatsAppIcon from '@/components/WhatsAppIcon';
 import type { Attendee, AttendeeFilters, ConferenceRole, Gender } from '@/types/api';
+import type { MessageStatus } from '@/types/communication';
+
+type LastMessageInfo = { status: MessageStatus; templateName: string | null; sentAt: string };
 
 export default function AttendeesPage() {
   const [attendees, setAttendees] = useState<Attendee[]>([]);
@@ -32,6 +35,7 @@ export default function AttendeesPage() {
   const [assignedWarningAttendee, setAssignedWarningAttendee] = useState<Attendee | null>(null);
   const [unassigning, setUnassigning] = useState(false);
   const [whatsappAttendee, setWhatsappAttendee] = useState<Attendee | null>(null);
+  const [lastMessageByAttendee, setLastMessageByAttendee] = useState<Record<string, LastMessageInfo>>({});
   const socket = useSocket();
   const navigate = useNavigate();
 
@@ -133,11 +137,65 @@ export default function AttendeesPage() {
       setAttendees(response.data);
       setTotalPages(response.pagination.pages);
       setTotalCount(response.pagination.total);
+      loadLastMessages(response.data.map((a) => a.id));
     } catch (error) {
       toastError('Failed to load attendees');
     } finally {
       setLoading(false);
     }
+  };
+
+  // WHY: fetched separately from the main attendee list (rather than joined
+  // server-side into attendeeApi.list) so this stays a communication-module
+  // concern — only needs the current page's ids, one batched query either way.
+  const loadLastMessages = async (attendeeIds: string[]) => {
+    if (attendeeIds.length === 0) {
+      setLastMessageByAttendee({});
+      return;
+    }
+    try {
+      const response = await communicationApi.messages.getLastByAttendee(attendeeIds);
+      setLastMessageByAttendee(response.data || {});
+    } catch (error) {
+      // Non-critical — the two columns just show defaults if this fails.
+      setLastMessageByAttendee({});
+    }
+  };
+
+  // WHY: collapses the full MessageStatus enum down to the 3 states that
+  // actually matter to an admin scanning this list — Sent/Pending/Failed —
+  // rather than surfacing internal states like QUEUED/SENDING/DELIVERED/READ.
+  const getLastMessageStatusBadge = (status?: MessageStatus) => {
+    if (!status) {
+      return <span className="text-sm text-gray-400">—</span>;
+    }
+    if (status === 'SENT' || status === 'DELIVERED' || status === 'READ') {
+      return (
+        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+          Sent
+        </span>
+      );
+    }
+    if (status === 'FAILED') {
+      return (
+        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+          Failed
+        </span>
+      );
+    }
+    if (status === 'CANCELLED') {
+      return (
+        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+          Cancelled
+        </span>
+      );
+    }
+    // PENDING, QUEUED, SENDING
+    return (
+      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
+        Pending
+      </span>
+    );
   };
 
   const handleDelete = (attendee: Attendee) => {
@@ -578,6 +636,8 @@ export default function AttendeesPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Template</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Message Status</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
@@ -626,6 +686,12 @@ export default function AttendeesPage() {
                             Not Checked In
                           </span>
                         )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                        {lastMessageByAttendee[attendee.id]?.templateName || 'No Template'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {getLastMessageStatusBadge(lastMessageByAttendee[attendee.id]?.status)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                         {attendee.phone && (

@@ -23,14 +23,15 @@ export type CampaignStatus =
   | 'CANCELLED'
   | 'FAILED';
 
-export type MessageStatus = 
+export type MessageStatus =
   | 'PENDING'
   | 'QUEUED'
   | 'SENDING'
   | 'SENT'
   | 'DELIVERED'
   | 'READ'
-  | 'FAILED';
+  | 'FAILED'
+  | 'CANCELLED';
 
 export type MessageChannel = 'WHATSAPP';
 

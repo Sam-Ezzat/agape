@@ -741,6 +741,7 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
       DELIVERED: { bg: 'bg-green-100', text: 'text-green-800' },
       READ: { bg: 'bg-green-100', text: 'text-green-800' },
       FAILED: { bg: 'bg-red-100', text: 'text-red-800' },
+      CANCELLED: { bg: 'bg-gray-100', text: 'text-gray-500' },
     };
     const badge = badges[status] || badges.PENDING;
     return (

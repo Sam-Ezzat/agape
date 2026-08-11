@@ -10,6 +10,7 @@ const router = Router();
 // Message queries
 router.get('/', messageController.getMessages);
 router.get('/stats', messageController.getMessageStats);
+router.get('/last-by-attendee', messageController.getLastMessagesByAttendee);
 router.get('/:id', messageController.getMessageById);
 
 // Message actions

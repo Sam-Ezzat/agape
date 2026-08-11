@@ -153,6 +153,48 @@ export const retryMessage = asyncHandler(async (req: Request, res: Response) => 
 });
 
 /**
+ * Get each given attendee's most recent message (status + template name) —
+ * used by the Attendees list to show "last template sent" / "last message
+ * status" columns without an N+1 query per row.
+ * GET /api/messages/last-by-attendee?attendeeIds=id1,id2,...
+ */
+export const getLastMessagesByAttendee = asyncHandler(async (req: Request, res: Response) => {
+  const organizationId = req.user!.organizationId;
+  const attendeeIdsParam = req.query.attendeeIds;
+
+  const attendeeIds = (typeof attendeeIdsParam === 'string' ? attendeeIdsParam.split(',') : [])
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  if (attendeeIds.length === 0) {
+    return res.json({ success: true, data: {} });
+  }
+
+  // WHY: `distinct` combined with `orderBy` gives one row per attendee — the
+  // most recent one, per Prisma's documented distinct-after-order semantics.
+  const lastMessages = await prisma.message.findMany({
+    where: { attendeeId: { in: attendeeIds }, organizationId },
+    orderBy: { createdAt: 'desc' },
+    distinct: ['attendeeId'],
+    select: {
+      attendeeId: true,
+      status: true,
+      createdAt: true,
+      template: { select: { name: true } },
+    },
+  });
+
+  const data = Object.fromEntries(
+    lastMessages.map((m) => [
+      m.attendeeId,
+      { status: m.status, templateName: m.template?.name ?? null, sentAt: m.createdAt },
+    ])
+  );
+
+  res.json({ success: true, data });
+});
+
+/**
  * Log a message sent manually via the "copy to WhatsApp" flow (an admin
  * picks a template, reviews/edits the rendered text, and sends it themselves
  * through wa.me — no automation, so no ban risk, but we still want it
