@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Building2, DoorOpen } from 'lucide-react';
+import { Building2, DoorOpen, BedDouble, Users } from 'lucide-react';
 import { buildingApi, assignmentApi } from '@/services/api.service';
 import { toastError } from '@/services/toast.service';
 import type { Building, Room, RoomAssignment } from '@/types/api';
@@ -60,6 +60,19 @@ export default function BuildingCapacityPage() {
   const selectedBuilding = buildings.find(b => b.id === selectedBuildingId) || null;
   const selectedBuildingRooms = selectedBuilding ? getRoomsForBuilding(selectedBuilding) : [];
 
+  const overallStats = buildings.reduce(
+    (totals, building) => {
+      const stats = getBuildingStats(building);
+      return {
+        totalRooms: totals.totalRooms + stats.totalRooms,
+        totalCapacity: totals.totalCapacity + stats.totalCapacity,
+        occupied: totals.occupied + stats.occupied,
+      };
+    },
+    { totalRooms: 0, totalCapacity: 0, occupied: 0 }
+  );
+  const availableBeds = Math.max(overallStats.totalCapacity - overallStats.occupied, 0);
+
   if (loading) {
     return (
       <div className="text-center py-12">
@@ -76,7 +89,70 @@ export default function BuildingCapacityPage() {
         <p className="text-gray-600 mt-1">Select a building to view its rooms and current occupancy</p>
       </div>
 
-      <div className="h-[calc(100vh-12rem)] flex gap-4">
+      {/* Overview Stats */}
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="card bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-blue-100 text-sm font-medium">Total Buildings</p>
+              <p className="text-3xl font-bold mt-2">{buildings.length}</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-3">
+              <Building2 className="w-8 h-8" />
+            </div>
+          </div>
+        </div>
+
+        <div className="card bg-gradient-to-br from-green-500 to-green-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-green-100 text-sm font-medium">Total Rooms</p>
+              <p className="text-3xl font-bold mt-2">{overallStats.totalRooms}</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-3">
+              <DoorOpen className="w-8 h-8" />
+            </div>
+          </div>
+        </div>
+
+        <div className="card bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-purple-100 text-sm font-medium">Total Capacity</p>
+              <p className="text-3xl font-bold mt-2">{overallStats.totalCapacity}</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-3">
+              <BedDouble className="w-8 h-8" />
+            </div>
+          </div>
+          <div className="mt-4 text-sm">
+            <span className="text-purple-100">Available: </span>
+            <span className="font-semibold">{availableBeds}</span>
+          </div>
+        </div>
+
+        <div className="card bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-orange-100 text-sm font-medium">Occupied Beds</p>
+              <p className="text-3xl font-bold mt-2">{overallStats.occupied}</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-3">
+              <Users className="w-8 h-8" />
+            </div>
+          </div>
+          <div className="mt-4 text-sm">
+            <span className="text-orange-100">Occupancy: </span>
+            <span className="font-semibold">
+              {overallStats.totalCapacity > 0
+                ? `${((overallStats.occupied / overallStats.totalCapacity) * 100).toFixed(1)}%`
+                : '0%'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="h-[calc(100vh-20rem)] flex gap-4">
         {/* LEFT PANEL - Buildings */}
         <div className="w-1/3 min-w-[320px] flex flex-col bg-white rounded-lg shadow-sm border">
           <div className="p-4 border-b">
