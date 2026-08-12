@@ -8,14 +8,15 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Building2, DoorOpen, BedDouble, Users } from 'lucide-react';
-import { buildingApi, assignmentApi } from '@/services/api.service';
+import { Building2, DoorOpen, BedDouble, Users, UserCheck } from 'lucide-react';
+import { buildingApi, assignmentApi, attendeeApi } from '@/services/api.service';
 import { toastError } from '@/services/toast.service';
 import type { Building, Room, RoomAssignment } from '@/types/api';
 
 export default function BuildingCapacityPage() {
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [assignments, setAssignments] = useState<RoomAssignment[]>([]);
+  const [totalAttendees, setTotalAttendees] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
 
@@ -26,12 +27,14 @@ export default function BuildingCapacityPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [buildingsRes, assignmentsRes] = await Promise.all([
+      const [buildingsRes, assignmentsRes, attendeesRes] = await Promise.all([
         buildingApi.list(),
         assignmentApi.list({ limit: '9999' }),
+        attendeeApi.list({ limit: '1' }),
       ]);
       setBuildings(buildingsRes.data);
       setAssignments(assignmentsRes.data);
+      setTotalAttendees(attendeesRes.pagination.total);
     } catch (error) {
       toastError('Failed to load building capacity data');
     } finally {
@@ -90,7 +93,19 @@ export default function BuildingCapacityPage() {
       </div>
 
       {/* Overview Stats */}
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="card bg-gradient-to-br from-teal-500 to-teal-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-teal-100 text-sm font-medium">Total Attendees</p>
+              <p className="text-3xl font-bold mt-2">{totalAttendees}</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-3">
+              <UserCheck className="w-8 h-8" />
+            </div>
+          </div>
+        </div>
+
         <div className="card bg-gradient-to-br from-blue-500 to-blue-600 text-white">
           <div className="flex items-center justify-between">
             <div>
