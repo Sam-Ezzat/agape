@@ -10,7 +10,13 @@ import { FormEvent, useEffect, useState } from 'react';
 import { Plus, Trash2, Eye, EyeOff } from 'lucide-react';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useAuth } from '@/contexts/AuthContext';
-import { userApi, OrgUser } from '@/services/api.service';
+import { userApi, OrgUser, UserRole } from '@/services/api.service';
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  ADMIN: 'Admin',
+  MEMBER: 'Member',
+  CONFERENCE_HOUSE_MANAGER: 'Conference House Manager',
+};
 
 export default function UsersPage() {
   const { user: currentUser } = useAuth();
@@ -39,7 +45,7 @@ export default function UsersPage() {
     }
   };
 
-  const handleRoleChange = async (id: string, role: 'ADMIN' | 'MEMBER') => {
+  const handleRoleChange = async (id: string, role: UserRole) => {
     try {
       await userApi.updateRole(id, role);
       toastSuccess('Role updated');
@@ -139,11 +145,12 @@ export default function UsersPage() {
                       <select
                         value={u.role}
                         disabled={isSelf}
-                        onChange={(e) => handleRoleChange(u.id, e.target.value as 'ADMIN' | 'MEMBER')}
+                        onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
                         className="input py-1 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        <option value="ADMIN">Admin</option>
-                        <option value="MEMBER">Member</option>
+                        {Object.entries(ROLE_LABELS).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
                       </select>
                     </td>
                     <td className="px-4 py-3 text-gray-500">{new Date(u.createdAt).toLocaleDateString()}</td>
@@ -188,7 +195,7 @@ function AddUserModal({
 }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'ADMIN' | 'MEMBER'>('MEMBER');
+  const [role, setRole] = useState<UserRole>('MEMBER');
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -238,9 +245,10 @@ function AddUserModal({
 
           <div>
             <label className="label">Role</label>
-            <select value={role} onChange={(e) => setRole(e.target.value as 'ADMIN' | 'MEMBER')} className="input w-full">
+            <select value={role} onChange={(e) => setRole(e.target.value as UserRole)} className="input w-full">
               <option value="MEMBER">Member</option>
               <option value="ADMIN">Admin</option>
+              <option value="CONFERENCE_HOUSE_MANAGER">Conference House Manager</option>
             </select>
           </div>
 

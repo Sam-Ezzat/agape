@@ -21,6 +21,7 @@ import {
   Send,
   ChevronDown,
   LogOut,
+  PieChart,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -49,31 +50,44 @@ export default function Sidebar() {
 
   const isActive = (path: string) => location.pathname === path;
 
-  const navItems: NavItem[] = [
-    { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-    { path: '/attendees', icon: Users, label: 'Attendees' },
-    { path: '/check-in', icon: ClipboardCheck, label: 'Check-in' },
-    { path: '/assignments', icon: BedDouble, label: 'Assignments' },
-    { path: '/auto-assignment', icon: Zap, label: 'Auto-Assignment' },
-    { path: '/houses', icon: Home, label: 'Houses' },
-    { path: '/buildings', icon: Building2, label: 'Buildings' },
-    { path: '/floors', icon: Layers, label: 'Floors' },
-    { path: '/rooms', icon: DoorOpen, label: 'Rooms' },
-    ...(COMMUNICATION_ENABLED
-      ? [
+  // WHY: Conference House Managers are restricted to a single page (also
+  // enforced by a route redirect in App.tsx) — the sidebar mirrors that by
+  // showing nothing else.
+  const navItems: NavItem[] =
+    user?.role === 'CONFERENCE_HOUSE_MANAGER'
+      ? [{ path: '/building-capacity', icon: PieChart, label: 'Building Capacity' }]
+      : [
+          { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+          { path: '/attendees', icon: Users, label: 'Attendees' },
+          { path: '/check-in', icon: ClipboardCheck, label: 'Check-in' },
+          { path: '/assignments', icon: BedDouble, label: 'Assignments' },
+          { path: '/auto-assignment', icon: Zap, label: 'Auto-Assignment' },
+          { path: '/houses', icon: Home, label: 'Houses' },
           {
-            icon: MessageCircle,
-            label: 'WhatsApp',
+            icon: Building2,
+            label: 'Buildings',
             children: [
-              { path: '/communication/whatsapp', icon: MessageCircle, label: 'WhatsApp Setup' },
-              { path: '/communication/templates', icon: FileText, label: 'Templates' },
-              { path: '/communication/campaigns', icon: Send, label: 'Campaigns' },
+              { path: '/buildings', icon: Building2, label: 'Buildings' },
+              { path: '/building-capacity', icon: PieChart, label: 'Building Capacity' },
             ],
           } satisfies NavItem,
-        ]
-      : []),
-    ...(user?.role === 'ADMIN' ? [{ path: '/users', icon: Users, label: 'Users' }] : []),
-  ];
+          { path: '/floors', icon: Layers, label: 'Floors' },
+          { path: '/rooms', icon: DoorOpen, label: 'Rooms' },
+          ...(COMMUNICATION_ENABLED
+            ? [
+                {
+                  icon: MessageCircle,
+                  label: 'WhatsApp',
+                  children: [
+                    { path: '/communication/whatsapp', icon: MessageCircle, label: 'WhatsApp Setup' },
+                    { path: '/communication/templates', icon: FileText, label: 'Templates' },
+                    { path: '/communication/campaigns', icon: Send, label: 'Campaigns' },
+                  ],
+                } satisfies NavItem,
+              ]
+            : []),
+          ...(user?.role === 'ADMIN' ? [{ path: '/users', icon: Users, label: 'Users' }] : []),
+        ];
 
   const handleLogout = async () => {
     await logout();

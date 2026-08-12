@@ -104,11 +104,13 @@ const handleApiError = (error: AxiosError | Error) => {
  * Auth API
  * Backend routes: /api/auth
  */
+export type UserRole = 'ADMIN' | 'MEMBER' | 'CONFERENCE_HOUSE_MANAGER';
+
 export interface AuthUser {
   id: string;
   email: string;
   name: string;
-  role: 'ADMIN' | 'MEMBER';
+  role: UserRole;
   organizationId: string;
   organization: { id: string; name: string };
 }
@@ -142,7 +144,7 @@ export interface OrgUser {
   id: string;
   email: string;
   name: string;
-  role: 'ADMIN' | 'MEMBER';
+  role: UserRole;
   createdAt: string;
 }
 
@@ -151,11 +153,11 @@ export const userApi = {
     const { data } = await apiClient.get('/users');
     return data.data;
   },
-  create: async (payload: { name: string; email: string; role: 'ADMIN' | 'MEMBER' }): Promise<{ user: OrgUser; temporaryPassword: string }> => {
+  create: async (payload: { name: string; email: string; role: UserRole }): Promise<{ user: OrgUser; temporaryPassword: string }> => {
     const { data } = await apiClient.post('/users', payload);
     return data.data;
   },
-  updateRole: async (id: string, role: 'ADMIN' | 'MEMBER'): Promise<OrgUser> => {
+  updateRole: async (id: string, role: UserRole): Promise<OrgUser> => {
     const { data } = await apiClient.patch(`/users/${id}/role`, { role });
     return data.data;
   },

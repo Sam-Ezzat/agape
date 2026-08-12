@@ -61,6 +61,7 @@ model User {
 enum UserRole {
   ADMIN
   MEMBER
+  CONFERENCE_HOUSE_MANAGER
 }
 
 // WHY: Top-level entity representing the entire conference venue

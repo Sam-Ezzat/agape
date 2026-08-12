@@ -23,6 +23,7 @@ import AutoAssignmentPage from '@/pages/AutoAssignmentPage';
 import AutoAssignmentPreviewPage from '@/pages/AutoAssignmentPreviewPage';
 import HousesPage from '@/pages/HousesPage';
 import BuildingsPage from '@/pages/BuildingsPage';
+import BuildingCapacityPage from '@/pages/BuildingCapacityPage';
 import FloorsPage from '@/pages/FloorsPage';
 import RoomsPage from '@/pages/RoomsPage';
 import WhatsAppSetupPage from '@/pages/WhatsAppSetupPage';
@@ -49,6 +50,23 @@ function ProtectedLayout() {
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  // WHY: Conference House Managers are restricted to a single page — this
+  // renders a reduced route table so a direct URL to any other page (typed
+  // in the address bar, not just hidden from the sidebar) bounces back.
+  if (user.role === 'CONFERENCE_HOUSE_MANAGER') {
+    return (
+      <div className="flex min-h-screen bg-gray-50">
+        <Sidebar />
+        <main className="flex-1 ml-64 p-8">
+          <Routes>
+            <Route path="/building-capacity" element={<BuildingCapacityPage />} />
+            <Route path="*" element={<Navigate to="/building-capacity" replace />} />
+          </Routes>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -84,6 +102,7 @@ function ProtectedLayout() {
           {/* Infrastructure Management */}
           <Route path="/houses" element={<HousesPage />} />
           <Route path="/buildings" element={<BuildingsPage />} />
+          <Route path="/building-capacity" element={<BuildingCapacityPage />} />
           <Route path="/floors" element={<FloorsPage />} />
           <Route path="/rooms" element={<RoomsPage />} />
 

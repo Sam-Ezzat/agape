@@ -13,11 +13,11 @@ export const changePasswordSchema = z.object({
 export const createUserSchema = z.object({
   name: z.string().min(1).max(100),
   email: z.string().email('Invalid email address'),
-  role: z.enum(['ADMIN', 'MEMBER']),
+  role: z.enum(['ADMIN', 'MEMBER', 'CONFERENCE_HOUSE_MANAGER']),
 });
 
 export const updateUserRoleSchema = z.object({
-  role: z.enum(['ADMIN', 'MEMBER']),
+  role: z.enum(['ADMIN', 'MEMBER', 'CONFERENCE_HOUSE_MANAGER']),
 });
 
 export const userIdSchema = z.object({

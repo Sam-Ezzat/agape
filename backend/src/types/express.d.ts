@@ -5,10 +5,12 @@
  * every controller/service downstream can scope queries by organization.
  */
 
+import type { UserRole } from '@prisma/client';
+
 export interface AuthenticatedUser {
   id: string;
   organizationId: string;
-  role: 'ADMIN' | 'MEMBER';
+  role: UserRole;
   email: string;
 }
 
