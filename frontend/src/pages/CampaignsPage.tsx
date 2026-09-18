@@ -9,6 +9,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, Play, Pause, X, Eye, BarChart3, Users, AlertCircle, RefreshCw } from 'lucide-react';
 import { communicationApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
+import Pagination from '@/components/Pagination';
 import type { MessageCampaign, CampaignStatus, MessageTemplate, CreateCampaignDTO, Message, MessageStatus } from '@/types/communication';
 
 export default function CampaignsPage() {
@@ -825,22 +826,8 @@ function CampaignMessagesModal({ campaignId, onClose }: CampaignMessagesModalPro
         </div>
 
         {totalPages > 1 && (
-          <div className="px-6 py-3 border-t flex items-center justify-between">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1 || loading}
-              className="btn-secondary text-sm disabled:opacity-50"
-            >
-              Previous
-            </button>
-            <span className="text-sm text-gray-600">Page {page} of {totalPages}</span>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages || loading}
-              className="btn-secondary text-sm disabled:opacity-50"
-            >
-              Next
-            </button>
+          <div className="px-6 py-3 border-t flex justify-center">
+            <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} disabled={loading} />
           </div>
         )}
       </div>

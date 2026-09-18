@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Building2, DoorOpen, BedDouble, Users, UserCheck } from 'lucide-react';
+import { Building2, DoorOpen, BedDouble, Users, UserCheck, Printer } from 'lucide-react';
 import { buildingApi, assignmentApi, attendeeApi } from '@/services/api.service';
 import { toastError } from '@/services/toast.service';
 import type { Building, Room, RoomAssignment } from '@/types/api';
@@ -76,6 +76,157 @@ export default function BuildingCapacityPage() {
   );
   const availableBeds = Math.max(overallStats.totalCapacity - overallStats.occupied, 0);
 
+  const handlePrintExport = () => {
+    // Only rooms that actually have someone assigned, grouped by building then floor/room number
+    const occupiedRooms = [...buildings]
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      .flatMap(building =>
+        getRoomsForBuilding(building)
+          .filter(room => getRoomOccupancy(room.id) > 0)
+          .sort((a, b) => {
+            // Sort by room-number prefix (e.g. "C1"..."Cn") then by the trailing number
+            const [, prefixA = '', numA = ''] = a.roomNumber.match(/^([^\d]*)(\d*)/) || [];
+            const [, prefixB = '', numB = ''] = b.roomNumber.match(/^([^\d]*)(\d*)/) || [];
+            const prefixDiff = prefixA.localeCompare(prefixB, undefined, { sensitivity: 'base' });
+            if (prefixDiff !== 0) return prefixDiff;
+            const numDiff = (parseInt(numA, 10) || 0) - (parseInt(numB, 10) || 0);
+            return numDiff !== 0 ? numDiff : a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
+          })
+          .map(room => ({ building, room, assignments: getRoomAssignments(room.id) }))
+      );
+
+    if (occupiedRooms.length === 0) {
+      toastError('No occupied rooms to export');
+      return;
+    }
+
+    const escapeHtml = (value: string) =>
+      value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string));
+
+    // Scale font down a bit for rooms with many occupants so the list still fits the tile
+    const fontSizeForCount = (count: number) => {
+      if (count <= 4) return '19pt';
+      if (count <= 6) return '16pt';
+      if (count <= 9) return '13pt';
+      return '11pt';
+    };
+
+    const pages: string[] = [];
+    for (let i = 0; i < occupiedRooms.length; i += 4) {
+      const chunk = occupiedRooms.slice(i, i + 4);
+      const cells = chunk
+        .map(({ building, room, assignments: roomAssignments }) => {
+          const items = roomAssignments
+            .map(
+              a =>
+                `<li>${escapeHtml(a.attendee?.fullName || 'Unknown')}</li>`
+            )
+            .join('');
+          return `
+            <div class="cell">
+              <div class="cell-header">
+                <div class="room-number">${escapeHtml(room.roomNumber)}</div>
+                <div class="building-name">${escapeHtml(building.name)}${room.floor ? ` - Floor ${room.floor.floorNumber}` : ''}</div>
+              </div>
+              <ol class="attendee-list" style="font-size: ${fontSizeForCount(roomAssignments.length)}">
+                ${items}
+              </ol>
+            </div>`;
+        })
+        .join('');
+      const filler = '<div class="cell cell-empty"></div>'.repeat(4 - chunk.length);
+      pages.push(`<div class="page">${cells}${filler}</div>`);
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8" />
+<title>Room Assignments</title>
+<style>
+  @page { size: A4 portrait; margin: 8mm; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Tahoma, 'Segoe UI', Arial, sans-serif;
+    color: #111;
+  }
+  .page {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 6mm;
+    width: 100%;
+    height: 281mm;
+    page-break-after: always;
+  }
+  .page:last-child { page-break-after: auto; }
+  .cell {
+    border: 2.5px solid #222;
+    border-radius: 10px;
+    padding: 6mm;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .cell-empty { border: 2.5px dashed #ccc; }
+  .cell-header {
+    text-align: center;
+    border-bottom: 2px solid #222;
+    padding-bottom: 3mm;
+    margin-bottom: 3mm;
+  }
+  .room-number {
+    font-size: 34pt;
+    font-weight: 800;
+    line-height: 1.1;
+    direction: rtl;
+    unicode-bidi: plaintext;
+  }
+  .building-name {
+    font-size: 12pt;
+    color: #444;
+    margin-top: 1mm;
+    direction: rtl;
+    unicode-bidi: plaintext;
+  }
+  .attendee-list {
+    flex: 1;
+    margin: 0;
+    padding-inline-start: 8mm;
+    overflow: hidden;
+    direction: rtl;
+    unicode-bidi: plaintext;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+  .attendee-list li { margin-bottom: 1mm; }
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+${pages.join('\n')}
+<script>
+  window.onload = function () {
+    window.focus();
+    window.print();
+  };
+</script>
+</body>
+</html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toastError('Please allow pop-ups to export the print layout');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
   if (loading) {
     return (
       <div className="text-center py-12">
@@ -87,9 +238,19 @@ export default function BuildingCapacityPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900">Building Capacity</h1>
-        <p className="text-gray-600 mt-1">Select a building to view its rooms and current occupancy</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Building Capacity</h1>
+          <p className="text-gray-600 mt-1">Select a building to view its rooms and current occupancy</p>
+        </div>
+        <button
+          type="button"
+          onClick={handlePrintExport}
+          className="btn btn-primary flex items-center gap-2 whitespace-nowrap"
+        >
+          <Printer size={18} />
+          Export / Print
+        </button>
       </div>
 
       {/* Overview Stats */}

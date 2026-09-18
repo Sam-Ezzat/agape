@@ -21,14 +21,17 @@ const getServiceForRequest = (req: Request) =>
  */
 export const initializeWhatsApp = asyncHandler(async (req: Request, res: Response) => {
   const whatsappService = getServiceForRequest(req);
+  const organizationId = req.user!.organizationId;
 
-  await whatsappService.initialize();
+  void whatsappService.initialize().catch((error) => {
+    logger.error('WhatsApp background initialization failed', { organizationId, error });
+  });
 
-  logger.info('WhatsApp initialization started', { organizationId: req.user!.organizationId });
+  logger.info('WhatsApp initialization started', { organizationId });
 
-  res.json({
+  res.status(202).json({
     success: true,
-    message: 'WhatsApp initialization started. Please scan QR code.',
+    message: 'WhatsApp initialization started.',
   });
 });
 
