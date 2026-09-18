@@ -11,6 +11,7 @@ import { Plus, Trash2, Eye, EyeOff } from 'lucide-react';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useAuth } from '@/contexts/AuthContext';
 import { userApi, OrgUser, UserRole } from '@/services/api.service';
+import ConfirmDialog from '@/components/ConfirmDialog';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   ADMIN: 'Admin',
@@ -25,6 +26,8 @@ export default function UsersPage() {
   const [showModal, setShowModal] = useState(false);
   const [createdCredentials, setCreatedCredentials] = useState<{ email: string; password: string } | null>(null);
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [pendingRoleChange, setPendingRoleChange] = useState<{ user: OrgUser; role: UserRole } | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<OrgUser | null>(null);
 
   const isAdmin = currentUser?.role === 'ADMIN';
 
@@ -45,9 +48,12 @@ export default function UsersPage() {
     }
   };
 
-  const handleRoleChange = async (id: string, role: UserRole) => {
+  const confirmRoleChange = async () => {
+    if (!pendingRoleChange) return;
+    const { user, role } = pendingRoleChange;
+    setPendingRoleChange(null);
     try {
-      await userApi.updateRole(id, role);
+      await userApi.updateRole(user.id, role);
       toastSuccess('Role updated');
       loadUsers();
     } catch (err) {
@@ -55,8 +61,10 @@ export default function UsersPage() {
     }
   };
 
-  const handleRemove = async (user: OrgUser) => {
-    if (!confirm(`Remove ${user.name} from the organization?`)) return;
+  const confirmRemove = async () => {
+    if (!pendingRemoval) return;
+    const user = pendingRemoval;
+    setPendingRemoval(null);
     try {
       await userApi.remove(user.id);
       toastSuccess(`${user.name} removed`);
@@ -145,7 +153,7 @@ export default function UsersPage() {
                       <select
                         value={u.role}
                         disabled={isSelf}
-                        onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
+                        onChange={(e) => setPendingRoleChange({ user: u, role: e.target.value as UserRole })}
                         className="input py-1 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         {Object.entries(ROLE_LABELS).map(([value, label]) => (
@@ -156,7 +164,7 @@ export default function UsersPage() {
                     <td className="px-4 py-3 text-gray-500">{new Date(u.createdAt).toLocaleDateString()}</td>
                     <td className="px-4 py-3 text-right">
                       <button
-                        onClick={() => handleRemove(u)}
+                        onClick={() => setPendingRemoval(u)}
                         disabled={isSelf}
                         className="text-gray-400 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed"
                         title={isSelf ? "You can't remove your own account" : 'Remove user'}
@@ -180,6 +188,27 @@ export default function UsersPage() {
             setCreatedCredentials({ email, password });
             loadUsers();
           }}
+        />
+      )}
+
+      {pendingRoleChange && (
+        <ConfirmDialog
+          title="Change role"
+          message={`Change ${pendingRoleChange.user.name}'s role to ${ROLE_LABELS[pendingRoleChange.role]}?`}
+          confirmLabel="Change role"
+          onConfirm={confirmRoleChange}
+          onCancel={() => setPendingRoleChange(null)}
+        />
+      )}
+
+      {pendingRemoval && (
+        <ConfirmDialog
+          title="Remove user"
+          message={`Remove ${pendingRemoval.name} from the organization?`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={confirmRemove}
+          onCancel={() => setPendingRemoval(null)}
         />
       )}
     </div>
