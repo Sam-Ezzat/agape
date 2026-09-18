@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const updateProfileSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  email: z.string().email('Invalid email address').optional(),
+  email: z.string().email('Invalid email address').transform((email) => email.trim().toLowerCase()).optional(),
 });
 
 export const changePasswordSchema = z.object({
@@ -12,7 +12,7 @@ export const changePasswordSchema = z.object({
 
 export const createUserSchema = z.object({
   name: z.string().min(1).max(100),
-  email: z.string().email('Invalid email address'),
+  email: z.string().email('Invalid email address').transform((email) => email.trim().toLowerCase()),
   role: z.enum(['ADMIN', 'MEMBER', 'CONFERENCE_HOUSE_MANAGER']),
 });
 
