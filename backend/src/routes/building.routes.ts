@@ -76,6 +76,12 @@ router.patch(
   validate(updateBuildingSchema, 'body'),
   asyncHandler(buildingController.update)
 );
+router.put(
+  '/:id',
+  validate(buildingIdSchema, 'params'),
+  validate(updateBuildingSchema, 'body'),
+  asyncHandler(buildingController.update)
+);
 
 // Delete building
 router.delete(

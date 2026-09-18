@@ -28,10 +28,13 @@ export class NotificationService {
   }
 
   /**
-   * Emit notification to all connected clients
-   * WHY: Broadcast events like new attendees, room changes
+   * Emit notification to every client in an organization
+   * WHY: Broadcast events like new attendees, room changes — scoped to the
+   * caller's organization (via the `org:${organizationId}` Socket.io room
+   * every authenticated socket auto-joins) so tenants never see each other's activity.
    */
   broadcast(
+    organizationId: string,
     event: NotificationEvent,
     type: NotificationType,
     message: string,
@@ -47,10 +50,12 @@ export class NotificationService {
       timestamp: new Date().toISOString(),
     };
 
-    this.io.emit('notification', payload);
-    this.io.emit(event, payload);
+    const room = this.io.to(`org:${organizationId}`);
+    room.emit('notification', payload);
+    room.emit(event, payload);
 
     logger.info('Notification broadcast:', {
+      organizationId,
       event,
       type,
       message,
@@ -126,8 +131,9 @@ export class NotificationService {
   /**
    * Success notification
    */
-  success(message: string, title?: string, data?: Record<string, unknown>): void {
+  success(organizationId: string, message: string, title?: string, data?: Record<string, unknown>): void {
     this.broadcast(
+      organizationId,
       NotificationEvent.ATTENDEE_UPDATED, // Default event, can be overridden
       NotificationType.SUCCESS,
       message,
@@ -139,8 +145,9 @@ export class NotificationService {
   /**
    * Error notification
    */
-  error(message: string, title?: string, data?: Record<string, unknown>): void {
+  error(organizationId: string, message: string, title?: string, data?: Record<string, unknown>): void {
     this.broadcast(
+      organizationId,
       NotificationEvent.IMPORT_FAILED, // Default event
       NotificationType.ERROR,
       message,
@@ -152,8 +159,9 @@ export class NotificationService {
   /**
    * Info notification
    */
-  info(message: string, title?: string, data?: Record<string, unknown>): void {
+  info(organizationId: string, message: string, title?: string, data?: Record<string, unknown>): void {
     this.broadcast(
+      organizationId,
       NotificationEvent.ATTENDEE_CREATED, // Default event
       NotificationType.INFO,
       message,
@@ -165,8 +173,9 @@ export class NotificationService {
   /**
    * Warning notification
    */
-  warning(message: string, title?: string, data?: Record<string, unknown>): void {
+  warning(organizationId: string, message: string, title?: string, data?: Record<string, unknown>): void {
     this.broadcast(
+      organizationId,
       NotificationEvent.ROOM_UPDATED, // Default event
       NotificationType.WARNING,
       message,

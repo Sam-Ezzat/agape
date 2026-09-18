@@ -19,6 +19,7 @@ export default function RoomsPage() {
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
   const [filterFloorId, setFilterFloorId] = useState<string>('');
   const [filterBuildingId, setFilterBuildingId] = useState<string>('');
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   useEffect(() => {
     loadRooms();
@@ -29,7 +30,7 @@ export default function RoomsPage() {
   const loadRooms = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:3000/api/rooms');
+      const response = await fetch(`${baseUrl}/rooms`, { credentials: 'include' });
       const data = await response.json();
       setRooms(data.data || []);
     } catch (error) {
@@ -41,7 +42,7 @@ export default function RoomsPage() {
 
   const loadFloors = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/floors');
+      const response = await fetch(`${baseUrl}/floors`, { credentials: 'include' });
       const data = await response.json();
       setFloors(data.data || []);
     } catch (error) {
@@ -51,7 +52,7 @@ export default function RoomsPage() {
 
   const loadBuildings = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/buildings');
+      const response = await fetch(`${baseUrl}/buildings`, { credentials: 'include' });
       const data = await response.json();
       setBuildings(data.data || []);
     } catch (error) {
@@ -63,8 +64,9 @@ export default function RoomsPage() {
     if (!confirm(`Are you sure you want to delete Room ${roomNumber}?`)) return;
     
     try {
-      const response = await fetch(`http://localhost:3000/api/rooms/${id}`, {
+      const response = await fetch(`${baseUrl}/rooms/${id}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       if (!response.ok) throw new Error('Delete failed');
       toastSuccess(`Room ${roomNumber} deleted successfully`);
@@ -214,7 +216,15 @@ export default function RoomsPage() {
                       {building?.name} - Floor {floor?.floorNumber}
                     </p>
                   </div>
-                  
+
+                  <div className="text-xs text-gray-500">
+                    Individual: {room.individualBeds ?? 0} · Bunk: {room.bunkBeds ?? 0} · King: {room.kingBeds ?? 0}
+                  </div>
+
+                  {room.amenities && (
+                    <div className="text-xs text-gray-400">{room.amenities}</div>
+                  )}
+
                   <div className="text-xs text-gray-400 pt-2 border-t">
                     Created: {new Date(room.createdAt).toLocaleDateString()}
                   </div>
@@ -253,11 +263,24 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
   const [formData, setFormData] = useState({
     roomNumber: room?.roomNumber || '',
     floorId: room?.floorId || '',
-    capacity: room?.capacity || 1,
+    individualBeds: room?.individualBeds ?? 0,
+    bunkBeds: room?.bunkBeds ?? 0,
+    kingBeds: room?.kingBeds ?? 0,
     roomType: room?.roomType || RoomType.GENERAL,
   });
 
-  const [selectedBuildingId, setSelectedBuildingId] = useState('');
+  // WHY: Capacity is server-computed (individualBeds + kingBeds + 2*bunkBeds) —
+  // this mirrors that formula purely for a live preview in the form.
+  const computedCapacity = formData.individualBeds + formData.kingBeds + formData.bunkBeds * 2;
+
+  const [selectedBuildingId, setSelectedBuildingId] = useState(() => {
+    if (room && room.floorId) {
+      const foundFloor = floors.find(f => f.id === room.floorId);
+      return foundFloor?.buildingId || '';
+    }
+    return '';
+  });
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
   // Filter floors by selected building
   const filteredFloors = selectedBuildingId
@@ -271,17 +294,20 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
       const submitData = {
         roomNumber: formData.roomNumber,
         floorId: formData.floorId,
-        capacity: formData.capacity,
+        individualBeds: formData.individualBeds,
+        bunkBeds: formData.bunkBeds,
+        kingBeds: formData.kingBeds,
         roomType: formData.roomType,
       };
 
       const url = room
-        ? `http://localhost:3000/api/rooms/${room.id}`
-        : 'http://localhost:3000/api/rooms';
+        ? `${baseUrl}/rooms/${room.id}`
+        : `${baseUrl}/rooms`;
       
       const response = await fetch(url, {
-        method: room ? 'PUT' : 'POST',
+        method: room ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(submitData),
       });
 
@@ -347,18 +373,42 @@ function RoomModal({ room, floors, buildings, onClose, onSave }: RoomModalProps)
             </select>
           </div>
 
-          <div>
-            <label className="label">Capacity *</label>
-            <input
-              type="number"
-              required
-              min="1"
-              value={formData.capacity}
-              onChange={(e) => setFormData({ ...formData, capacity: parseInt(e.target.value) })}
-              className="input"
-              placeholder="Number of people"
-            />
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="label">Individual Beds</label>
+              <input
+                type="number"
+                min="0"
+                value={formData.individualBeds}
+                onChange={(e) => setFormData({ ...formData, individualBeds: parseInt(e.target.value) || 0 })}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Bunk Beds</label>
+              <input
+                type="number"
+                min="0"
+                value={formData.bunkBeds}
+                onChange={(e) => setFormData({ ...formData, bunkBeds: parseInt(e.target.value) || 0 })}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">King Beds</label>
+              <input
+                type="number"
+                min="0"
+                value={formData.kingBeds}
+                onChange={(e) => setFormData({ ...formData, kingBeds: parseInt(e.target.value) || 0 })}
+                className="input"
+              />
+            </div>
           </div>
+          <p className="text-sm text-gray-600">
+            Capacity: <span className="font-medium">{computedCapacity}</span> person{computedCapacity !== 1 ? 's' : ''}
+            {' '}(a bunk bed sleeps 2; individual and king beds each sleep 1)
+          </p>
 
           <div>
             <label className="label">Room Type *</label>

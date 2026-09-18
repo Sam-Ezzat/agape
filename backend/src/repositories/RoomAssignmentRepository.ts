@@ -15,12 +15,29 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
   }
 
   /**
+   * All attendeeIds with a real room assignment ANYWHERE in the
+   * organization, regardless of building.
+   * WHY: Auto-assignment's "exclude already-assigned attendees" filter must
+   * not be scoped to just the buildings selected for this run — otherwise
+   * an attendee already assigned in a DIFFERENT (unselected) building looks
+   * "unassigned" and gets re-placed into a new room in the selected
+   * building, leaving them double-booked.
+   */
+  async findAssignedAttendeeIds(organizationId: string): Promise<Set<string>> {
+    const assignments = await this.prisma.roomAssignment.findMany({
+      where: { room: { floor: { building: { conferenceHouse: { organizationId } } } } },
+      select: { attendeeId: true },
+    });
+    return new Set(assignments.map(a => a.attendeeId));
+  }
+
+  /**
    * Find assignment by ID with full details
    * WHY: Common query to show assignment with attendee and room info
    */
-  async findByIdWithDetails(id: string) {
-    return this.prisma.roomAssignment.findUnique({
-      where: { id },
+  async findByIdWithDetails(id: string, organizationId: string) {
+    return this.prisma.roomAssignment.findFirst({
+      where: { id, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
       include: {
         attendee: true,
         room: {
@@ -44,9 +61,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Find assignment by attendee ID
    * WHY: Check if attendee is already assigned
    */
-  async findByAttendeeId(attendeeId: string) {
-    return this.prisma.roomAssignment.findUnique({
-      where: { attendeeId },
+  async findByAttendeeId(attendeeId: string, organizationId: string) {
+    return this.prisma.roomAssignment.findFirst({
+      where: { attendeeId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
       include: {
         room: {
           include: {
@@ -65,33 +82,84 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Find all assignments for a room
    * WHY: Check room capacity and current occupants
    */
-  async findByRoomId(roomId: string) {
+  async findByRoomId(roomId: string, organizationId: string) {
     return this.prisma.roomAssignment.findMany({
-      where: { roomId },
+      where: { roomId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
       include: {
-        attendee: {
-          select: {
-            id: true,
-            fullName: true,
-            gender: true,
-            conferenceRole: true,
-            checkedInAt: true,
-          },
-        },
+        attendee: true,
       },
       orderBy: { assignedAt: 'desc' },
     });
   }
 
   /**
+   * Find all real assignments across a set of buildings, with attendee and
+   * room/floor/building details.
+   * WHY: The auto-assignment preview needs to surface ALREADY-assigned
+   * attendees (not just this run's new placements) so admins can see and
+   * manage them alongside the dry-run results.
+   */
+  async findByBuildingIds(buildingIds: string[], organizationId: string) {
+    return this.prisma.roomAssignment.findMany({
+      where: {
+        room: {
+          floor: {
+            buildingId: { in: buildingIds },
+            building: { conferenceHouse: { organizationId } },
+          },
+        },
+      },
+      include: {
+        attendee: true,
+        room: {
+          include: {
+            floor: {
+              include: {
+                building: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Delete an attendee's assignment (if any), scoped to organization.
+   * WHY: Committing an auto-assignment preview draft where a real attendee
+   * was dragged into "Unassigned" needs to release their actual assignment.
+   */
+  async deleteByAttendeeId(attendeeId: string, organizationId: string): Promise<void> {
+    await this.prisma.roomAssignment.deleteMany({
+      where: { attendeeId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
+    });
+  }
+
+  /**
+   * Delete assignment scoped to organization (ownership check)
+   */
+  async deleteScoped(id: string, organizationId: string) {
+    const existing = await this.prisma.roomAssignment.findFirst({
+      where: { id, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new Error('Room assignment not found in organization');
+    }
+    return this.prisma.roomAssignment.delete({ where: { id } });
+  }
+
+  /**
    * Search assignments with filters
    * WHY: Filter by room, building, or floor
    */
-  async search(params: AssignmentFilterParams) {
+  async search(params: AssignmentFilterParams, organizationId: string) {
     const { roomId, buildingId, floorId, page, limit } = params;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.RoomAssignmentWhereInput = {};
+    const where: Prisma.RoomAssignmentWhereInput = {
+      room: { floor: { building: { conferenceHouse: { organizationId } } } },
+    };
 
     if (roomId) {
       where.roomId = roomId;
@@ -101,6 +169,7 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
       where.room = {
         floor: {
           buildingId,
+          building: { conferenceHouse: { organizationId } },
         },
       };
     }
@@ -108,6 +177,7 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
     if (floorId) {
       where.room = {
         floorId,
+        floor: { building: { conferenceHouse: { organizationId } } },
       };
     }
 
@@ -118,16 +188,7 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
         take: limit,
         orderBy: { assignedAt: 'desc' },
         include: {
-          attendee: {
-            select: {
-              id: true,
-              fullName: true,
-              gender: true,
-              conferenceRole: true,
-              phone: true,
-              checkedInAt: true,
-            },
-          },
+          attendee: true,
           room: {
             select: {
               id: true,
@@ -170,9 +231,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Count assignments in a room
    * WHY: Capacity validation
    */
-  async countByRoomId(roomId: string): Promise<number> {
+  async countByRoomId(roomId: string, organizationId: string): Promise<number> {
     return this.prisma.roomAssignment.count({
-      where: { roomId },
+      where: { roomId, room: { floor: { building: { conferenceHouse: { organizationId } } } } },
     });
   }
 
@@ -180,8 +241,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Get room availability summary
    * WHY: Dashboard and assignment UI need this data
    */
-  async getRoomAvailability() {
+  async getRoomAvailability(organizationId: string) {
     const rooms = await this.prisma.room.findMany({
+      where: { floor: { building: { conferenceHouse: { organizationId } } } },
       select: {
         id: true,
         roomNumber: true,
@@ -228,9 +290,9 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Batch create assignments
    * WHY: Efficient bulk insert
    */
-  async createMany(data: CreateAssignmentDTO[]) {
+  async createMany(data: any[]) {
     return this.prisma.roomAssignment.createMany({
-      data,
+      data: data as any,
       skipDuplicates: true, // Skip if attendee already assigned
     });
   }
@@ -239,12 +301,13 @@ export class RoomAssignmentRepository extends BaseRepository<RoomAssignment, Pri
    * Count assignments created since a date
    * WHY: Track assignment activity over time
    */
-  async countCreatedSince(date: Date): Promise<number> {
+  async countCreatedSince(date: Date, organizationId: string): Promise<number> {
     return this.prisma.roomAssignment.count({
       where: {
         createdAt: {
           gte: date,
         },
+        room: { floor: { building: { conferenceHouse: { organizationId } } } },
       },
     });
   }

@@ -6,10 +6,19 @@
  */
 
 import { useEffect, useState } from 'react';
-import { attendeeApi, excelApi } from '@/services/api.service';
+import { Link, useNavigate } from 'react-router-dom';
+import { AlertTriangle } from 'lucide-react';
+import { attendeeApi, assignmentApi, excelApi, communicationApi } from '@/services/api.service';
 import { toastSuccess, toastError } from '@/services/toast.service';
 import { useSocket } from '@/hooks/useSocket';
+import { normalizePhoneToE164 } from '@/utils/phone';
+import SendWhatsAppModal from '@/components/SendWhatsAppModal';
+import WhatsAppIcon from '@/components/WhatsAppIcon';
+import Pagination from '@/components/Pagination';
 import type { Attendee, AttendeeFilters, ConferenceRole, Gender } from '@/types/api';
+import type { MessageStatus } from '@/types/communication';
+
+type LastMessageInfo = { status: MessageStatus; templateName: string | null; sentAt: string };
 
 export default function AttendeesPage() {
   const [attendees, setAttendees] = useState<Attendee[]>([]);
@@ -23,16 +32,32 @@ export default function AttendeesPage() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedAttendee, setSelectedAttendee] = useState<Attendee | null>(null);
+  const [deletingAttendee, setDeletingAttendee] = useState<{ id: string; name: string } | null>(null);
+  const [assignedWarningAttendee, setAssignedWarningAttendee] = useState<Attendee | null>(null);
+  const [unassigning, setUnassigning] = useState(false);
+  const [whatsappAttendee, setWhatsappAttendee] = useState<Attendee | null>(null);
+  const [lastMessageByAttendee, setLastMessageByAttendee] = useState<Record<string, LastMessageInfo>>({});
   const socket = useSocket();
-  
+  const navigate = useNavigate();
+
+  // Selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedAttendeesMap, setSelectedAttendeesMap] = useState<Map<string, Attendee>>(new Map());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [assignedForBulkWarning, setAssignedForBulkWarning] = useState<Attendee[] | null>(null);
+  const [bulkUnassigning, setBulkUnassigning] = useState(false);
+  const [idsPendingBulkDelete, setIdsPendingBulkDelete] = useState<string[]>([]);
+
   // Filters
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<ConferenceRole | ''>('');
   const [genderFilter, setGenderFilter] = useState<Gender | ''>('');
+  const [isDualSearchEnabled, setIsDualSearchEnabled] = useState(true); // Dual-language search ON by default
 
   useEffect(() => {
     loadAttendees();
-  }, [currentPage, search, roleFilter, genderFilter]);
+  }, [currentPage, search, roleFilter, genderFilter, isDualSearchEnabled]);
 
   // Listen for real-time updates via socket
   useEffect(() => {
@@ -73,7 +98,12 @@ export default function AttendeesPage() {
     };
 
     // Listen for various attendee events
+    // WHY: Excel import creates attendees silently (no per-row broadcast) and
+    // fires one 'import:completed' event instead — other open tabs/sessions
+    // need to reload the list on that signal same as they do for a single
+    // created attendee.
     socket.on('attendee:created', handleAttendeeCreatedOrDeleted);
+    socket.on('import:completed', handleAttendeeCreatedOrDeleted);
     socket.on('attendee:updated', handleAttendeeUpdate);
     socket.on('attendee:deleted', handleAttendeeCreatedOrDeleted);
     socket.on('attendee:checked-in', handleAttendeeUpdate);
@@ -81,6 +111,7 @@ export default function AttendeesPage() {
 
     return () => {
       socket.off('attendee:created', handleAttendeeCreatedOrDeleted);
+      socket.off('import:completed', handleAttendeeCreatedOrDeleted);
       socket.off('attendee:updated', handleAttendeeUpdate);
       socket.off('attendee:deleted', handleAttendeeCreatedOrDeleted);
       socket.off('attendee:checked-in', handleAttendeeUpdate);
@@ -96,7 +127,10 @@ export default function AttendeesPage() {
         limit: String(limit),
       };
       
-      if (search) filters.search = search;
+      if (search) {
+        filters.search = search;
+        filters.dualSearch = isDualSearchEnabled ? 'true' : 'false';
+      }
       if (roleFilter) filters.role = roleFilter;
       if (genderFilter) filters.gender = genderFilter;
 
@@ -104,6 +138,7 @@ export default function AttendeesPage() {
       setAttendees(response.data);
       setTotalPages(response.pagination.pages);
       setTotalCount(response.pagination.total);
+      loadLastMessages(response.data.map((a) => a.id));
     } catch (error) {
       toastError('Failed to load attendees');
     } finally {
@@ -111,16 +146,223 @@ export default function AttendeesPage() {
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete ${name}?`)) return;
-    
+  // WHY: fetched separately from the main attendee list (rather than joined
+  // server-side into attendeeApi.list) so this stays a communication-module
+  // concern — only needs the current page's ids, one batched query either way.
+  const loadLastMessages = async (attendeeIds: string[]) => {
+    if (attendeeIds.length === 0) {
+      setLastMessageByAttendee({});
+      return;
+    }
     try {
-      await attendeeApi.delete(id);
-      toastSuccess(`${name} deleted successfully`);
+      const response = await communicationApi.messages.getLastByAttendee(attendeeIds);
+      setLastMessageByAttendee(response.data || {});
+    } catch (error) {
+      // Non-critical — the two columns just show defaults if this fails.
+      setLastMessageByAttendee({});
+    }
+  };
+
+  // WHY: collapses the full MessageStatus enum down to the 3 states that
+  // actually matter to an admin scanning this list — Sent/Pending/Failed —
+  // rather than surfacing internal states like QUEUED/SENDING/DELIVERED/READ.
+  const getLastMessageStatusBadge = (status?: MessageStatus) => {
+    if (!status) {
+      return <span className="text-sm text-gray-400">—</span>;
+    }
+    if (status === 'SENT' || status === 'DELIVERED' || status === 'READ') {
+      return (
+        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+          Sent
+        </span>
+      );
+    }
+    if (status === 'FAILED') {
+      return (
+        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+          Failed
+        </span>
+      );
+    }
+    if (status === 'CANCELLED') {
+      return (
+        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+          Cancelled
+        </span>
+      );
+    }
+    // PENDING, QUEUED, SENDING
+    return (
+      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
+        Pending
+      </span>
+    );
+  };
+
+  const handleDelete = (attendee: Attendee) => {
+    // WHY: Deletion is blocked server-side while a room assignment exists —
+    // surface that up front instead of letting the delete fail after the
+    // reason has already been picked.
+    if (attendee.assignment) {
+      setAssignedWarningAttendee(attendee);
+      return;
+    }
+    setDeletingAttendee({ id: attendee.id, name: attendee.fullName });
+  };
+
+  const handleConfirmDelete = async (reason: string) => {
+    if (!deletingAttendee) return;
+    try {
+      await attendeeApi.delete(deletingAttendee.id, reason);
+      toastSuccess(`${deletingAttendee.name} deleted successfully`);
+      setDeletingAttendee(null);
       loadAttendees();
     } catch (error) {
       // Error already shown by API service
     }
+  };
+
+  const handleUnassignAndContinueDelete = async () => {
+    if (!assignedWarningAttendee?.assignment) return;
+    try {
+      setUnassigning(true);
+      await assignmentApi.delete(assignedWarningAttendee.assignment.id);
+      toastSuccess(`${assignedWarningAttendee.fullName} unassigned from their room`);
+      setDeletingAttendee({ id: assignedWarningAttendee.id, name: assignedWarningAttendee.fullName });
+      setAssignedWarningAttendee(null);
+    } catch (error) {
+      // Error already shown by API service
+    } finally {
+      setUnassigning(false);
+    }
+  };
+
+  // WHY: `attendees` only holds the current page's rows, but selections can
+  // span multiple pages (selectedIds isn't cleared on page change). Bulk
+  // delete needs each selected attendee's assignment status even after its
+  // page is no longer loaded, so we snapshot the full record here instead of
+  // re-deriving it from `attendees` at delete time.
+  const toggleSelect = (attendee: Attendee) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(attendee.id)) {
+        next.delete(attendee.id);
+      } else {
+        next.add(attendee.id);
+      }
+      return next;
+    });
+    setSelectedAttendeesMap((prev) => {
+      const next = new Map(prev);
+      if (next.has(attendee.id)) {
+        next.delete(attendee.id);
+      } else {
+        next.set(attendee.id, attendee);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const allOnPageSelected = attendees.every((a) => selectedIds.has(a.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) {
+        attendees.forEach((a) => next.delete(a.id));
+      } else {
+        attendees.forEach((a) => next.add(a.id));
+      }
+      return next;
+    });
+    setSelectedAttendeesMap((prev) => {
+      const next = new Map(prev);
+      if (allOnPageSelected) {
+        attendees.forEach((a) => next.delete(a.id));
+      } else {
+        attendees.forEach((a) => next.set(a.id, a));
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setSelectedAttendeesMap(new Map());
+  };
+
+  const handleConfirmBulkDelete = async (reason: string) => {
+    const ids = idsPendingBulkDelete.length > 0 ? idsPendingBulkDelete : Array.from(selectedIds);
+    try {
+      setBulkDeleting(true);
+      const response = await attendeeApi.bulkDelete(ids, reason);
+      const { deleted, failed } = response.data;
+      if (deleted.length > 0) {
+        toastSuccess(`${deleted.length} attendee(s) deleted successfully`);
+      }
+      if (failed.length > 0) {
+        toastError(`${failed.length} attendee(s) could not be deleted`);
+      }
+      setShowBulkDeleteModal(false);
+      setIdsPendingBulkDelete([]);
+      clearSelection();
+      loadAttendees();
+    } catch (error) {
+      // Error already shown by API service
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  // WHY: Same rationale as handleDelete's single-attendee check — surface
+  // room-assigned selections before the reason picker instead of letting
+  // the bulk endpoint fail those rows silently. Uses selectedAttendeesMap
+  // (not the current page's `attendees`) because selections can span pages
+  // that are no longer loaded.
+  const handleOpenBulkDelete = () => {
+    const assigned = Array.from(selectedAttendeesMap.values()).filter((a) => a.assignment);
+    if (assigned.length > 0) {
+      setAssignedForBulkWarning(assigned);
+      return;
+    }
+    setIdsPendingBulkDelete(Array.from(selectedIds));
+    setShowBulkDeleteModal(true);
+  };
+
+  const handleBulkKeepAssigned = () => {
+    if (!assignedForBulkWarning) return;
+    const assignedIds = new Set(assignedForBulkWarning.map((a) => a.id));
+    const remaining = Array.from(selectedIds).filter((id) => !assignedIds.has(id));
+    setAssignedForBulkWarning(null);
+    if (remaining.length === 0) {
+      toastError('All selected attendees are assigned to rooms. Nothing to delete.');
+      return;
+    }
+    setIdsPendingBulkDelete(remaining);
+    setShowBulkDeleteModal(true);
+  };
+
+  const handleBulkUnassignAndContinue = async () => {
+    if (!assignedForBulkWarning) return;
+    try {
+      setBulkUnassigning(true);
+      await Promise.all(
+        assignedForBulkWarning
+          .filter((a) => a.assignment)
+          .map((a) => assignmentApi.delete(a.assignment!.id))
+      );
+      toastSuccess(`${assignedForBulkWarning.length} attendee(s) unassigned from their rooms`);
+      setIdsPendingBulkDelete(Array.from(selectedIds));
+      setAssignedForBulkWarning(null);
+      setShowBulkDeleteModal(true);
+    } catch (error) {
+      // Error already shown by API service
+    } finally {
+      setBulkUnassigning(false);
+    }
+  };
+
+  const handleSendWhatsAppToSelected = () => {
+    navigate('/communication/campaigns', { state: { attendeeIds: Array.from(selectedIds) } });
   };
 
   const openDetailsModal = (attendee: Attendee) => {
@@ -150,9 +392,9 @@ export default function AttendeesPage() {
     }
   };
 
-  const handleDeleteFromDetails = async () => {
+  const handleDeleteFromDetails = () => {
     if (selectedAttendee) {
-      await handleDelete(selectedAttendee.id, selectedAttendee.fullName);
+      handleDelete(selectedAttendee);
       closeDetailsModal();
     }
   };
@@ -223,6 +465,12 @@ export default function AttendeesPage() {
           <p className="text-gray-600 mt-1">Manage conference attendees</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link to="/attendees/cancellations" className="btn-secondary flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 font-semibold">
+            <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.364A9 9 0 015.636 5.636m12.728 12.364L5.636 5.636" />
+            </svg>
+            Cancellations
+          </Link>
           <button onClick={handleDownloadTemplate} className="btn-secondary flex items-center gap-2">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -257,7 +505,7 @@ export default function AttendeesPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
             <input
               type="text"
-              placeholder="Search by name..."
+              placeholder="Search by name (Arabic or English)..."
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -265,6 +513,19 @@ export default function AttendeesPage() {
               }}
               className="input w-full"
             />
+            {/* Dual-language search toggle */}
+            <div className="mt-2 flex items-center">
+              <input
+                type="checkbox"
+                id="dualSearch"
+                checked={isDualSearchEnabled}
+                onChange={(e) => setIsDualSearchEnabled(e.target.checked)}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <label htmlFor="dualSearch" className="ml-2 text-sm text-gray-600">
+                Enable Arabic/English search (finds "مينا" when searching "Mina")
+              </label>
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
@@ -306,6 +567,41 @@ export default function AttendeesPage() {
         </div>
       </div>
 
+      {/* Bulk Actions Toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="card bg-primary-50 border-primary-200 flex items-center justify-between">
+          <p className="text-sm font-medium text-primary-900">
+            {selectedIds.size} attendee{selectedIds.size > 1 ? 's' : ''} selected
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSendWhatsAppToSelected}
+              className="btn-secondary flex items-center gap-2 text-green-700 bg-green-50 border border-green-200 hover:bg-green-100"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.79 14.14c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.09.24-3.66-.79-3.14-1.26-5.15-4.49-5.3-4.7-.16-.21-1.26-1.68-1.26-3.2 0-1.52.8-2.27 1.08-2.58.28-.31.6-.38.8-.38.2 0 .4 0 .58.01.19.01.44-.07.68.53.25.6.85 2.08.92 2.23.07.15.12.33.02.53-.1.2-.15.33-.3.5-.15.18-.31.4-.44.53-.15.15-.3.31-.13.6.17.3.76 1.26 1.64 2.04 1.13 1 2.08 1.32 2.38 1.47.3.15.47.13.65-.08.18-.2.75-.87.95-1.17.2-.3.4-.24.68-.14.28.1 1.77.83 2.07 1 .3.15.5.23.57.35.08.13.08.72-.16 1.4z" />
+              </svg>
+              Send WhatsApp Message
+            </button>
+            <button
+              onClick={handleOpenBulkDelete}
+              className="btn-secondary flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 hover:bg-red-100"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Delete Selected
+            </button>
+            <button
+              onClick={clearSelection}
+              className="text-sm text-gray-500 hover:text-gray-700 px-2"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Attendees Table */}
       <div className="card">
         {loading ? (
@@ -329,18 +625,36 @@ export default function AttendeesPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-6 py-3 text-left w-10">
+                      <input
+                        type="checkbox"
+                        checked={attendees.length > 0 && attendees.every((a) => selectedIds.has(a.id))}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                      />
+                    </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Template</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Message Status</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {attendees.map((attendee) => (
-                    <tr key={attendee.id} className="hover:bg-gray-50">
+                    <tr key={attendee.id} className={`hover:bg-gray-50 ${selectedIds.has(attendee.id) ? 'bg-primary-50' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div 
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(attendee.id)}
+                          onChange={() => toggleSelect(attendee)}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div
                           onClick={() => openDetailsModal(attendee)}
                           className="cursor-pointer hover:text-primary-600"
                         >
@@ -374,7 +688,22 @@ export default function AttendeesPage() {
                           </span>
                         )}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                        {lastMessageByAttendee[attendee.id]?.templateName || 'No Template'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {getLastMessageStatusBadge(lastMessageByAttendee[attendee.id]?.status)}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                        {attendee.phone && (
+                          <button
+                            onClick={() => setWhatsappAttendee(attendee)}
+                            className="text-green-600 hover:text-green-800 inline-flex items-center"
+                            title="Send WhatsApp message"
+                          >
+                            <WhatsAppIcon size={18} />
+                          </button>
+                        )}
                         <button
                           onClick={() => openEditModal(attendee)}
                           className="text-primary-600 hover:text-primary-900"
@@ -382,7 +711,7 @@ export default function AttendeesPage() {
                           Edit
                         </button>
                         <button
-                          onClick={() => handleDelete(attendee.id, attendee.fullName)}
+                          onClick={() => handleDelete(attendee)}
                           className="text-red-600 hover:text-red-900"
                         >
                           Delete
@@ -395,50 +724,13 @@ export default function AttendeesPage() {
             </div>
 
             {/* Pagination */}
-            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200">
-              <div className="flex-1 flex justify-between sm:hidden">
-                <button
-                  onClick={() => setCurrentPage((p) => p - 1)}
-                  disabled={currentPage === 1}
-                  className="btn-secondary"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setCurrentPage((p) => p + 1)}
-                  disabled={currentPage === totalPages}
-                  className="btn-secondary ml-3"
-                >
-                  Next
-                </button>
-              </div>
-              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm text-gray-700">
-                    Showing <span className="font-medium">{(currentPage - 1) * limit + 1}</span> to{' '}
-                    <span className="font-medium">{Math.min(currentPage * limit, totalCount)}</span> of{' '}
-                    <span className="font-medium">{totalCount}</span> results
-                  </p>
-                </div>
-                <div>
-                  <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                    <button
-                      onClick={() => setCurrentPage((p) => p - 1)}
-                      disabled={currentPage === 1}
-                      className="btn-secondary rounded-l-md"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={() => setCurrentPage((p) => p + 1)}
-                      disabled={currentPage === totalPages}
-                      className="btn-secondary rounded-r-md"
-                    >
-                      Next
-                    </button>
-                  </nav>
-                </div>
-              </div>
+            <div className="bg-white px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-gray-200">
+              <p className="text-sm text-gray-700">
+                Showing <span className="font-medium">{(currentPage - 1) * limit + 1}</span> to{' '}
+                <span className="font-medium">{Math.min(currentPage * limit, totalCount)}</span> of{' '}
+                <span className="font-medium">{totalCount}</span> results
+              </p>
+              <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
             </div>
           </>
         )}
@@ -458,6 +750,9 @@ export default function AttendeesPage() {
         <ImportModal onClose={closeImportModal} onSuccess={handleImportSuccess} />
       )}
 
+      {/* Send WhatsApp Modal */}
+      <SendWhatsAppModal attendee={whatsappAttendee} onClose={() => setWhatsappAttendee(null)} />
+
       {/* Attendee Details Modal */}
       {showDetailsModal && selectedAttendee && (
         <AttendeeDetailsModal 
@@ -465,6 +760,57 @@ export default function AttendeesPage() {
           onClose={closeDetailsModal}
           onEdit={openEditFromDetails}
           onDelete={handleDeleteFromDetails}
+        />
+      )}
+
+      {/* Room Assignment Warning — shown before the deletion reason modal */}
+      {assignedWarningAttendee && (
+        <AssignedAttendeeWarningModal
+          attendee={assignedWarningAttendee}
+          unassigning={unassigning}
+          onCancel={() => setAssignedWarningAttendee(null)}
+          onUnassignAndContinue={handleUnassignAndContinueDelete}
+        />
+      )}
+
+      {/* Bulk Room Assignment Warning — shown before the bulk deletion reason modal */}
+      {assignedForBulkWarning && (
+        <BulkAssignedAttendeesWarningModal
+          attendees={assignedForBulkWarning}
+          unassigning={bulkUnassigning}
+          onCancel={() => setAssignedForBulkWarning(null)}
+          onKeepAssigned={handleBulkKeepAssigned}
+          onUnassignAndContinue={handleBulkUnassignAndContinue}
+        />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingAttendee && (
+        <DeleteConfirmationModal
+          title="Delete Attendee"
+          description={
+            <>
+              Are you sure you want to delete <strong className="text-gray-900">{deletingAttendee.name}</strong>? Please select a cancellation reason for auditing:
+            </>
+          }
+          onClose={() => setDeletingAttendee(null)}
+          onConfirm={handleConfirmDelete}
+        />
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <DeleteConfirmationModal
+          title="Delete Selected Attendees"
+          description={
+            <>
+              Are you sure you want to delete <strong className="text-gray-900">{selectedIds.size}</strong> selected attendee{selectedIds.size > 1 ? 's' : ''}? Please select a cancellation reason for auditing (applied to all):
+            </>
+          }
+          confirmLabel={bulkDeleting ? 'Deleting...' : 'Confirm Delete'}
+          disabled={bulkDeleting}
+          onClose={() => setShowBulkDeleteModal(false)}
+          onConfirm={handleConfirmBulkDelete}
         />
       )}
     </div>
@@ -494,6 +840,7 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
     isServant: attendee?.isServant !== undefined ? String(attendee.isServant) : '',
     arrivalMethod: attendee?.arrivalMethod || '',
     busPickupPoint: attendee?.busPickupPoint || '',
+    mealType: attendee?.mealType || '',
     paymentMethod: attendee?.paymentMethod || '',
     paymentStatus: attendee?.paymentStatus || 'PENDING',
     transactionNumber: attendee?.transactionNumber || '',
@@ -537,12 +884,24 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
       }
     }
 
+    // Phone must include a valid country code (e.g. +201271384211) — normalize
+    // local formats (0127...) and reject anything that still doesn't look valid.
+    let normalizedPhone: string | undefined;
+    if (formData.phone.trim()) {
+      const result = normalizePhoneToE164(formData.phone.trim());
+      if (!result) {
+        toastError('Phone number must include a valid country code, e.g. +201271384211');
+        return;
+      }
+      normalizedPhone = result;
+    }
+
     try {
       setSaving(true);
       const data = {
         ticketId: formData.ticketId.trim() || undefined,
         fullName: formData.fullName.trim(),
-        phone: formData.phone.trim() || undefined,
+        phone: normalizedPhone,
         email: formData.email.trim() || undefined,
         age: formData.age ? parseInt(formData.age) : undefined,
         gender: formData.gender || undefined,
@@ -552,6 +911,7 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
         isServant: formData.isServant === 'true' ? true : formData.isServant === 'false' ? false : undefined,
         arrivalMethod: formData.arrivalMethod.trim() || undefined,
         busPickupPoint: formData.busPickupPoint.trim() || undefined,
+        mealType: formData.mealType || undefined,
         paymentMethod: formData.paymentMethod.trim() || undefined,
         paymentStatus: formData.paymentStatus,
         transactionNumber: formData.transactionNumber.trim() || undefined,
@@ -625,7 +985,9 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                   className="input w-full"
+                  placeholder="+201271384211"
                 />
+                <p className="text-xs text-gray-500 mt-1">Include country code (e.g. +20 for Egypt)</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -695,10 +1057,10 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                   onChange={(e) => setFormData({ ...formData, governorate: e.target.value })}
                   className="input w-full"
                 >
-                  <option value="">Choose a governorate</option>
-                  <option value="Cairo">Cairo</option>
-                  <option value="Alexandria">Alexandria</option>
-                  <option value="10th Ramadan">10th Ramadan</option>
+                  <option value="">اختر المحافظة</option>
+                  <option value="Cairo">القاهرة</option>
+                  <option value="Alexandria">الإسكندرية</option>
+                  <option value="10th Ramadan">العاشر من رمضان</option>
                 </select>
               </div>
               <div>
@@ -735,8 +1097,8 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                   className="input w-full"
                 >
                   <option value="">No selection</option>
-                  <option value="Conference Bus">Conference Bus</option>
-                  <option value="Private car">Private car</option>
+                  <option value="Conference Bus">باص المؤتمر</option>
+                  <option value="Private car">ملاكي</option>
                 </select>
               </div>
               <div>
@@ -755,11 +1117,11 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                     className="input w-full"
                   >
                     <option value="">Select pickup point</option>
-                    <option value="el-ketbi hospital">el-ketbi hospital</option>
-                    <option value="Meriland Garden">Meriland Garden</option>
-                    <option value="ezbet el-nakhl">ezbet el-nakhl</option>
-                    <option value="Alexandria">Alexandria</option>
-                    <option value="10th Ramadan">10th Ramadan</option>
+                    <option value="el-ketbi hospital">مستشفى القبطي</option>
+                    <option value="Meriland Garden">حديقة الميريلاند</option>
+                    <option value="ezbet el-nakhl">عزبة النخل</option>
+                    <option value="Alexandria">إسكندرية</option>
+                    <option value="10th Ramadan">العاشر من رمضان</option>
                   </select>
                 ) : (
                   <input
@@ -770,6 +1132,25 @@ function AttendeeModal({ attendee, onClose, onSave }: AttendeeModalProps) {
                     placeholder="Specify pickup location"
                   />
                 )}
+              </div>
+            </div>
+          </div>
+
+          {/* Meal Preference */}
+          <div>
+            <h4 className="text-md font-semibold text-gray-800 mb-3">Meal Preference</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Meal Type</label>
+                <select
+                  value={formData.mealType}
+                  onChange={(e) => setFormData({ ...formData, mealType: e.target.value })}
+                  className="input w-full"
+                >
+                  <option value="">No selection</option>
+                  <option value="وجبات صيامي">وجبات صيامي</option>
+                  <option value="وجبات فطاري">وجبات فطاري</option>
+                </select>
               </div>
             </div>
           </div>
@@ -898,82 +1279,270 @@ interface ImportModalProps {
 function ImportModal({ onClose, onSuccess }: ImportModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [progressPercentage, setProgressPercentage] = useState(0);
+  const [statusMessage, setProgressMessage] = useState('');
+  const [importErrors, setImportErrors] = useState<any[] | null>(null);
+  const [importSummary, setImportSummary] = useState<{ imported: number; failed: number } | null>(null);
+  const [softDeletedMatched, setSoftDeletedMatched] = useState<any[]>([]);
+  const [generalError, setGeneralError] = useState<string | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setGeneralError(null);
+    setImportErrors(null);
+    setImportSummary(null);
+    setSoftDeletedMatched([]);
+    setProgressPercentage(0);
+    
     if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      // Max file size limit: 10MB
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        setGeneralError('File size exceeds the 10MB limit. Please upload a smaller file.');
+        setFile(null);
+        return;
+      }
+      setFile(selectedFile);
     }
+  };
+
+  const handleReactivateMatched = async (id: string, name: string) => {
+    try {
+      await attendeeApi.reactivate(id);
+      toastSuccess(`${name} reactivated successfully`);
+      setSoftDeletedMatched((prev) => prev.filter((a) => a.id !== id));
+    } catch (error) {
+      // Handled
+    }
+  };
+
+  const getReasonFromNotes = (notes: string | null | undefined): string => {
+    if (!notes) return 'No reason provided';
+    const match = notes.match(/\[Cancellation Reason:\s*([^\]]+)\]/);
+    return match && match[1] ? match[1] : 'No reason provided';
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!file) {
-      toastError('Please select a file');
+      setGeneralError('Please select a file to import.');
       return;
     }
 
     try {
       setUploading(true);
-      await excelApi.importAttendees(file);
-      toastSuccess(`Import completed. Check console for details.`);
-      onSuccess();
-    } catch (error) {
-      // Error already shown by API service
+      setGeneralError(null);
+      setImportErrors(null);
+      setImportSummary(null);
+      setSoftDeletedMatched([]);
+      setProgressPercentage(5);
+      setProgressMessage('Uploading Spreadsheet File...');
+
+      // Dynamic progress emulation block timer
+      let simVal = 5;
+      const simTimer = setInterval(() => {
+        if (simVal < 90) {
+          simVal += Math.floor(Math.random() * 8) + 2;
+          setProgressPercentage(Math.min(90, simVal));
+        }
+      }, 300);
+
+      const response = await excelApi.importAttendees(file, (progressEvent) => {
+        const total = progressEvent.total || file.size;
+        const uploadProgress = Math.round((progressEvent.loaded * 100) / total);
+        // Map upload to 0% - 60%
+        const mappedUploadProgress = Math.round((uploadProgress * 60) / 100);
+        if (mappedUploadProgress > simVal) {
+          simVal = mappedUploadProgress;
+          setProgressPercentage(mappedUploadProgress);
+        }
+        if (uploadProgress >= 100) {
+          setProgressMessage('Verifying syntax and processing records in database...');
+        }
+      });
+      
+      clearInterval(simTimer);
+      setProgressPercentage(100);
+      setProgressMessage('Complete!');
+
+      if (response.success) {
+        const { imported, failed, errors, softDeletedMatched: matched } = response.data || {};
+        setImportSummary({ imported: imported || 0, failed: failed || 0 });
+        if (failed > 0) {
+          setImportErrors(errors || []);
+        }
+        if (matched && matched.length > 0) {
+          setSoftDeletedMatched(matched);
+        }
+      } else {
+        setGeneralError(response.message || 'Import failed unexpectedly.');
+      }
+    } catch (error: any) {
+      setGeneralError(error.message || 'Server timeout or exceeded file size limits. Please verify database connectivity.');
     } finally {
       setUploading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" onClick={onClose}>
-      <div className="relative top-20 mx-auto p-5 border w-full max-w-lg shadow-lg rounded-md bg-white" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white flex flex-col max-h-[85vh]">
+        <div className="flex items-center justify-between mb-4 border-b pb-2">
           <h3 className="text-lg font-medium text-gray-900">Import Attendees</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-500">
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          {!uploading && (
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-500">
+              <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Select Excel File <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleFileChange}
-              className="block w-full text-sm text-gray-500
-                file:mr-4 file:py-2 file:px-4
-                file:rounded-md file:border-0
-                file:text-sm file:font-semibold
-                file:bg-primary-50 file:text-primary-700
-                hover:file:bg-primary-100"
-            />
-            {file && (
-              <p className="text-xs text-gray-600 mt-1">Selected: {file.name}</p>
+        {uploading ? (
+          <div className="flex flex-col items-center justify-center p-8 space-y-4">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+            <div className="w-full bg-gray-200 rounded-full h-3">
+              <div 
+                className="bg-primary-600 h-3 rounded-full transition-all duration-300"
+                style={{ width: `${progressPercentage}%` }}
+              ></div>
+            </div>
+            <div className="text-sm font-semibold text-gray-700">{progressPercentage}%</div>
+            <p className="text-xs text-gray-500 animate-pulse">{statusMessage}</p>
+          </div>
+        ) : importSummary ? (
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <div className="bg-green-50 border border-green-200 text-green-900 rounded-lg p-3 text-sm mb-4">
+              <strong>Import Operation Finished Successfully (Silent Mode):</strong> {importSummary.imported} attendees successfully imported / updated.
+            </div>
+
+            {softDeletedMatched.length > 0 && (
+              <div className="flex flex-col mb-4 overflow-hidden max-h-[40vh] border rounded-lg p-3 bg-red-50 border-red-200">
+                <div className="text-sm font-semibold text-red-950 mb-2">
+                  ⚠️ Previously Cancelled/Deleted Attendees Detected on Spreadsheet:
+                </div>
+                <div className="overflow-auto flex-1">
+                  <table className="min-w-full divide-y divide-red-200 text-xs">
+                    <thead className="bg-red-100 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900">Name</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900">Ticket ID</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900">Cancellation Reason</th>
+                        <th className="px-3 py-2 text-center font-semibold text-red-900">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-red-200">
+                      {softDeletedMatched.map((match) => (
+                        <tr key={match.id} className="hover:bg-red-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{match.fullName}</td>
+                          <td className="px-3 py-2 text-gray-600 font-mono">{match.ticketId || '-'}</td>
+                          <td className="px-3 py-2 text-red-700 italic">{getReasonFromNotes(match.internalNotes)}</td>
+                          <td className="px-3 py-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleReactivateMatched(match.id, match.fullName)}
+                              className="px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white rounded font-semibold text-[11px] uppercase transition-colors"
+                            >
+                              Reactivate
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
-          </div>
 
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <p className="text-sm text-blue-800">
-              <strong>Note:</strong> Download the template first to ensure your Excel file has the correct format.
-              The import will skip duplicate attendees based on phone number.
-            </p>
-          </div>
+            {importErrors && importErrors.length > 0 && (
+              <>
+                <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg p-3 text-sm mb-4">
+                  <strong>Warning:</strong> {importSummary.failed} record rows failed validation. See table below:
+                </div>
 
-          <div className="flex items-center justify-end gap-3 pt-4 border-t">
-            <button type="button" onClick={onClose} className="btn-secondary">
-              Cancel
-            </button>
-            <button type="submit" disabled={uploading || !file} className="btn-primary">
-              {uploading ? 'Importing...' : 'Import'}
-            </button>
+                <div className="overflow-auto flex-1 border rounded-lg mb-4">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Row</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Field</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Value</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {importErrors.map((err, idx) => (
+                        <tr key={idx} className="hover:bg-red-50 hover:bg-opacity-30">
+                          <td className="px-4 py-2 font-medium text-gray-900">{err.row}</td>
+                          <td className="px-4 py-2 text-red-600 font-medium">{err.field || 'general'}</td>
+                          <td className="px-4 py-2 text-gray-500">{err.value !== null && err.value !== undefined ? String(err.value) : 'N/A'}</td>
+                          <td className="px-4 py-2 text-gray-700">{err.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t">
+              <button 
+                type="button" 
+                onClick={() => {
+                  onSuccess();
+                  onClose();
+                }} 
+                className="btn-primary"
+              >
+                Done
+              </button>
+            </div>
           </div>
-        </form>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {generalError && (
+              <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
+                <strong>Upload Error:</strong> {generalError}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Select Excel File <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleFileChange}
+                className="block w-full text-sm text-gray-500
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-md file:border-0
+                  file:text-sm file:font-semibold
+                  file:bg-primary-50 file:text-primary-700
+                  hover:file:bg-primary-100"
+              />
+              {file && (
+                <p className="text-xs text-gray-600 mt-1">Selected: {file.name} ({Math.round(file.size / 1024)} KB)</p>
+              )}
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <p className="text-sm text-blue-800">
+                <strong>Note:</strong> Download the template first to ensure your Excel file has the correct format.
+                The import operation runs in silent mode and will seamlessly upsert details for any duplicate Ticket IDs.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t">
+              <button type="button" onClick={onClose} className="btn-secondary">
+                Cancel
+              </button>
+              <button type="submit" disabled={!file} className="btn-primary">
+                Import Attendees
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -1066,6 +1635,10 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
             <DetailRow label="Church" value={attendee.church} />
             <DetailRow label="Area" value={attendee.area} />
             <DetailRow label="Governorate" value={attendee.governorate} />
+            <DetailRow
+              label="Are you a servant in your church?"
+              value={attendee.isServant === true ? 'Yes' : attendee.isServant === false ? 'No' : undefined}
+            />
 
             {/* Travel & Transportation */}
             <div className="col-span-2">
@@ -1073,6 +1646,12 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
             </div>
             <DetailRow label="Arrival Method" value={attendee.arrivalMethod} />
             <DetailRow label="Bus Pickup Point" value={attendee.busPickupPoint} />
+
+            {/* Meal Preference */}
+            <div className="col-span-2">
+              <h4 className="text-lg font-semibold text-gray-800 mb-3 mt-4">Meal Preference</h4>
+            </div>
+            <DetailRow label="Meal Type" value={attendee.mealType} />
 
             {/* Payment Information */}
             <div className="col-span-2">
@@ -1146,6 +1725,241 @@ function AttendeeDetailsModal({ attendee, onClose, onEdit, onDelete }: AttendeeD
             Edit
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Assigned Attendee Warning Modal
+ *
+ * WHY: Deletion is blocked server-side while a room assignment exists.
+ * Surface that up front — before the reason-for-deletion picker — so the
+ * admin can unassign and continue in one flow instead of hitting a 409
+ * after already filling out the reason form.
+ */
+interface AssignedAttendeeWarningModalProps {
+  attendee: Attendee;
+  unassigning: boolean;
+  onCancel: () => void;
+  onUnassignAndContinue: () => void;
+}
+
+function AssignedAttendeeWarningModal({
+  attendee,
+  unassigning,
+  onCancel,
+  onUnassignAndContinue,
+}: AssignedAttendeeWarningModalProps) {
+  const room = attendee.assignment?.room as any;
+  const roomLabel = room
+    ? `Room ${room.roomNumber}${room.floor?.building?.name ? ` in ${room.floor.building.name}` : ''}`
+    : 'a room';
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+            <AlertTriangle className="text-amber-600" size={20} />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-gray-900">Attendee is assigned to a room</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              <strong className="text-gray-900">{attendee.fullName}</strong> is currently assigned to{' '}
+              <strong className="text-gray-900">{roomLabel}</strong>. They must be unassigned before they
+              can be deleted.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-4 border-t mt-2">
+          <button type="button" onClick={onCancel} disabled={unassigning} className="btn-secondary text-sm px-4 py-2">
+            Keep assigned
+          </button>
+          <button
+            type="button"
+            onClick={onUnassignAndContinue}
+            disabled={unassigning}
+            className="px-5 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm transition-colors shadow disabled:opacity-50"
+          >
+            {unassigning ? 'Unassigning...' : 'Unassign & continue to delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Bulk Assigned Attendees Warning Modal
+ *
+ * WHY: Same rationale as AssignedAttendeeWarningModal, but for bulk delete —
+ * lists every room-assigned attendee in the selection and lets the admin
+ * either skip them (delete only the unassigned rest) or unassign all of
+ * them and proceed with the full selection, instead of the bulk endpoint
+ * silently dropping them into an unexplained "could not be deleted" count.
+ */
+interface BulkAssignedAttendeesWarningModalProps {
+  attendees: Attendee[];
+  unassigning: boolean;
+  onCancel: () => void;
+  onKeepAssigned: () => void;
+  onUnassignAndContinue: () => void;
+}
+
+function BulkAssignedAttendeesWarningModal({
+  attendees,
+  unassigning,
+  onCancel,
+  onKeepAssigned,
+  onUnassignAndContinue,
+}: BulkAssignedAttendeesWarningModalProps) {
+  const roomLabelFor = (attendee: Attendee) => {
+    const room = attendee.assignment?.room as any;
+    return room
+      ? `Room ${room.roomNumber}${room.floor?.building?.name ? ` in ${room.floor.building.name}` : ''}`
+      : 'a room';
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 pb-2 border-b">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+              <AlertTriangle className="text-amber-600" size={20} />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">
+              {attendees.length} attendee{attendees.length > 1 ? 's are' : ' is'} assigned to a room
+            </h3>
+          </div>
+          <button type="button" onClick={onCancel} disabled={unassigning} className="text-gray-400 hover:text-gray-500 font-bold text-xl">
+            ×
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-3">
+          They must be unassigned before they can be deleted. Unassign them all and continue, or keep
+          them assigned and only delete the rest of the selection.
+        </p>
+
+        <ul className="max-h-48 overflow-y-auto divide-y divide-gray-100 border rounded mb-4">
+          {attendees.map((attendee) => (
+            <li key={attendee.id} className="px-3 py-2 text-sm flex items-center justify-between gap-2">
+              <span className="text-gray-900 font-medium truncate">{attendee.fullName}</span>
+              <span className="text-gray-500 text-xs whitespace-nowrap">{roomLabelFor(attendee)}</span>
+            </li>
+          ))}
+        </ul>
+
+        <div className="flex items-center justify-end gap-3 pt-4 border-t mt-2">
+          <button type="button" onClick={onKeepAssigned} disabled={unassigning} className="btn-secondary text-sm px-4 py-2">
+            Keep assigned
+          </button>
+          <button
+            type="button"
+            onClick={onUnassignAndContinue}
+            disabled={unassigning}
+            className="px-5 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm transition-colors shadow disabled:opacity-50"
+          >
+            {unassigning ? 'Unassigning...' : 'Unassign all & continue to delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Delete Confirmation Modal
+ */
+interface DeleteConfirmationModalProps {
+  title: string;
+  description: React.ReactNode;
+  confirmLabel?: string;
+  disabled?: boolean;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}
+
+function DeleteConfirmationModal({ title, description, confirmLabel = 'Confirm Delete', disabled, onClose, onConfirm }: DeleteConfirmationModalProps) {
+  const [selectedReason, setSelectedReason] = useState('Emergency Cancellation');
+  const [otherText, setOtherText] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalReason = selectedReason === 'Other' ? otherText.trim() : selectedReason;
+    if (selectedReason === 'Other' && !otherText.trim()) {
+      toastError('Please describe the reason');
+      return;
+    }
+    onConfirm(finalReason || 'Unspecified Cancellation');
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 pb-2 border-b">
+          <h3 className="text-lg font-bold text-gray-900">{title}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-500 font-bold text-xl">
+            ×
+          </button>
+        </div>
+
+        <div className="mb-4">
+          <p className="text-sm text-gray-600">{description}</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-3">
+            {[
+              'Emergency Cancellation',
+              'Not interesting',
+              'plan to another something',
+              'Other',
+            ].map((reason) => (
+              <label key={reason} className="flex items-center gap-3 cursor-pointer p-3 bg-gray-50 hover:bg-gray-100 rounded border transition-colors">
+                <input
+                  type="radio"
+                  name="cancellationReason"
+                  value={reason}
+                  checked={selectedReason === reason}
+                  onChange={(e) => setSelectedReason(e.target.value)}
+                  className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300"
+                />
+                <span className="text-sm font-medium text-gray-700 capitalize">
+                  {reason === 'plan to another something' ? 'Plan to another something' : reason === 'Not interesting' ? 'Not interesting' : reason}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {selectedReason === 'Other' && (
+            <div className="animate-fade-in pt-1">
+              <label className="block text-xs font-semibold text-gray-700 mb-1">
+                Describe Reason <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                required
+                rows={2}
+                value={otherText}
+                onChange={(e) => setOtherText(e.target.value)}
+                placeholder="Describe why deletion is required..."
+                className="input w-full text-sm border rounded p-2 focus:ring-red-500"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t mt-4">
+            <button type="button" onClick={onClose} disabled={disabled} className="btn-secondary text-sm px-4 py-2">
+              Cancel
+            </button>
+            <button type="submit" disabled={disabled} className="px-5 py-2 rounded bg-red-600 hover:bg-red-700 text-white font-semibold text-sm transition-colors shadow disabled:opacity-50">
+              {confirmLabel}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

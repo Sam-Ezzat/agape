@@ -15,18 +15,73 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// WHY: Tenant boundary for multi-tenancy. Each organization (church/team) has
+// its own isolated data, users, and communication settings.
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users                  User[]
+  conferenceHouses       ConferenceHouse[]
+  attendees              Attendee[]
+  templates              MessageTemplate[]
+  campaigns              MessageCampaign[]
+  messages               Message[]
+  communicationSettings  CommunicationSettings[]
+  auditLogs              AuditLog[]
+  previewSessions        AutoAssignmentPreviewSession[]
+
+  @@map("organizations")
+}
+
+// WHY: A user account belongs to exactly one organization. Auth is JWT-based;
+// this table only stores credentials + org/role membership.
+model User {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  name           String
+  role           UserRole @default(ADMIN)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  auditLogs      AuditLog[]
+  previewSessionsCreated AutoAssignmentPreviewSession[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  CONFERENCE_HOUSE_MANAGER
+}
+
 // WHY: Top-level entity representing the entire conference venue
 // A conference house can have multiple buildings
 model ConferenceHouse {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  description String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  
+  id             String   @id @default(uuid())
+  organizationId String?  @map("organization_id")
+  name           String
+  description    String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
   // Relations
-  buildings   Building[]
-  
+  organization         Organization?          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  buildings            Building[]
+  autoAssignmentConfig AutoAssignmentConfig?
+  previewSession       AutoAssignmentPreviewSession?
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
   @@map("conference_houses")
 }
 
@@ -70,14 +125,17 @@ model Floor {
 
 // WHY: Individual rooms where attendees are assigned
 model Room {
-  id          String   @id @default(uuid())
-  floorId     String   @map("floor_id")
-  roomNumber  String   @map("room_number")
-  capacity    Int      // Maximum number of people
-  roomType    RoomType @default(GENERAL) @map("room_type")
-  amenities   Json?    // Flexible JSONB for features: ["AC", "Wheelchair accessible", "مكيف"]
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(uuid())
+  floorId        String   @map("floor_id")
+  roomNumber     String   @map("room_number")
+  capacity       Int      // Maximum number of people (calculated from individualBeds + kingBeds + 2 * bunkBeds)
+  individualBeds Int      @default(0) @map("individual_beds")
+  bunkBeds       Int      @default(0) @map("bunk_beds") // Each bunk bed sleeps 2
+  kingBeds       Int      @default(0) @map("king_beds") // Counted as 1 person each, like individualBeds
+  roomType       RoomType @default(GENERAL) @map("room_type")
+  amenities      String?  // Auto-generated bed-count summary, e.g. "Individual Beds: 2, Bunk Beds: 1, King Beds: 0"
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
   
   // Relations
   floor       Floor    @relation(fields: [floorId], references: [id], onDelete: Cascade)
@@ -86,6 +144,7 @@ model Room {
   // WHY: Ensure unique room numbers within a floor
   @@unique([floorId, roomNumber])
   @@index([floorId])
+  @@index([roomType])
   @@map("rooms")
 }
 
@@ -101,6 +160,7 @@ enum RoomType {
 // Updated to match conference registration Excel structure
 model Attendee {
   id                String          @id @default(uuid())
+  organizationId    String?         @map("organization_id")
   ticketId          String?         @unique @map("ticket_id") // Conference ticket ID (e.g., TO-20260607-578181)
   fullName          String          @map("full_name")
   phone             String?
@@ -115,7 +175,10 @@ model Attendee {
   // Travel & Transportation
   arrivalMethod     String?         @map("arrival_method") // e.g., "باص المؤتمر", "ملاكي"
   busPickupPoint    String?         @map("bus_pickup_point") // Bus pickup location
-  
+
+  // Meal Preference
+  mealType          String?         @map("meal_type") // e.g., "وجبات صيامي", "وجبات فطاري"
+
   // Payment Information
   paymentMethod     String?         @map("payment_method") // e.g., "Orange Cash", "InstaPay"
   paymentStatus     PaymentStatus?  @default(PENDING) @map("payment_status")
@@ -125,25 +188,41 @@ model Attendee {
   conferenceRole    ConferenceRole  @default(ATTENDEE) @map("conference_role")
   notes             String?         @db.Text // Special needs, preferences, medical info
   roomingNotes      String?         @db.Text @map("rooming_notes") // Room assignment preferences
+  // WHY: Cached AI/keyword classification of roomingNotes (ClassifiedNotes shape:
+  // roommateRequests, healthIssues, accessibility flags, family, raw), computed once
+  // in the background after import/create/update instead of re-classifying on every
+  // auto-assignment run. Stale when its embedded `raw` no longer matches roomingNotes.
+  roomingNotesClassification Json?  @map("rooming_notes_classification")
   internalNotes     String?         @db.Text @map("internal_notes") // Admin-only notes
   
   // Check-in Tracking
   checkedInAt       DateTime?       @map("checked_in_at")
   checkedOutAt      DateTime?       @map("checked_out_at")
   checkedInBy       String?         @map("checked_in_by") // Staff member who checked in
-  
+
+  // WHY: Set when the attendee replies with a stop/unsubscribe keyword to a
+  // WhatsApp message (see whatsapp.service.ts's incoming-message handler) —
+  // excluded from all future campaign recipient filtering to avoid
+  // re-messaging someone who opted out (WhatsApp policy + ban risk).
+  whatsappOptOut    Boolean         @default(false) @map("whatsapp_opt_out")
+  whatsappOptOutAt  DateTime?       @map("whatsapp_opt_out_at")
+
   // Timestamps
   createdAt         DateTime        @default(now()) @map("created_at")
   updatedAt         DateTime        @updatedAt @map("updated_at")
   deletedAt         DateTime?       @map("deleted_at") // Soft delete
   
   // Relations
+  organization      Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assignment        RoomAssignment?
-  
+  messages          Message[]
+
   // WHY: Indexes for fast searches (supports Arabic text with trigram similarity)
+  @@index([organizationId])
   @@index([fullName])
   @@index([ticketId])
   @@index([conferenceRole])
+  @@index([gender])
   @@index([checkedInAt])
   @@index([paymentStatus])
   @@index([email])
@@ -184,6 +263,7 @@ model RoomAssignment {
   attendeeId  String   @unique @map("attendee_id") // WHY: Unique ensures one person = one room
   assignedAt  DateTime @default(now()) @map("assigned_at")
   assignedBy  String?  @map("assigned_by") // Future: user ID who made the assignment
+  isLocked    Boolean  @default(false) @map("is_locked") // WHY: Manual assignments can be locked to prevent auto-assignment changes
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
   
@@ -191,24 +271,297 @@ model RoomAssignment {
   room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
   attendee    Attendee @relation(fields: [attendeeId], references: [id], onDelete: Cascade)
   
-  // WHY: Fast lookups by room (to show all people in a room)
+  // WHY: Fast lookups by room (to show all people in a room) and locked assignments
   @@index([roomId])
+  @@index([isLocked])
   @@map("room_assignments")
 }
 
 // WHY: Complete audit trail for all assignment operations
 // Enables answering "who assigned whom, when, and why" for accountability
 model AuditLog {
-  id          String   @id @default(uuid())
-  action      String   // "assign", "unassign", "check_in", "check_out", "create", "update", "delete"
-  entityType  String   @map("entity_type") // "attendee", "room", "assignment", "building"
-  entityId    String   @map("entity_id")
-  details     Json?    // Flexible JSONB for action-specific data
-  performedBy String?  @map("performed_by") // Future: user ID
-  createdAt   DateTime @default(now()) @map("created_at")
-  
+  id             String   @id @default(uuid())
+  organizationId String?  @map("organization_id")
+  action         String   // "assign", "unassign", "check_in", "check_out", "create", "update", "delete", "auto_assign"
+  entityType     String   @map("entity_type") // "attendee", "room", "assignment", "building"
+  entityId       String   @map("entity_id")
+  details        Json?    // Flexible JSONB for action-specific data
+  performedBy    String?  @map("performed_by") // Legacy free-text actor label
+  userId         String?  @map("user_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   // WHY: Fast queries by entity (e.g., "show me all actions on this attendee")
+  @@index([organizationId])
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// WHY: Configuration for auto-assignment engine
+// Stores per-conference settings for automated room assignment
+model AutoAssignmentConfig {
+  id                        String   @id @default(uuid())
+  conferenceHouseId         String   @unique @map("conference_house_id")
+  enabledBuildings          String[] @map("enabled_buildings") // Array of building IDs to include
+  buildingGenderOverrides   Json     @default("{}") @map("building_gender_overrides") // buildingId -> 'MALE'|'FEMALE' manual pin; buildings absent from this map keep the automatic first-come gender behavior
+  staffReservedCapacity     Int      @default(0) @map("staff_reserved_capacity") // Beds reserved for staff
+  vipReservedCapacity       Int      @default(0) @map("vip_reserved_capacity") // Beds reserved for VIP
+  emergencyReservedCapacity Int      @default(0) @map("emergency_reserved_capacity") // Beds reserved for emergencies
+  leaderReservedSlots       Int      @default(1) @map("leader_reserved_slots") // Beds withheld per room so a leader can be added manually later, regardless of conference role
+  enabledRules              String[] @map("enabled_rules") // Array of rule names to enable
+  ruleWeights               Json     @default("{}") @map("rule_weights") // Rule name → weight mapping
+  optimizationEnabled       Boolean  @default(true) @map("optimization_enabled") // Whether to run optimization
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  conferenceHouse           ConferenceHouse @relation(fields: [conferenceHouseId], references: [id], onDelete: Cascade)
+  
+  @@index([conferenceHouseId])
+  @@map("auto_assignment_configs")
+}
+
+// WHY: Shared, backend-persisted auto-assignment draft so multiple admins
+// can view/edit the same preview concurrently instead of a private
+// per-browser localStorage copy. One active draft per conference house.
+model AutoAssignmentPreviewSession {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  conferenceHouseId String   @unique @map("conference_house_id") // WHY: enforces "one shared draft per house"
+  buildingIds       String[] @map("building_ids")
+  data              Json     // Full AutoAssignmentExecutionResult (assignments, unassignedAttendees, etc.)
+  version           Int      @default(1) // WHY: optimistic-concurrency token for conflict detection
+  createdById       String   @map("created_by_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organization      Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conferenceHouse   ConferenceHouse @relation(fields: [conferenceHouseId], references: [id], onDelete: Cascade)
+  createdBy         User            @relation(fields: [createdById], references: [id])
+
+  @@index([organizationId])
+  @@map("auto_assignment_preview_sessions")
+}
+
+// ==========================================
+// COMMUNICATION SYSTEM MODELS
+// ==========================================
+
+// WHY: Reusable message templates with dynamic variables
+// Supports Arabic content and template personalization
+model MessageTemplate {
+  id             String           @id @default(uuid())
+  organizationId String?          @map("organization_id")
+  name          String
+  description   String?          @db.Text
+  category      TemplateCategory @default(GENERAL)
+  
+  // Template Content
+  subject       String?
+  body          String           @db.Text
+  variables     Json             @default("[]")
+  
+  // Media
+  hasAttachment Boolean          @default(false) @map("has_attachment")
+  attachmentUrl String?          @map("attachment_url")
+  attachmentType String?         @map("attachment_type")
+  
+  // Metadata
+  language      String           @default("ar")
+  isActive      Boolean          @default(true) @map("is_active")
+  usageCount    Int              @default(0) @map("usage_count")
+  
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  createdBy     String?          @map("created_by")
+  
+  // Relations
+  organization  Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns     MessageCampaign[]
+  messages      Message[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([category])
+  @@index([isActive])
+  @@map("message_templates")
+}
+
+// WHY: Template categories for organizing messages by purpose
+enum TemplateCategory {
+  ROOM_ASSIGNMENT
+  CHECK_IN
+  PAYMENT
+  GENERAL
+  EMERGENCY
+  WELCOME
+  SCHEDULE
+  TRANSPORTATION
+}
+
+// WHY: Message campaigns for bulk messaging to filtered recipients
+model MessageCampaign {
+  id                    String         @id @default(uuid())
+  organizationId        String?        @map("organization_id")
+  name                  String
+  description           String?        @db.Text
+  templateId            String         @map("template_id")
+  
+  // Target Audience
+  targetFilter          Json           @map("target_filter")
+  recipientCount        Int            @default(0) @map("recipient_count")
+  
+  // Scheduling
+  status                CampaignStatus @default(DRAFT)
+  scheduledFor          DateTime?      @map("scheduled_for")
+  startedAt             DateTime?      @map("started_at")
+  completedAt           DateTime?      @map("completed_at")
+  
+  // Delivery Settings
+  channel               MessageChannel @default(WHATSAPP)
+  delayBetweenMessages  Int            @default(5000) @map("delay_between_messages")
+  batchSize             Int            @default(10) @map("batch_size")
+  
+  // Statistics
+  totalSent             Int            @default(0) @map("total_sent")
+  totalFailed           Int            @default(0) @map("total_failed")
+  totalPending          Int            @default(0) @map("total_pending")
+  
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+  createdBy             String?        @map("created_by")
+  
+  // Relations
+  organization          Organization?   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template              MessageTemplate @relation(fields: [templateId], references: [id])
+  messages              Message[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([scheduledFor])
+  @@map("message_campaigns")
+}
+
+// WHY: Campaign lifecycle statuses
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// WHY: Communication channels (WhatsApp only for now)
+enum MessageChannel {
+  WHATSAPP
+  EMAIL
+  SMS
+}
+
+// WHY: Individual messages sent to attendees with delivery tracking
+model Message {
+  id            String        @id @default(uuid())
+  // WHY nullable: a message can come from an automated campaign (campaignId
+  // set) OR be logged from the manual "copy to WhatsApp" flow (campaignId
+  // null, templateId set instead) — organizationId is stored directly here
+  // so org-scoped queries (e.g. message stats/list) work the same either
+  // way, without depending on a campaign relation that may not exist.
+  organizationId String?      @map("organization_id")
+  campaignId    String?       @map("campaign_id")
+  templateId    String?       @map("template_id")
+  attendeeId    String        @map("attendee_id")
+
+  // Message Content
+  recipient     String
+  subject       String?
+  body          String        @db.Text
+  attachmentUrl String?       @map("attachment_url")
+
+  // Delivery Status
+  status        MessageStatus @default(PENDING)
+  channel       MessageChannel @default(WHATSAPP)
+  sentAt        DateTime?     @map("sent_at")
+  deliveredAt   DateTime?     @map("delivered_at")
+  readAt        DateTime?     @map("read_at")
+  failedAt      DateTime?     @map("failed_at")
+  errorMessage  String?       @db.Text @map("error_message")
+
+  // Retry Logic
+  retryCount    Int           @default(0) @map("retry_count")
+  maxRetries    Int           @default(3) @map("max_retries")
+
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  organization  Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign      MessageCampaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  template      MessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  attendee      Attendee      @relation(fields: [attendeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([campaignId])
+  @@index([attendeeId])
+  @@index([status])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+// WHY: Message delivery statuses for tracking
+enum MessageStatus {
+  PENDING
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  CANCELLED
+}
+
+// WHY: Global communication settings for rate limiting and channel configuration
+model CommunicationSettings {
+  id                    String   @id @default(uuid())
+  organizationId        String?  @unique @map("organization_id")
+
+  // WhatsApp Settings
+  whatsappEnabled       Boolean  @default(true) @map("whatsapp_enabled")
+  whatsappSessionActive Boolean  @default(false) @map("whatsapp_session_active")
+  // WHY: First-ever activation timestamp for THIS authenticated session —
+  // used to ramp up send limits/delay gradually for a freshly-connected
+  // number instead of sending at full volume immediately (a strong ban
+  // signal). Deliberately NOT reset on every reconnect of the same session,
+  // only set once when null.
+  whatsappSessionActiveSince DateTime? @map("whatsapp_session_active_since")
+  whatsappDelayMin      Int      @default(3000) @map("whatsapp_delay_min")
+  whatsappDelayMax      Int      @default(8000) @map("whatsapp_delay_max")
+  whatsappBatchSize     Int      @default(10) @map("whatsapp_batch_size")
+  whatsappBatchDelay    Int      @default(60000) @map("whatsapp_batch_delay")
+  
+  // Email Settings (future)
+  emailEnabled          Boolean  @default(false) @map("email_enabled")
+  emailProvider         String?  @map("email_provider")
+  emailFrom             String?  @map("email_from")
+  
+  // SMS Settings (future)
+  smsEnabled            Boolean  @default(false) @map("sms_enabled")
+  smsProvider           String?  @map("sms_provider")
+  
+  // Rate Limiting
+  maxMessagesPerHour    Int      @default(100) @map("max_messages_per_hour")
+  maxMessagesPerDay     Int      @default(300) @map("max_messages_per_day")
+  
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  organization          Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("communication_settings")
 }

@@ -26,9 +26,9 @@ export class ConferenceHouseRepository extends BaseRepository<
    * Find conference house with buildings
    * WHY: Often need to fetch house with its buildings for display
    */
-  async findByIdWithBuildings(id: string): Promise<ConferenceHouse | null> {
-    return this.model.findUnique({
-      where: { id },
+  async findByIdWithBuildings(id: string, organizationId: string): Promise<ConferenceHouse | null> {
+    return this.model.findFirst({
+      where: { id, organizationId },
       include: {
         buildings: {
           orderBy: { name: 'asc' },
@@ -41,9 +41,9 @@ export class ConferenceHouseRepository extends BaseRepository<
    * Find conference house with full hierarchy
    * WHY: For dashboard and overview pages
    */
-  async findByIdWithFullHierarchy(id: string): Promise<ConferenceHouse | null> {
-    return this.model.findUnique({
-      where: { id },
+  async findByIdWithFullHierarchy(id: string, organizationId: string): Promise<ConferenceHouse | null> {
+    return this.model.findFirst({
+      where: { id, organizationId },
       include: {
         buildings: {
           orderBy: { name: 'asc' },
@@ -66,9 +66,10 @@ export class ConferenceHouseRepository extends BaseRepository<
    * Search conference houses by name
    * WHY: For search functionality
    */
-  async search(query: string, skip: number = 0, take: number = 20): Promise<ConferenceHouse[]> {
+  async search(organizationId: string, query: string, skip: number = 0, take: number = 20): Promise<ConferenceHouse[]> {
     return this.model.findMany({
       where: {
+        organizationId,
         OR: [
           { name: { contains: query, mode: 'insensitive' } },
           { description: { contains: query, mode: 'insensitive' } },
@@ -83,13 +84,14 @@ export class ConferenceHouseRepository extends BaseRepository<
   /**
    * Get total count for pagination
    */
-  async count(query?: string): Promise<number> {
+  async countByOrganization(organizationId: string, query?: string): Promise<number> {
     if (!query) {
-      return this.model.count();
+      return this.model.count({ where: { organizationId } });
     }
 
     return this.model.count({
       where: {
+        organizationId,
         OR: [
           { name: { contains: query, mode: 'insensitive' } },
           { description: { contains: query, mode: 'insensitive' } },
@@ -102,8 +104,9 @@ export class ConferenceHouseRepository extends BaseRepository<
    * Find all conference houses with full hierarchy
    * WHY: For dashboard occupancy breakdown
    */
-  async findAllWithHierarchy() {
+  async findAllWithHierarchy(organizationId: string) {
     return this.model.findMany({
+      where: { organizationId },
       include: {
         buildings: {
           orderBy: { name: 'asc' },
@@ -121,6 +124,49 @@ export class ConferenceHouseRepository extends BaseRepository<
       },
       orderBy: { name: 'asc' },
     });
+  }
+
+  /**
+   * Find conference house by ID scoped to organization
+   * WHY: Ownership check used by other services before mutating child entities
+   */
+  async findByIdScoped(id: string, organizationId: string): Promise<ConferenceHouse | null> {
+    return this.model.findFirst({ where: { id, organizationId } });
+  }
+
+  /**
+   * Find all conference houses for organization (paginated)
+   */
+  async findAllScoped(organizationId: string, skip?: number, take?: number): Promise<ConferenceHouse[]> {
+    return this.model.findMany({
+      where: { organizationId },
+      skip,
+      take,
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  /**
+   * Update conference house scoped to organization
+   */
+  async updateScoped(id: string, organizationId: string, data: Partial<ConferenceHouse>): Promise<ConferenceHouse> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.update({ where: { id }, data: data as any });
+  }
+
+  /**
+   * Delete conference house scoped to organization
+   */
+  async deleteScoped(id: string, organizationId: string): Promise<ConferenceHouse> {
+    await this.assertOwnership(id, organizationId);
+    return this.model.delete({ where: { id } });
+  }
+
+  private async assertOwnership(id: string, organizationId: string): Promise<void> {
+    const existing = await this.model.findFirst({ where: { id, organizationId }, select: { id: true } });
+    if (!existing) {
+      throw new Error('ConferenceHouse not found in organization');
+    }
   }
 }
 

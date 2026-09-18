@@ -1,6 +1,6 @@
 /**
  * Dashboard Service
- * 
+ *
  * WHY: Business logic for dashboard statistics and metrics
  * Aggregates data from multiple repositories for overview displays
  */
@@ -24,12 +24,12 @@ export class DashboardService {
    * Get overall system statistics
    * WHY: Dashboard overview with key metrics
    */
-  async getOverallStats() {
+  async getOverallStats(organizationId: string) {
     const [attendeeStats, roomStats, assignmentStats, auditStats] = await Promise.all([
-      this.attendeeRepository.getStatistics(),
-      this.getRoomStatistics(),
-      this.getAssignmentStatistics(),
-      this.auditLogRepository.getStatistics(),
+      this.attendeeRepository.getStatistics(organizationId),
+      this.getRoomStatistics(organizationId),
+      this.getAssignmentStatistics(organizationId),
+      this.auditLogRepository.getStatistics(organizationId),
     ]);
 
     const occupancyRate = roomStats.totalRooms > 0
@@ -64,10 +64,10 @@ export class DashboardService {
    * Get room statistics
    * WHY: Room availability metrics
    */
-  private async getRoomStatistics() {
-    const totalRooms = await this.roomRepository.count();
-    const availability = await this.assignmentRepository.getRoomAvailability();
-    
+  private async getRoomStatistics(organizationId: string) {
+    const totalRooms = await this.roomRepository.countByOrganization(organizationId);
+    const availability = await this.assignmentRepository.getRoomAvailability(organizationId);
+
     const occupiedRooms = availability.filter(r => r.occupied > 0).length;
     const availableRooms = availability.filter(r => r.available > 0).length;
 
@@ -82,14 +82,15 @@ export class DashboardService {
    * Get assignment statistics
    * WHY: Track assignment activity
    */
-  private async getAssignmentStatistics() {
-    const total = await this.assignmentRepository.count();
-    
+  private async getAssignmentStatistics(organizationId: string) {
+    const availability = await this.assignmentRepository.getRoomAvailability(organizationId);
+    const total = availability.reduce((sum, r) => sum + r.occupied, 0);
+
     // Count assignments created today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
-    const todayAssignments = await this.assignmentRepository.countCreatedSince(today);
+
+    const todayAssignments = await this.assignmentRepository.countCreatedSince(today, organizationId);
 
     return {
       total,
@@ -101,9 +102,9 @@ export class DashboardService {
    * Get room occupancy by building/floor
    * WHY: Visual breakdown of occupancy across facilities
    */
-  async getOccupancyBreakdown() {
-    const conferenceHouses = await this.conferenceHouseRepository.findAllWithHierarchy();
-    const availability = await this.assignmentRepository.getRoomAvailability();
+  async getOccupancyBreakdown(organizationId: string) {
+    const conferenceHouses = await this.conferenceHouseRepository.findAllWithHierarchy(organizationId);
+    const availability = await this.assignmentRepository.getRoomAvailability(organizationId);
 
     // Create map of room availability by room ID
     const availabilityMap = new Map(availability.map(r => [r.id, r]));
@@ -118,7 +119,7 @@ export class DashboardService {
           const floorRooms = floor.rooms.map(room => availabilityMap.get(room.id)).filter(Boolean);
           const totalCapacity = floorRooms.reduce((sum, r) => sum + (r?.capacity || 0), 0);
           const totalOccupied = floorRooms.reduce((sum, r) => sum + (r?.occupied || 0), 0);
-          
+
           return {
             id: floor.id,
             floorNumber: floor.floorNumber,
@@ -138,16 +139,16 @@ export class DashboardService {
    * Get recent activity
    * WHY: Show latest system actions
    */
-  async getRecentActivity(limit: number = 20) {
-    return this.auditLogRepository.getRecentActivity(limit);
+  async getRecentActivity(organizationId: string, limit: number = 20) {
+    return this.auditLogRepository.getRecentActivity(organizationId, limit);
   }
 
   /**
    * Get check-in/check-out report
    * WHY: Track attendance over time
    */
-  async getCheckInReport() {
-    const attendees = await this.attendeeRepository.findAll();
+  async getCheckInReport(organizationId: string) {
+    const attendees = await this.attendeeRepository.findAllByOrganization(organizationId);
 
     const checkedIn = attendees.filter(a => a.checkedInAt && !a.checkedOutAt && !a.deletedAt);
     const checkedOut = attendees.filter(a => a.checkedOutAt && !a.deletedAt);

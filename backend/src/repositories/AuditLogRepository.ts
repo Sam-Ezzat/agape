@@ -14,6 +14,8 @@ export interface CreateAuditLogDTO {
   entityId: string;
   details?: Record<string, any>;
   performedBy?: string;
+  organizationId: string;
+  userId?: string;
 }
 
 export interface AuditLogFilterParams {
@@ -43,6 +45,8 @@ export class AuditLogRepository extends BaseRepository<AuditLog, Prisma.AuditLog
         entityId: data.entityId,
         details: data.details || {},
         performedBy: data.performedBy,
+        organizationId: data.organizationId,
+        userId: data.userId,
       },
     });
   }
@@ -51,11 +55,12 @@ export class AuditLogRepository extends BaseRepository<AuditLog, Prisma.AuditLog
    * Find logs by entity
    * WHY: Show action history for specific entity
    */
-  async findByEntity(entityType: string, entityId: string) {
+  async findByEntity(entityType: string, entityId: string, organizationId: string) {
     return this.prisma.auditLog.findMany({
       where: {
         entityType,
         entityId,
+        organizationId,
       },
       orderBy: { createdAt: 'desc' },
       take: 100, // Limit to last 100 actions
@@ -66,11 +71,11 @@ export class AuditLogRepository extends BaseRepository<AuditLog, Prisma.AuditLog
    * Search logs with filters
    * WHY: Admin audit trail queries
    */
-  async search(params: AuditLogFilterParams) {
+  async search(params: AuditLogFilterParams, organizationId: string) {
     const { action, entityType, entityId, startDate, endDate, page = 1, limit = 50 } = params;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.AuditLogWhereInput = {};
+    const where: Prisma.AuditLogWhereInput = { organizationId };
 
     if (action) {
       where.action = action;
@@ -117,8 +122,9 @@ export class AuditLogRepository extends BaseRepository<AuditLog, Prisma.AuditLog
    * Get recent activity
    * WHY: Dashboard "Recent Actions" widget
    */
-  async getRecentActivity(limit: number = 20) {
+  async getRecentActivity(organizationId: string, limit: number = 20) {
     return this.prisma.auditLog.findMany({
+      where: { organizationId },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
@@ -128,11 +134,12 @@ export class AuditLogRepository extends BaseRepository<AuditLog, Prisma.AuditLog
    * Get statistics
    * WHY: Dashboard metrics
    */
-  async getStatistics() {
+  async getStatistics(organizationId: string) {
     const [totalActions, actionsByType] = await Promise.all([
-      this.prisma.auditLog.count(),
+      this.prisma.auditLog.count({ where: { organizationId } }),
       this.prisma.auditLog.groupBy({
         by: ['action'],
+        where: { organizationId },
         _count: true,
       }),
     ]);

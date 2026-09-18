@@ -72,8 +72,11 @@ export interface Room {
   floorId: string;
   roomNumber: string;
   capacity: number;
+  individualBeds: number;
+  bunkBeds: number;
+  kingBeds: number;
   roomType: RoomType;
-  amenities?: any;
+  amenities?: string;
   createdAt: string;
   updatedAt: string;
   floor?: Floor;
@@ -94,6 +97,7 @@ export interface Attendee {
   isServant?: boolean;
   arrivalMethod?: string;
   busPickupPoint?: string;
+  mealType?: string;
   paymentMethod?: string;
   paymentStatus?: PaymentStatus;
   transactionNumber?: string;
@@ -205,6 +209,13 @@ export interface AttendeeFilters extends PaginationParams {
   gender?: Gender;
   checkedIn?: 'true' | 'false';
   hasAssignment?: 'true' | 'false';
+  dualSearch?: 'true' | 'false'; // Dual-language search (Arabic ↔ English)
+  onlyDeleted?: 'true' | 'false';
+}
+
+export interface UnassignedFilters {
+  search?: string;
+  dualSearch?: 'true' | 'false'; // Dual-language search (Arabic ↔ English)
 }
 
 export interface RoomFilters extends PaginationParams {
@@ -251,4 +262,136 @@ export interface CreateAssignmentDTO {
 
 export interface BatchAssignmentDTO {
   assignments: CreateAssignmentDTO[];
+}
+
+// Auto-Assignment types
+export interface AutoAssignmentConfig {
+  id: string;
+  conferenceHouseId: string;
+  enabledBuildings?: string[];
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
+  staffReservedCapacity?: number;
+  leaderReservedSlots?: number;
+  ruleWeights?: Record<string, number>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunAutoAssignmentDTO {
+  conferenceHouseId: string;
+  buildingIds?: string[];
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
+  dryRun?: boolean;
+  options?: {
+    minGroupSize?: number;
+    preserveExistingAssignments?: boolean;
+  };
+}
+
+export interface UpdateAutoAssignmentConfigDTO {
+  enabledBuildings?: string[];
+  buildingGenderOverrides?: Record<string, 'MALE' | 'FEMALE'>;
+  staffReservedCapacity?: number;
+  leaderReservedSlots?: number;
+  ruleWeights?: Record<string, number>;
+}
+
+export interface AssignmentPreview {
+  attendeeId: string;
+  attendeeName: string;
+  gender?: string;                     // Attendee gender for display
+  age?: number;                        // Attendee age for display
+  church?: string | null;
+  area?: string | null;
+  governorate?: string | null;
+  roomingNotes?: string | null;        // Attendee's rooming notes/requests, for review
+  parsedRoomingNotes?: string | null;  // Clean, human-reviewable list of extracted roommate names
+  roomId: string;
+  roomNumber: string;
+  buildingName: string;
+  floorNumber: number;
+  roomCapacity?: number;              // Room capacity for availability calculations
+  existingOccupancy?: number;         // Occupants already in the room before this run (manual or prior assignments)
+  score: number;
+  appliedRules: string[];
+  reason?: string;                    // Explanation of why this assignment was made
+  scoreBreakdown?: Record<string, number>; // Score contribution by each rule
+  groupInfo?: {                       // Group membership information
+    groupId: string;
+    groupType: 'roommate' | 'family' | 'area' | 'church' | 'governorate' | 'individual';
+    groupSize: number;
+    roommatesInSameRoom?: number;      // How many roommates assigned to this room
+  };
+  warnings?: string[];                 // Non-critical issues
+  // WHY: Distinguishes a REAL, already-committed room assignment (seeded
+  // into the preview so it can be seen/moved/swapped) from a brand new
+  // placement this dry run made — commit needs this to know whether to
+  // insert, no-op, or move/delete an existing DB row.
+  isExisting?: boolean;
+  originalRoomId?: string;             // Where this attendee actually was in the DB when the draft was created
+}
+
+export interface AutoAssignmentExecutionResult {
+  success: boolean;
+  assignmentsCreated: number;
+  roomsUsed: number;
+  attendeesProcessed: number;
+  unassignedAttendees: Array<{
+    id: string;
+    name: string;
+    reason: string;
+    roomingNotes?: string | null;
+    area?: string | null;
+    governorate?: string | null;
+    church?: string | null;
+    age?: number | null;
+    gender?: string | null;
+    // WHY: Set when this was a REAL, already-assigned attendee dragged into
+    // "Unassigned" within the draft — commit needs this to release their
+    // actual room assignment, not just drop a draft-only row.
+    originalRoomId?: string;
+  }>;
+  validationErrors: Array<{
+    attendeeId: string;
+    reason: string;
+  }>;
+  assignments?: AssignmentPreview[];  // Preview of all assignments
+  executionTimeMs: number;
+  stages: Record<string, {
+    duration: number;
+    success: boolean;
+  }>;
+}
+
+// WHY: Response shape for the shared, backend-persisted preview draft
+// endpoints — lets multiple admins view/edit the same draft, with a
+// version token for optimistic-concurrency conflict detection.
+export interface PreviewSessionResponse {
+  success: boolean;
+  data: AutoAssignmentExecutionResult;
+  sessionId: string;
+  version: number;
+  buildingIds?: string[];
+  resumedExisting?: boolean;
+  activity?: AuditLog[];
+  message?: string;
+}
+
+// WHY: Returned by a failed edit — either a real error or a 409 conflict
+// (someone else changed the draft first), distinguished by `conflict`.
+export interface PreviewEditResult {
+  success: boolean;
+  conflict?: boolean;
+  data: AutoAssignmentExecutionResult;
+  version: number;
+  message?: string;
+}
+
+export interface AutoAssignmentStatus {
+  totalAttendees: number;
+  assignedAttendees: number;
+  unassignedAttendees: number;
+  totalRooms: number;
+  availableRooms: number;
+  occupancyRate: number;
 }

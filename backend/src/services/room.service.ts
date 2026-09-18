@@ -1,9 +1,9 @@
 /**
  * Room Service
- * 
+ *
  * WHY: Business logic layer for room operations
  * Handles validation, business rules, and coordinates repository operations
- * 
+ *
  * SOLID Principles:
  * - Single Responsibility: Only handles room business logic
  * - Dependency Injection: Receives repositories via constructor
@@ -16,6 +16,7 @@ import { CreateRoomDTO, UpdateRoomDTO, RoomFilterParams } from '@/validators/sch
 import { AppError } from '@/middleware/errorHandler';
 import { getNotificationService } from './notification.service';
 import { NotificationEvent, NotificationType } from '@/types/notifications';
+import { computeRoomCapacity, generateAmenitiesText, MAX_ROOM_CAPACITY } from '@/utils/roomCapacity';
 
 export class RoomService {
   constructor(
@@ -27,11 +28,11 @@ export class RoomService {
    * Create new room
    * WHY: Validates floor exists and creates room
    */
-  async create(data: CreateRoomDTO): Promise<Room> {
-    // Business rule: Floor must exist
-    const floor = await this.floorRepository.findById(data.floorId);
+  async create(data: CreateRoomDTO, organizationId: string): Promise<Room> {
+    // Business rule: Floor must exist and belong to org
+    const floor = await this.floorRepository.findByIdScoped(data.floorId, organizationId);
     if (!floor) {
-      throw new AppError('Floor not found', 404);
+      throw new AppError(404, 'Floor not found');
     }
 
     // Business rule: Check for duplicate room number on floor
@@ -41,17 +42,37 @@ export class RoomService {
     );
     if (existing) {
       throw new AppError(
-        `Room ${data.roomNumber} already exists on this floor`,
-        409
+        409,
+        `Room ${data.roomNumber} already exists on this floor`
       );
     }
 
-    const room = await this.roomRepository.create(data);
+    const bedCounts = {
+      individualBeds: data.individualBeds ?? 0,
+      bunkBeds: data.bunkBeds ?? 0,
+      kingBeds: data.kingBeds ?? 0,
+    };
+    const capacity = computeRoomCapacity(bedCounts);
+
+    if (capacity <= 0) {
+      throw new AppError(400, 'Room must have at least one bed');
+    }
+    if (capacity > MAX_ROOM_CAPACITY) {
+      throw new AppError(400, `Maximum ${MAX_ROOM_CAPACITY} people per room`);
+    }
+
+    const room = await this.roomRepository.create({
+      ...data,
+      ...bedCounts,
+      capacity,
+      amenities: generateAmenitiesText(bedCounts),
+    } as any);
 
     // Notify clients
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_CREATED,
         NotificationType.SUCCESS,
         `Room ${room.roomNumber} created`,
@@ -67,13 +88,13 @@ export class RoomService {
   /**
    * Get room by ID
    */
-  async getById(id: string, includeAssignment: boolean = false): Promise<Room> {
+  async getById(id: string, organizationId: string, includeAssignment: boolean = false): Promise<Room> {
     const room = includeAssignment
-      ? await this.roomRepository.findByIdWithAssignment(id)
-      : await this.roomRepository.findById(id);
+      ? await this.roomRepository.findByIdWithAssignment(id, organizationId)
+      : await this.roomRepository.findByIdScoped(id, organizationId);
 
     if (!room) {
-      throw new AppError('Room not found', 404);
+      throw new AppError(404, 'Room not found');
     }
 
     return room;
@@ -82,11 +103,11 @@ export class RoomService {
   /**
    * List rooms by floor
    */
-  async listByFloor(floorId: string): Promise<Room[]> {
-    // Verify floor exists
-    const floor = await this.floorRepository.findById(floorId);
+  async listByFloor(floorId: string, organizationId: string): Promise<Room[]> {
+    // Verify floor exists and belongs to org
+    const floor = await this.floorRepository.findByIdScoped(floorId, organizationId);
     if (!floor) {
-      throw new AppError('Floor not found', 404);
+      throw new AppError(404, 'Floor not found');
     }
 
     return this.roomRepository.findByFloorId(floorId);
@@ -96,8 +117,8 @@ export class RoomService {
    * List all rooms
    * WHY: Get all rooms for admin dashboard
    */
-  async listAll(): Promise<Room[]> {
-    return this.roomRepository.findAll();
+  async listAll(organizationId: string): Promise<Room[]> {
+    return this.roomRepository.findAllByOrganization(organizationId);
   }
 
   /**
@@ -105,6 +126,7 @@ export class RoomService {
    * WHY: For room assignment workflow
    */
   async listAvailable(
+    organizationId: string,
     floorId?: string,
     minCapacity?: number,
     type?: RoomType,
@@ -120,8 +142,8 @@ export class RoomService {
     };
   }> {
     const skip = (page - 1) * limit;
-    const data = await this.roomRepository.findAvailable(floorId, minCapacity, type, skip, limit);
-    const total = await this.roomRepository.countAvailable(floorId, type);
+    const data = await this.roomRepository.findAvailable(organizationId, floorId, minCapacity, type, skip, limit);
+    const total = await this.roomRepository.countAvailable(organizationId, floorId, type);
 
     return {
       data,
@@ -139,7 +161,8 @@ export class RoomService {
    * WHY: Advanced search functionality for room management
    */
   async search(
-    params: RoomFilterParams
+    params: RoomFilterParams,
+    organizationId: string
   ): Promise<{
     data: Room[];
     pagination: {
@@ -154,6 +177,7 @@ export class RoomService {
 
     const data = await this.roomRepository.findWithFilters({
       ...filters,
+      organizationId,
       type: roomType,
       skip,
       take: limit,
@@ -177,8 +201,8 @@ export class RoomService {
   /**
    * Update room
    */
-  async update(id: string, data: UpdateRoomDTO): Promise<Room> {
-    const existing = await this.getById(id);
+  async update(id: string, data: UpdateRoomDTO, organizationId: string): Promise<Room> {
+    const existing = await this.getById(id, organizationId);
 
     // Business rule: If updating room number, check for duplicates
     if (data.roomNumber && data.roomNumber !== existing.roomNumber) {
@@ -187,15 +211,35 @@ export class RoomService {
         data.roomNumber
       );
       if (duplicate) {
-        throw new AppError('Room number already exists on this floor', 409);
+        throw new AppError(409, 'Room number already exists on this floor');
       }
     }
 
-    const updated = await this.roomRepository.update(id, data);
+    const bedCounts = {
+      individualBeds: data.individualBeds ?? existing.individualBeds,
+      bunkBeds: data.bunkBeds ?? existing.bunkBeds,
+      kingBeds: data.kingBeds ?? existing.kingBeds,
+    };
+    const capacity = computeRoomCapacity(bedCounts);
+
+    if (capacity <= 0) {
+      throw new AppError(400, 'Room must have at least one bed');
+    }
+    if (capacity > MAX_ROOM_CAPACITY) {
+      throw new AppError(400, `Maximum ${MAX_ROOM_CAPACITY} people per room`);
+    }
+
+    const updated = await this.roomRepository.updateScoped(id, organizationId, {
+      ...data,
+      ...bedCounts,
+      capacity,
+      amenities: generateAmenitiesText(bedCounts),
+    } as any);
 
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_UPDATED,
         NotificationType.INFO,
         `Room ${updated.roomNumber} updated`,
@@ -211,19 +255,20 @@ export class RoomService {
   /**
    * Delete room
    */
-  async delete(id: string): Promise<void> {
-    const room = await this.getById(id, true);
+  async delete(id: string, organizationId: string): Promise<void> {
+    const room = await this.getById(id, organizationId, true);
 
     // Business rule: Cannot delete room with active assignment
     if ((room as any).assignments && (room as any).assignments.length > 0) {
-      throw new AppError('Cannot delete room with active assignment', 400);
+      throw new AppError(400, 'Cannot delete room with active assignment');
     }
 
-    await this.roomRepository.delete(id);
+    await this.roomRepository.deleteScoped(id, organizationId);
 
     try {
       const notificationService = getNotificationService();
       notificationService.broadcast(
+        organizationId,
         NotificationEvent.ROOM_DELETED,
         NotificationType.WARNING,
         `Room ${room.roomNumber} deleted`,

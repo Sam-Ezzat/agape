@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { AssignmentController } from '@/controllers/assignment.controller';
 import { AssignmentService } from '@/services/assignment.service';
+import { SwapValidationService } from '@/services/assignment/SwapValidationService';
 import { RoomAssignmentRepository } from '@/repositories/RoomAssignmentRepository';
 import { AttendeeRepository } from '@/repositories/AttendeeRepository';
 import { RoomRepository } from '@/repositories/RoomRepository';
@@ -35,7 +36,15 @@ const assignmentService = new AssignmentService(
   roomRepository,
   auditLogRepository
 );
-const assignmentController = new AssignmentController(assignmentService);
+const swapValidationService = new SwapValidationService(
+  roomRepository,
+  attendeeRepository,
+  assignmentRepository
+);
+const assignmentController = new AssignmentController(
+  assignmentService,
+  swapValidationService
+);
 
 /**
  * @route   POST /api/assignments/batch
@@ -47,6 +56,28 @@ router.post(
   '/batch',
   validate(batchAssignmentSchema, 'body'),
   asyncHandler(assignmentController.batchAssign.bind(assignmentController))
+);
+
+/**
+ * @route   POST /api/assignments/swap/validate
+ * @desc    Validate room assignment swap between attendees
+ * @access  Public (future: protected)
+ * @note    Must be before /:id route to avoid conflict
+ */
+router.post(
+  '/swap/validate',
+  asyncHandler(assignmentController.validateSwap.bind(assignmentController))
+);
+
+/**
+ * @route   POST /api/assignments/swap
+ * @desc    Execute room assignment swap between attendees
+ * @access  Public (future: protected)
+ * @note    Must be before /:id route to avoid conflict
+ */
+router.post(
+  '/swap',
+  asyncHandler(assignmentController.executeSwap.bind(assignmentController))
 );
 
 /**

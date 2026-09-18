@@ -1,9 +1,9 @@
 /**
  * Building Controller
- * 
+ *
  * WHY: HTTP request handlers for building endpoints
  * Thin layer that delegates to service layer
- * 
+ *
  * SOLID Principles:
  * - Single Responsibility: Only handles HTTP request/response
  * - Dependency Injection: Receives service via constructor
@@ -26,7 +26,8 @@ export class BuildingController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const buildings = await this.buildingService.listAll();
+      const organizationId = req.user!.organizationId;
+      const buildings = await this.buildingService.listAll(organizationId);
       res.json({
         success: true,
         data: buildings,
@@ -46,7 +47,8 @@ export class BuildingController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const building = await this.buildingService.create(req.body);
+      const organizationId = req.user!.organizationId;
+      const building = await this.buildingService.create(req.body, organizationId);
       res.status(201).json({
         success: true,
         data: building,
@@ -66,11 +68,13 @@ export class BuildingController {
     next: NextFunction
   ): Promise<void> => {
     try {
+      const organizationId = req.user!.organizationId;
       if (req.query.search) {
         // Search mode
         const result = await this.buildingService.search(
           req.params.conferenceHouseId,
-          req.query
+          req.query,
+          organizationId
         );
         res.json({
           success: true,
@@ -80,7 +84,8 @@ export class BuildingController {
       } else {
         // List all
         const buildings = await this.buildingService.listByConferenceHouse(
-          req.params.conferenceHouseId
+          req.params.conferenceHouseId,
+          organizationId
         );
         res.json({
           success: true,
@@ -102,8 +107,9 @@ export class BuildingController {
     next: NextFunction
   ): Promise<void> => {
     try {
+      const organizationId = req.user!.organizationId;
       const includeFloors = req.query.includeFloors === 'true';
-      const building = await this.buildingService.getById(req.params.id, includeFloors);
+      const building = await this.buildingService.getById(req.params.id, organizationId, includeFloors);
       res.json({
         success: true,
         data: building,
@@ -123,7 +129,8 @@ export class BuildingController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const building = await this.buildingService.getWithFullDetails(req.params.id);
+      const organizationId = req.user!.organizationId;
+      const building = await this.buildingService.getWithFullDetails(req.params.id, organizationId);
       res.json({
         success: true,
         data: building,
@@ -143,7 +150,8 @@ export class BuildingController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const building = await this.buildingService.update(req.params.id, req.body);
+      const organizationId = req.user!.organizationId;
+      const building = await this.buildingService.update(req.params.id, req.body, organizationId);
       res.json({
         success: true,
         data: building,
@@ -163,7 +171,8 @@ export class BuildingController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      await this.buildingService.delete(req.params.id);
+      const organizationId = req.user!.organizationId;
+      await this.buildingService.delete(req.params.id, organizationId);
       res.status(204).send();
     } catch (error) {
       next(error);

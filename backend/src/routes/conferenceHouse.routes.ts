@@ -65,6 +65,12 @@ router.patch(
   validate(updateConferenceHouseSchema, 'body'),
   asyncHandler(conferenceHouseController.update)
 );
+router.put(
+  '/:id',
+  validate(conferenceHouseIdSchema, 'params'),
+  validate(updateConferenceHouseSchema, 'body'),
+  asyncHandler(conferenceHouseController.update)
+);
 
 // Delete conference house
 router.delete(

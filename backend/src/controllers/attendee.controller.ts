@@ -1,13 +1,13 @@
 /**
  * Attendee Controller
- * 
+ *
  * WHY: HTTP layer for attendee operations
  * Thin controller that delegates to AttendeeService
  */
 
 import { Request, Response } from 'express';
 import { AttendeeService } from '@/services/attendee.service';
-import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams } from '@/validators/attendee.schemas';
+import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams, UnassignedFilterParams } from '@/validators/attendee.schemas';
 
 export class AttendeeController {
   constructor(private attendeeService: AttendeeService) {}
@@ -18,7 +18,8 @@ export class AttendeeController {
    */
   async create(req: Request, res: Response) {
     const data: CreateAttendeeDTO = req.body;
-    const attendee = await this.attendeeService.create(data);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.create(data, organizationId, req.user!.id);
     res.status(201).json({
       success: true,
       data: attendee,
@@ -31,7 +32,8 @@ export class AttendeeController {
    */
   async getById(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.getById(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.getById(id, organizationId);
     res.json({
       success: true,
       data: attendee,
@@ -44,7 +46,8 @@ export class AttendeeController {
    */
   async getDetails(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.getWithDetails(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.getWithDetails(id, organizationId);
     res.json({
       success: true,
       data: attendee,
@@ -57,7 +60,8 @@ export class AttendeeController {
    */
   async getAll(req: Request, res: Response) {
     const params: AttendeeFilterParams = req.query as any;
-    const result = await this.attendeeService.list(params);
+    const organizationId = req.user!.organizationId;
+    const result = await this.attendeeService.list(params, organizationId);
     res.json({
       success: true,
       data: result.data,
@@ -73,9 +77,12 @@ export class AttendeeController {
   /**
    * GET /api/attendees/unassigned
    * Get attendees without room assignment
+   * Supports optional search with dual-language
    */
   async getUnassigned(req: Request, res: Response) {
-    const attendees = await this.attendeeService.getUnassigned();
+    const params: UnassignedFilterParams = req.query as any;
+    const organizationId = req.user!.organizationId;
+    const attendees = await this.attendeeService.getUnassigned(organizationId, params);
     res.json({
       success: true,
       data: attendees,
@@ -87,7 +94,8 @@ export class AttendeeController {
    * Get attendee statistics
    */
   async getStats(req: Request, res: Response) {
-    const stats = await this.attendeeService.getStatistics();
+    const organizationId = req.user!.organizationId;
+    const stats = await this.attendeeService.getStatistics(organizationId);
     res.json({
       success: true,
       data: stats,
@@ -101,7 +109,8 @@ export class AttendeeController {
   async update(req: Request, res: Response) {
     const { id } = req.params;
     const data: UpdateAttendeeDTO = req.body;
-    const attendee = await this.attendeeService.update(id, data);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.update(id, data, organizationId, req.user!.id);
     res.json({
       success: true,
       data: attendee,
@@ -114,10 +123,44 @@ export class AttendeeController {
    */
   async delete(req: Request, res: Response) {
     const { id } = req.params;
-    await this.attendeeService.delete(id);
+    const { reason } = req.body;
+    const organizationId = req.user!.organizationId;
+    await this.attendeeService.delete(id, organizationId, reason, req.user!.id);
     res.json({
       success: true,
       message: 'Attendee deleted successfully',
+    });
+  }
+
+  /**
+   * POST /api/attendees/bulk-delete
+   * Soft delete multiple attendees
+   */
+  async bulkDelete(req: Request, res: Response) {
+    const { ids, reason } = req.body;
+    const organizationId = req.user!.organizationId;
+    const result = await this.attendeeService.bulkDelete(ids, organizationId, reason, req.user!.id);
+    res.json({
+      success: true,
+      data: result,
+      message: `${result.deleted.length} attendee(s) deleted successfully${
+        result.failed.length > 0 ? `, ${result.failed.length} failed` : ''
+      }`,
+    });
+  }
+
+  /**
+   * POST /api/attendees/:id/reactivate
+   * Reactivate soft-deleted attendee
+   */
+  async reactivate(req: Request, res: Response) {
+    const { id } = req.params;
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.reactivate(id, organizationId, req.user!.id);
+    res.json({
+      success: true,
+      data: attendee,
+      message: 'Attendee reactivated successfully',
     });
   }
 
@@ -127,7 +170,8 @@ export class AttendeeController {
    */
   async checkIn(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.checkIn(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.checkIn(id, organizationId, req.user!.id);
     res.json({
       success: true,
       data: attendee,
@@ -141,11 +185,29 @@ export class AttendeeController {
    */
   async checkOut(req: Request, res: Response) {
     const { id } = req.params;
-    const attendee = await this.attendeeService.checkOut(id);
+    const organizationId = req.user!.organizationId;
+    const attendee = await this.attendeeService.checkOut(id, organizationId, req.user!.id);
     res.json({
       success: true,
       data: attendee,
       message: 'Attendee checked out successfully',
+    });
+  }
+
+  /**
+   * GET /api/attendees/search-assigned
+   * Search assigned attendees with dual-language support
+   * For swap modal usage
+   */
+  async searchAssigned(req: Request, res: Response) {
+    const { query } = req.query;
+    const searchQuery = typeof query === 'string' ? query : '';
+    const organizationId = req.user!.organizationId;
+
+    const attendees = await this.attendeeService.searchAssigned(searchQuery, organizationId);
+    res.json({
+      success: true,
+      data: attendees,
     });
   }
 }

@@ -53,3 +53,7 @@ prisma/migrations/*.sql
 .cache
 .temp
 .tmp
+
+# WhatsApp session data (contains live auth credentials)
+backend/whatsapp-session/
+backend/whatsapp-sessions/

@@ -67,6 +67,12 @@ router.patch(
   validate(updateFloorSchema, 'body'),
   asyncHandler(floorController.update)
 );
+router.put(
+  '/:id',
+  validate(floorIdSchema, 'params'),
+  validate(updateFloorSchema, 'body'),
+  asyncHandler(floorController.update)
+);
 
 // Delete floor
 router.delete('/:id', validate(floorIdSchema, 'params'), asyncHandler(floorController.delete));

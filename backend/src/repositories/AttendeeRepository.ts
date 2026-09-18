@@ -8,19 +8,23 @@
 import { Attendee, Prisma, PrismaClient } from '@prisma/client';
 import { BaseRepository } from './BaseRepository';
 import { CreateAttendeeDTO, UpdateAttendeeDTO, AttendeeFilterParams } from '@/validators/attendee.schemas';
+import { SearchDualLanguageService } from '@/search/dual-language';
 
 export class AttendeeRepository extends BaseRepository<Attendee, Prisma.AttendeeDelegate> {
+  private dualLanguageSearch: SearchDualLanguageService;
+
   constructor(prisma: PrismaClient) {
     super(prisma, prisma.attendee);
+    this.dualLanguageSearch = new SearchDualLanguageService();
   }
 
   /**
    * Find attendee by ID with assignment details
    * WHY: Common query to show attendee with room info
    */
-  async findByIdWithDetails(id: string) {
-    return this.prisma.attendee.findUnique({
-      where: { id },
+  async findByIdWithDetails(id: string, organizationId: string) {
+    return this.prisma.attendee.findFirst({
+      where: { id, organizationId },
       include: {
         assignment: {
           include: {
@@ -43,24 +47,37 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
     });
   }
 
-  /**
-   * Search attendees with filters
-   * WHY: Full-text search on names (supports Arabic) + role/gender filters
+  /* Supports dual-language search (English ↔ Arabic)
    */
-  async search(params: AttendeeFilterParams) {
-    const { search, role, gender, checkedIn, hasAssignment, page, limit } = params;
+  async search(params: AttendeeFilterParams, organizationId: string) {
+    const { search, role, gender, checkedIn, hasAssignment, page, limit, dualSearch, onlyDeleted } = params;
     const skip = (page - 1) * limit;
 
     const where: Prisma.AttendeeWhereInput = {
-      deletedAt: null, // Only non-deleted attendees
+      organizationId,
+      deletedAt: onlyDeleted ? { not: null } : null,
     };
 
-    // Full-text search on name
+    // Full-text search on name with optional dual-language support
     if (search) {
-      where.fullName = {
-        contains: search,
-        mode: 'insensitive', // Case-insensitive search
-      };
+      if (dualSearch) {
+        // Generate search candidates using dual-language engine
+        const candidates = this.dualLanguageSearch.generateSearchCandidates(search);
+        
+        // Build OR query for all candidates
+        where.OR = candidates.map(candidate => ({
+          fullName: {
+            contains: candidate,
+            mode: 'insensitive' as const,
+          },
+        }));
+      } else {
+        // Standard single-language search
+        where.fullName = {
+          contains: search,
+          mode: 'insensitive', // Case-insensitive search
+        };
+      }
     }
 
     // Filter by role
@@ -138,28 +155,101 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
   /**
    * Get attendees without assignments
    * WHY: Needed for assignment workflows
+   * Supports optional search with dual-language
    */
-  async findUnassigned() {
+  async findUnassigned(organizationId: string, search?: string, dualSearch?: boolean) {
+    const where: Prisma.AttendeeWhereInput = {
+      organizationId,
+      deletedAt: null,
+      assignment: null,
+    };
+
+    // Add search if provided
+    if (search) {
+      if (dualSearch) {
+        // Generate search candidates using dual-language engine
+        const candidates = this.dualLanguageSearch.generateSearchCandidates(search);
+        
+        // Build OR query for all candidates
+        where.OR = candidates.map(candidate => ({
+          fullName: {
+            contains: candidate,
+            mode: 'insensitive' as const,
+          },
+        }));
+      } else {
+        // Standard single-language search
+        where.fullName = {
+          contains: search,
+          mode: 'insensitive',
+        };
+      }
+    }
+
     return this.prisma.attendee.findMany({
+      where,
+      orderBy: { fullName: 'asc' },
+    });
+  }
+
+  /**
+   * Search assigned attendees with dual-language support
+   * WHY: For swap modal - includes room assignments and uses scoring
+   */
+  async searchAssigned(query: string, organizationId: string) {
+    // Get all assigned attendees with room details
+    const attendees = await this.prisma.attendee.findMany({
       where: {
+        organizationId,
         deletedAt: null,
-        assignment: null,
+        assignment: { isNot: null },
+      },
+      include: {
+        assignment: {
+          include: {
+            room: {
+              include: {
+                floor: {
+                  include: {
+                    building: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
       orderBy: { fullName: 'asc' },
     });
+
+    // If no query, return all
+    if (!query || query.trim().length === 0) {
+      return attendees;
+    }
+
+    // Use dual-language search with scoring
+    const results = this.dualLanguageSearch.searchWithScoring(
+      query,
+      attendees,
+      (attendee) => attendee.fullName
+    );
+
+    // Return sorted by relevance score (highest first)
+    return results.map(result => result.item);
   }
 
   /**
    * Count attendees by status
    * WHY: Dashboard statistics
    */
-  async getStatistics() {
+  async getStatistics(organizationId: string) {
     const [total, checkedIn, withAssignment, byRole] = await Promise.all([
       this.prisma.attendee.count({
-        where: { deletedAt: null },
+        where: { organizationId, deletedAt: null },
       }),
       this.prisma.attendee.count({
         where: {
+          organizationId,
           deletedAt: null,
           checkedInAt: { not: null },
           checkedOutAt: null,
@@ -167,13 +257,14 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
       }),
       this.prisma.attendee.count({
         where: {
+          organizationId,
           deletedAt: null,
           assignment: { isNot: null },
         },
       }),
       this.prisma.attendee.groupBy({
         by: ['conferenceRole'],
-        where: { deletedAt: null },
+        where: { organizationId, deletedAt: null },
         _count: true,
       }),
     ]);
@@ -190,12 +281,49 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
 
   /**
    * Soft delete attendee
-   * WHY: Preserves data for audit trail
+   * WHY: Preserves data for audit trail and logs deletion reasons
    */
-  async softDelete(id: string) {
+  async softDelete(id: string, organizationId: string, reason?: string) {
+    const data: Prisma.AttendeeUpdateInput = { deletedAt: new Date() };
+    const existing = await this.prisma.attendee.findFirst({
+      where: { id, organizationId },
+      select: { internalNotes: true },
+    });
+    if (!existing) {
+      throw new Error('Attendee not found in organization');
+    }
+    if (reason) {
+      const separator = existing?.internalNotes ? '\n' : '';
+      data.internalNotes = `${existing?.internalNotes || ''}${separator}[Cancellation Reason: ${reason}]`;
+    }
     return this.prisma.attendee.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data,
+    });
+  }
+
+  /**
+   * Reactivate soft-deleted attendee
+   * WHY: Restores and logs returning attendees
+   */
+  async reactivate(id: string, organizationId: string) {
+    const existing = await this.prisma.attendee.findFirst({
+      where: { id, organizationId },
+      select: { internalNotes: true },
+    });
+    if (!existing) {
+      throw new Error('Attendee not found in organization');
+    }
+    const separator = existing?.internalNotes ? '\n' : '';
+    const timestamp = new Date().toLocaleString('en-US');
+    const newNotes = `${existing?.internalNotes || ''}${separator}[Reactivated: ${timestamp}]`;
+
+    return this.prisma.attendee.update({
+      where: { id },
+      data: {
+        deletedAt: null,
+        internalNotes: newNotes,
+      },
     });
   }
 
@@ -203,7 +331,8 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
    * Check in attendee
    * WHY: Updates check-in timestamp
    */
-  async checkIn(id: string) {
+  async checkIn(id: string, organizationId: string) {
+    await this.assertOwnership(id, organizationId);
     return this.prisma.attendee.update({
       where: { id },
       data: {
@@ -217,10 +346,41 @@ export class AttendeeRepository extends BaseRepository<Attendee, Prisma.Attendee
    * Check out attendee
    * WHY: Updates check-out timestamp
    */
-  async checkOut(id: string) {
+  async checkOut(id: string, organizationId: string) {
+    await this.assertOwnership(id, organizationId);
     return this.prisma.attendee.update({
       where: { id },
       data: { checkedOutAt: new Date() },
     });
+  }
+
+  /**
+   * Find all attendees for an organization
+   * WHY: Reports (e.g. check-in report) need every attendee scoped to org
+   */
+  async findAllByOrganization(organizationId: string) {
+    return this.prisma.attendee.findMany({ where: { organizationId } });
+  }
+
+  /**
+   * Find attendee by id scoped to organization (ownership check)
+   */
+  async findByIdScoped(id: string, organizationId: string) {
+    return this.prisma.attendee.findFirst({ where: { id, organizationId } });
+  }
+
+  /**
+   * Update attendee scoped to organization
+   */
+  async updateScoped(id: string, organizationId: string, data: Prisma.AttendeeUpdateInput) {
+    await this.assertOwnership(id, organizationId);
+    return this.prisma.attendee.update({ where: { id }, data });
+  }
+
+  private async assertOwnership(id: string, organizationId: string): Promise<void> {
+    const existing = await this.prisma.attendee.findFirst({ where: { id, organizationId }, select: { id: true } });
+    if (!existing) {
+      throw new Error('Attendee not found in organization');
+    }
   }
 }

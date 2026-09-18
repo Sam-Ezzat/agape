@@ -11,6 +11,7 @@ import express, { Application } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
 import { errorHandler, notFoundHandler } from '@/middleware/errorHandler';
 import logger from '@/utils/logger';
 import routes from '@/routes';
@@ -48,6 +49,9 @@ export function createApp(): Application {
 
   // WHY: Compress responses to reduce bandwidth and improve performance
   app.use(compression());
+
+  // WHY: Parse the httpOnly auth cookie set at login
+  app.use(cookieParser());
 
   // WHY: Parse JSON request bodies (limit to 10MB for Excel imports)
   app.use(express.json({ limit: '10mb' }));

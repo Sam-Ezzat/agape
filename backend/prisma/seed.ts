@@ -7,7 +7,9 @@
  * Run with: npm run prisma:seed
  */
 
-import { PrismaClient, ConferenceRole, Gender, RoomType } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import { PrismaClient, ConferenceRole, Gender, RoomType, TemplateCategory, UserRole } from '@prisma/client';
+import { computeRoomCapacity, generateAmenitiesText } from '../src/utils/roomCapacity';
 
 const prisma = new PrismaClient();
 
@@ -17,19 +19,44 @@ async function main(): Promise<void> {
   // WHY: Clear existing data for clean slate (only in development)
   if (process.env.NODE_ENV === 'development') {
     console.log('🧹 Cleaning existing data...');
+    await prisma.message.deleteMany();
+    await prisma.messageCampaign.deleteMany();
+    await prisma.messageTemplate.deleteMany();
+    await prisma.communicationSettings.deleteMany();
     await prisma.auditLog.deleteMany();
     await prisma.roomAssignment.deleteMany();
     await prisma.attendee.deleteMany();
     await prisma.room.deleteMany();
     await prisma.floor.deleteMany();
     await prisma.building.deleteMany();
+    await prisma.autoAssignmentConfig.deleteMany();
     await prisma.conferenceHouse.deleteMany();
+    await prisma.user.deleteMany();
+    await prisma.organization.deleteMany();
   }
+
+  // Create Organization + admin user (tenant boundary — see multi-tenancy plan)
+  console.log('🏢 Creating organization and admin user...');
+  const organization = await prisma.organization.create({
+    data: { name: 'Agape Conference Center' },
+  });
+
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'ChangeMe123!';
+  await prisma.user.create({
+    data: {
+      organizationId: organization.id,
+      email: process.env.SEED_ADMIN_EMAIL || 'admin@example.com',
+      passwordHash: await bcrypt.hash(adminPassword, 10),
+      name: 'Admin',
+      role: UserRole.ADMIN,
+    },
+  });
 
   // Create Conference House
   console.log('🏛️  Creating conference house...');
   const conferenceHouse = await prisma.conferenceHouse.create({
     data: {
+      organizationId: organization.id,
       name: 'Agape Conference Center',
       description: 'Main conference venue with multiple buildings and accommodation facilities',
     },
@@ -79,15 +106,24 @@ async function main(): Promise<void> {
 
   // Create Rooms
   console.log('🚪 Creating rooms...');
-  const rooms: { floorId: string; roomNumber: string; capacity: number; type: RoomType }[] = [];
+  const rooms: {
+    floorId: string;
+    roomNumber: string;
+    individualBeds: number;
+    bunkBeds: number;
+    kingBeds: number;
+    type: RoomType;
+  }[] = [];
 
-  // Building A - Floor 1: Rooms 101-110 (double rooms)
+  // Building A - Floor 1: Rooms 101-110 (double rooms, 2 individual beds each)
   for (let i = 1; i <= 10; i++) {
     rooms.push({
       floorId: floorsA[0]!.id,
       roomNumber: `10${i}`,
-      capacity: 2,
-      type: RoomType.DOUBLE,
+      individualBeds: 2,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
 
@@ -96,26 +132,32 @@ async function main(): Promise<void> {
     rooms.push({
       floorId: floorsA[1]!.id,
       roomNumber: `20${i}`,
-      capacity: 1,
-      type: RoomType.SINGLE,
+      individualBeds: 1,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
   for (let i = 6; i <= 10; i++) {
     rooms.push({
       floorId: floorsA[1]!.id,
       roomNumber: `20${i}`,
-      capacity: 2,
-      type: RoomType.DOUBLE,
+      individualBeds: 2,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
 
-  // Building A - Floor 3: Rooms 301-305 (suites)
+  // Building A - Floor 3: Rooms 301-305 (family suites, one bunk bed sleeping 2 + one king)
   for (let i = 1; i <= 5; i++) {
     rooms.push({
       floorId: floorsA[2]!.id,
       roomNumber: `30${i}`,
-      capacity: 4,
-      type: RoomType.SUITE,
+      individualBeds: 0,
+      bunkBeds: 1,
+      kingBeds: 1,
+      type: RoomType.FAMILY,
     });
   }
 
@@ -124,33 +166,43 @@ async function main(): Promise<void> {
     rooms.push({
       floorId: floorsB[0]!.id,
       roomNumber: `B10${i}`,
-      capacity: 2,
-      type: RoomType.DOUBLE,
+      individualBeds: 2,
+      bunkBeds: 0,
+      kingBeds: 0,
+      type: RoomType.GENERAL,
     });
   }
 
-  // Building B - Floor 2: Rooms B201-B205
+  // Building B - Floor 2: Rooms B201-B205 (VIP suites with a king bed)
   for (let i = 1; i <= 5; i++) {
     rooms.push({
       floorId: floorsB[1]!.id,
       roomNumber: `B20${i}`,
-      capacity: 3,
-      type: RoomType.SUITE,
+      individualBeds: 1,
+      bunkBeds: 0,
+      kingBeds: 1,
+      type: RoomType.VIP,
     });
   }
 
   await Promise.all(
-    rooms.map((room) =>
-      prisma.room.create({
+    rooms.map((room) => {
+      const bedCounts = {
+        individualBeds: room.individualBeds,
+        bunkBeds: room.bunkBeds,
+        kingBeds: room.kingBeds,
+      };
+      return prisma.room.create({
         data: {
           floorId: room.floorId,
           roomNumber: room.roomNumber,
-          capacity: room.capacity,
+          capacity: computeRoomCapacity(bedCounts),
+          ...bedCounts,
           roomType: room.type,
-          amenities: ['AC', 'WiFi'],
+          amenities: generateAmenitiesText(bedCounts),
         },
-      })
-    )
+      });
+    })
   );
 
   // Create Sample Attendees
@@ -162,7 +214,7 @@ async function main(): Promise<void> {
       email: 'john.smith@example.com',
       age: 45,
       gender: Gender.MALE,
-      churchOrg: 'First Baptist Church',
+      church: 'First Baptist Church',
       conferenceRole: ConferenceRole.LEADER,
       notes: 'Conference speaker',
     },
@@ -172,7 +224,7 @@ async function main(): Promise<void> {
       email: 'sarah.j@example.com',
       age: 38,
       gender: Gender.FEMALE,
-      churchOrg: 'Grace Community Church',
+      church: 'Grace Community Church',
       conferenceRole: ConferenceRole.PASTOR,
       notes: 'Workshop facilitator',
     },
@@ -182,7 +234,7 @@ async function main(): Promise<void> {
       email: 'michael.b@example.com',
       age: 52,
       gender: Gender.MALE,
-      churchOrg: 'Trinity Fellowship',
+      church: 'Trinity Fellowship',
       conferenceRole: ConferenceRole.VIP,
       notes: 'Guest speaker, needs accessible room',
     },
@@ -192,7 +244,7 @@ async function main(): Promise<void> {
       email: 'emily.d@example.com',
       age: 29,
       gender: Gender.FEMALE,
-      churchOrg: 'New Life Church',
+      church: 'New Life Church',
       conferenceRole: ConferenceRole.ATTENDEE,
     },
     {
@@ -201,7 +253,7 @@ async function main(): Promise<void> {
       email: 'david.w@example.com',
       age: 41,
       gender: Gender.MALE,
-      churchOrg: 'Hope Church',
+      church: 'Hope Church',
       conferenceRole: ConferenceRole.ATTENDEE,
     },
     {
@@ -210,7 +262,7 @@ async function main(): Promise<void> {
       email: 'lisa.m@example.com',
       age: 35,
       gender: Gender.FEMALE,
-      churchOrg: 'Faith Community',
+      church: 'Faith Community',
       conferenceRole: ConferenceRole.STAFF,
       notes: 'Conference coordinator',
     },
@@ -221,7 +273,7 @@ async function main(): Promise<void> {
       email: 'ahmed.m@example.com',
       age: 33,
       gender: Gender.MALE,
-      churchOrg: 'كنيسة النعمة',
+      church: 'كنيسة النعمة',
       conferenceRole: ConferenceRole.ATTENDEE,
     },
     {
@@ -230,7 +282,7 @@ async function main(): Promise<void> {
       email: 'fatima.a@example.com',
       age: 28,
       gender: Gender.FEMALE,
-      churchOrg: 'كنيسة الرجاء',
+      church: 'كنيسة الرجاء',
       conferenceRole: ConferenceRole.ATTENDEE,
     },
   ];
@@ -238,10 +290,190 @@ async function main(): Promise<void> {
   await Promise.all(
     attendees.map((attendee) =>
       prisma.attendee.create({
-        data: attendee,
+        data: { ...attendee, organizationId: organization.id },
       })
     )
   );
+
+  // Create Auto-Assignment Configuration
+  console.log('⚙️  Creating auto-assignment configuration...');
+  await prisma.autoAssignmentConfig.create({
+    data: {
+      conferenceHouseId: conferenceHouse.id,
+      enabledBuildings: [buildingA.id, buildingB.id],
+      staffReservedCapacity: 5,
+      vipReservedCapacity: 10,
+      emergencyReservedCapacity: 3,
+      enabledRules: [
+        'room_capacity',
+        'gender_match',
+        'room_type_match',
+        'room_availability',
+        'building_enabled',
+        'same_church',
+        'same_governorate',
+        'minimize_empty_beds'
+      ],
+      ruleWeights: {
+        same_church: 0.3,
+        same_governorate: 0.2,
+        similar_age: 0.1,
+        minimize_empty_beds: 0.2,
+        prefer_same_floor: 0.1,
+        leader_proximity: 0.1
+      },
+      optimizationEnabled: true
+    }
+  });
+
+  // Create Communication Settings
+  console.log('💬 Creating communication settings...');
+  await prisma.communicationSettings.create({
+    data: {
+      organizationId: organization.id,
+      whatsappEnabled: true,
+      whatsappSessionActive: false,
+      whatsappDelayMin: 3000,
+      whatsappDelayMax: 8000,
+      whatsappBatchSize: 10,
+      whatsappBatchDelay: 120000, // 2 minutes between batches
+      maxMessagesPerHour: 50, // Conservative for low volume
+      maxMessagesPerDay: 200, // Matches user's requirement
+    }
+  });
+
+  // Create Default Message Templates
+  console.log('📝 Creating default message templates...');
+  const templates = await Promise.all([
+    prisma.messageTemplate.create({
+      data: {
+        organizationId: organization.id,
+        name: 'Room Assignment Notification (Arabic)',
+        description: 'Notify attendee about their room assignment',
+        category: 'ROOM_ASSIGNMENT',
+        body: `مرحباً {{fullName}}! 🏠
+
+تم تخصيص غرفتك بنجاح:
+📍 المبنى: {{buildingName}}
+🔢 الطابق: {{floorName}}
+🚪 رقم الغرفة: {{roomNumber}}
+🛏️ نوع الغرفة: {{roomType}}
+
+تفاصيل إضافية:
+- سعة الغرفة: {{roomCapacity}} أشخاص
+- أسرة فردية: {{individualBeds}}
+- أسرة بطابقين: {{bunkBeds}}
+- أسرة كينج: {{kingBeds}}
+
+نتمنى لك إقامة سعيدة! 🌟`,
+        variables: [
+          'fullName',
+          'buildingName',
+          'floorName',
+          'roomNumber',
+          'roomType',
+          'roomCapacity',
+          'individualBeds',
+          'bunkBeds',
+          'kingBeds'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+    prisma.messageTemplate.create({
+      data: {
+        organizationId: organization.id,
+        name: 'Check-in Reminder (Arabic)',
+        description: 'Remind attendee about check-in',
+        category: 'CHECK_IN',
+        body: `عزيزي {{fullName}},
+
+تذكير بموعد تسجيل الوصول! ✅
+
+معلومات هامة:
+⏰ موعد تسجيل الوصول قريباً
+🚌 وسيلة المواصلات: {{arrivalMethod}}
+{{#if busPickupPoint}}📍 نقطة التجمع: {{busPickupPoint}}{{/if}}
+
+غرفتك:
+🏠 المبنى {{buildingName}} - الطابق {{floorNumber}} - غرفة {{roomNumber}}
+
+نراك قريباً! 🙏`,
+        variables: [
+          'fullName',
+          'arrivalMethod',
+          'busPickupPoint',
+          'buildingName',
+          'floorNumber',
+          'roomNumber'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+    prisma.messageTemplate.create({
+      data: {
+        organizationId: organization.id,
+        name: 'Payment Confirmation (Arabic)',
+        description: 'Confirm payment received',
+        category: 'PAYMENT',
+        body: `تم استلام دفعتك بنجاح! ✅
+
+مرحباً {{fullName}},
+
+تفاصيل الدفع:
+💰 الحالة: مؤكد ✓
+🔢 رقم المعاملة: {{transactionNumber}}
+💳 طريقة الدفع: {{paymentMethod}}
+
+معلومات التذكرة:
+🎫 رقم التذكرة: {{ticketId}}
+👤 الاسم: {{fullName}}
+📱 الهاتف: {{phone}}
+
+شكراً لك! 🙏`,
+        variables: [
+          'fullName',
+          'transactionNumber',
+          'paymentMethod',
+          'ticketId',
+          'phone'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+    prisma.messageTemplate.create({
+      data: {
+        organizationId: organization.id,
+        name: 'Welcome Message (Arabic)',
+        description: 'Welcome new attendee',
+        category: 'WELCOME',
+        body: `مرحباً بك {{fullName}}! 🎉
+
+نحن سعداء بانضمامك إلى {{conferenceName}}!
+
+تم تأكيد تسجيلك بنجاح:
+🎫 رقم التذكرة: {{ticketId}}
+⛪ الكنيسة: {{church}}
+📍 المنطقة: {{area}}
+
+سنرسل لك المزيد من المعلومات قريباً.
+
+مع تحياتنا! 🙏`,
+        variables: [
+          'fullName',
+          'conferenceName',
+          'ticketId',
+          'church',
+          'area'
+        ],
+        language: 'ar',
+        isActive: true,
+      },
+    }),
+  ]);
 
   console.log('✅ Seed completed successfully!');
   console.log(`   - Created 1 conference house`);
@@ -249,6 +481,9 @@ async function main(): Promise<void> {
   console.log(`   - Created 5 floors`);
   console.log(`   - Created ${rooms.length} rooms`);
   console.log(`   - Created ${attendees.length} attendees`);
+  console.log(`   - Created 1 auto-assignment configuration`);
+  console.log(`   - Created 1 communication settings`);
+  console.log(`   - Created ${templates.length} message templates`);
   console.log('\n🚀 Database is ready for development!');
 }
 

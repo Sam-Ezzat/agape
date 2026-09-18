@@ -17,7 +17,9 @@ import {
   createAttendeeSchema,
   updateAttendeeSchema,
   attendeeFilterSchema,
+  unassignedFilterSchema,
   checkInOutSchema,
+  bulkDeleteAttendeeSchema,
 } from '@/validators/attendee.schemas';
 import prisma from '@/utils/prisma-client';
 
@@ -50,10 +52,23 @@ router.post(
  * @desc    Get attendees without room assignment
  * @access  Public
  * @note    Must be before /:id route to avoid conflict
+ * @note    Supports optional search and dual-language search
  */
 router.get(
   '/unassigned',
+  validate(unassignedFilterSchema, 'query'),
   asyncHandler(attendeeController.getUnassigned.bind(attendeeController))
+);
+
+/**
+ * @route   GET /api/attendees/search-assigned
+ * @desc    Search assigned attendees with dual-language support
+ * @access  Public
+ * @note    Must be before /:id route to avoid conflict
+ */
+router.get(
+  '/search-assigned',
+  asyncHandler(attendeeController.searchAssigned.bind(attendeeController))
 );
 
 /**
@@ -110,6 +125,18 @@ router.patch(
 );
 
 /**
+ * @route   POST /api/attendees/bulk-delete
+ * @desc    Soft delete multiple attendees
+ * @access  Public (future: protected)
+ * @note    Must be before /:id route to avoid conflict
+ */
+router.post(
+  '/bulk-delete',
+  validate(bulkDeleteAttendeeSchema, 'body'),
+  asyncHandler(attendeeController.bulkDelete.bind(attendeeController))
+);
+
+/**
  * @route   DELETE /api/attendees/:id
  * @desc    Soft delete attendee
  * @access  Public (future: protected)
@@ -117,6 +144,16 @@ router.patch(
 router.delete(
   '/:id',
   asyncHandler(attendeeController.delete.bind(attendeeController))
+);
+
+/**
+ * @route   POST /api/attendees/:id/reactivate
+ * @desc    Reactivate soft-deleted attendee
+ * @access  Public (future: protected)
+ */
+router.post(
+  '/:id/reactivate',
+  asyncHandler(attendeeController.reactivate.bind(attendeeController))
 );
 
 /**
